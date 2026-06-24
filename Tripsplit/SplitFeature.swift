@@ -67,6 +67,41 @@ struct Settlement: Identifiable {
     let amount: Double
 }
 
+/// How a settlement payment was made, mirroring TripSplit's settlement payment methods.
+enum PaymentMethod: String, CaseIterable, Identifiable {
+    case cash = "Cash"
+    case venmo = "Venmo"
+    case paypal = "PayPal"
+    case cashapp = "Cash App"
+
+    var id: Self { self }
+
+    var icon: String {
+        switch self {
+        case .cash: "banknote.fill"
+        case .venmo: "v.circle.fill"
+        case .paypal: "p.circle.fill"
+        case .cashapp: "dollarsign.circle.fill"
+        }
+    }
+}
+
+/// The lifecycle of a settlement request, mirroring TripSplit's `status` field:
+/// the debtor records a `pending` payment and the creditor confirms or declines it.
+enum SettlementStatus: String {
+    case pending, confirmed, rejected
+}
+
+/// A recorded settlement payment toward a debt between two people.
+struct SettlementRecord: Identifiable {
+    let id = UUID()
+    var amount: Double
+    var method: PaymentMethod
+    var note: String
+    var status: SettlementStatus
+    let date: Date
+}
+
 /// Pure split calculation, faithful to TripSplit's `calculateSplitPreview` +
 /// `splitService` rounding, with exact-cent remainder distribution added so the
 /// per-person shares always reconcile to the bill total.
@@ -197,7 +232,7 @@ struct SplitView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var people: [Person] = SplitView.samplepeople
-    @State private var amountText = "120.00"
+    @State private var amountText = ""
     @State private var method: SplitMethod = .equalAll
     @State private var payer: Person.ID
     @State private var selected: Set<Person.ID>
@@ -205,11 +240,24 @@ struct SplitView: View {
     @State private var percentages: [Person.ID: Double] = [:]
     @State private var amounts: [Person.ID: Double] = [:]
 
-    init() {
-        let people = SplitView.samplepeople
-        _payer = State(initialValue: people[0].id)
-        _selected = State(initialValue: Set(people.map(\.id)))
-        _noSplitAssignee = State(initialValue: people[0].id)
+    /// Recorded settlement payments, keyed by `"<debtorID>-><creditorID>"` so that
+    /// settle-up progress persists while the split is recomputed.
+    @State private var settlementHistory: [String: [SettlementRecord]] = [:]
+    /// The settlement currently presented in the settle-up sheet.
+    @State private var activeSettlement: Settlement?
+
+    /// Currency code used to format amounts; defaults to USD for a standalone split.
+    private let currencyCode: String
+
+    /// Splits a bill among `people`. When called without members it falls back to the
+    /// sample people, so the standalone split calculator still works.
+    init(people: [Person]? = nil, currencyCode: String = "USD") {
+        let resolved = people.flatMap { $0.isEmpty ? nil : $0 } ?? SplitView.samplepeople
+        _people = State(initialValue: resolved)
+        _payer = State(initialValue: resolved[0].id)
+        _selected = State(initialValue: Set(resolved.map(\.id)))
+        _noSplitAssignee = State(initialValue: resolved[0].id)
+        self.currencyCode = currencyCode
     }
 
     private var total: Double { Double(amountText) ?? 0 }
@@ -250,6 +298,9 @@ struct SplitView: View {
                     Button("Close") { dismiss() }
                 }
             }
+            .sheet(item: $activeSettlement) { settlement in
+                SettleView(settlement: settlement, history: historyBinding(for: settlement), currencyCode: currencyCode)
+            }
         }
     }
 
@@ -261,7 +312,7 @@ struct SplitView: View {
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(.secondary)
             HStack(spacing: 2) {
-                Text("$").font(.title.weight(.semibold)).foregroundStyle(.secondary)
+                Text(currencySymbol(currencyCode)).font(.title.weight(.semibold)).foregroundStyle(.secondary)
                 TextField("0.00", text: $amountText)
                     .font(.system(size: 40, weight: .bold, design: .rounded))
                     .keyboardType(.decimalPad)
@@ -411,18 +462,33 @@ struct SplitView: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
                 ForEach(settlements) { settlement in
-                    HStack(spacing: 6) {
-                        Text(settlement.from.name).fontWeight(.semibold)
-                        Image(systemName: "arrow.right")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(.secondary)
-                        Text(settlement.to.name).fontWeight(.semibold)
-                        Spacer()
-                        Text(currency(settlement.amount))
-                            .fontWeight(.semibold)
-                            .foregroundStyle(Color(hex: 0x10B981))
+                    Button {
+                        activeSettlement = settlement
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text(displayName(settlement.from)).fontWeight(.semibold)
+                            Image(systemName: "arrow.right")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(.secondary)
+                            Text(displayName(settlement.to)).fontWeight(.semibold)
+                            Spacer()
+                            if isFullySettled(settlement) {
+                                Label("Settled", systemImage: "checkmark.seal.fill")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(Color(hex: 0x10B981))
+                            } else {
+                                Text(currency(remainingAmount(for: settlement)))
+                                    .fontWeight(.semibold)
+                                    .foregroundStyle(Color(hex: 0x10B981))
+                            }
+                            Image(systemName: "chevron.right")
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .font(.subheadline)
+                        .contentShape(.rect)
                     }
-                    .font(.subheadline)
+                    .buttonStyle(.plain)
                 }
             } else if result.isValid {
                 Text("All settled up — nothing owed.")
@@ -486,7 +552,7 @@ struct SplitView: View {
             Text(person.name).font(.subheadline.weight(.medium))
             Spacer()
             HStack(spacing: 2) {
-                if suffix == "$" { Text("$").foregroundStyle(.secondary) }
+                if suffix == "$" { Text(currencySymbol(currencyCode)).foregroundStyle(.secondary) }
                 TextField("0", text: binding)
                     .keyboardType(.decimalPad)
                     .multilineTextAlignment(.trailing)
@@ -519,7 +585,40 @@ struct SplitView: View {
     }
 
     private func currency(_ value: Double) -> String {
-        String(format: "$%.2f", value)
+        money(value, currencyCode)
+    }
+
+    /// Falls back to a person's index-based label when their name is blank.
+    private func displayName(_ person: Person) -> String {
+        guard person.name.isEmpty else { return person.name }
+        let index = people.firstIndex(of: person).map { $0 + 1 } ?? 0
+        return "Person \(index)"
+    }
+
+    // MARK: Settlement helpers
+
+    private func settleKey(_ s: Settlement) -> String {
+        "\(s.from.id.uuidString)->\(s.to.id.uuidString)"
+    }
+
+    private func historyBinding(for s: Settlement) -> Binding<[SettlementRecord]> {
+        let key = settleKey(s)
+        return Binding(
+            get: { settlementHistory[key] ?? [] },
+            set: { settlementHistory[key] = $0 }
+        )
+    }
+
+    /// Remaining debt = original transfer minus confirmed settlements (TripSplit's rule).
+    private func remainingAmount(for s: Settlement) -> Double {
+        let confirmed = (settlementHistory[settleKey(s)] ?? [])
+            .filter { $0.status == .confirmed }
+            .reduce(0) { $0 + $1.amount }
+        return max(0, SplitEngine.roundToTwo(s.amount - confirmed))
+    }
+
+    private func isFullySettled(_ s: Settlement) -> Bool {
+        remainingAmount(for: s) <= 0.005
     }
 
     // MARK: Bindings
@@ -539,11 +638,319 @@ struct SplitView: View {
     }
 
     static let samplepeople: [Person] = [
-        Person(name: "Benjamin", color: Color(hex: 0x6366F1)),
-        Person(name: "Yuki", color: Color(hex: 0x10B981)),
-        Person(name: "Sofia", color: Color(hex: 0xF59E0B)),
-        Person(name: "Liam", color: Color(hex: 0xEC4899)),
+        Person(name: "", color: Color(hex: 0x6366F1)),
+        Person(name: "", color: Color(hex: 0x10B981)),
+        Person(name: "", color: Color(hex: 0xF59E0B)),
+        Person(name: "", color: Color(hex: 0xEC4899)),
     ]
+}
+
+// MARK: - Settle View
+
+/// The settle-up screen reached by tapping a suggested transfer in the split review.
+/// Mirrors TripSplit's `SettlementScreen`: an overview, a record-a-payment form, and a
+/// history list where the creditor confirms or declines each pending payment. The
+/// remaining balance is driven only by *confirmed* payments, exactly like the original.
+struct SettleView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let settlement: Settlement
+    @Binding var history: [SettlementRecord]
+    /// Currency code used to format amounts; defaults to USD for the split review.
+    var currencyCode: String = "USD"
+
+    @State private var amountText = ""
+    @State private var note = ""
+    @State private var method: PaymentMethod = .cash
+
+    /// Only confirmed payments count toward the settled total (faithful to TripSplit).
+    private var confirmedSettled: Double {
+        history.filter { $0.status == .confirmed }.reduce(0) { $0 + $1.amount }
+    }
+
+    private var remaining: Double {
+        max(0, SplitEngine.roundToTwo(settlement.amount - confirmedSettled))
+    }
+
+    private var enteredAmount: Double { Double(amountText) ?? 0 }
+
+    private var canSettleInput: Bool {
+        enteredAmount > 0 && enteredAmount <= remaining + 0.005
+    }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                LinearGradient(
+                    colors: [Color(hex: 0xF8F9FF), Color(.systemBackground)],
+                    startPoint: .top, endPoint: .bottom
+                )
+                .ignoresSafeArea()
+
+                ScrollView {
+                    VStack(spacing: 18) {
+                        overviewCard
+                        if remaining > 0.005 {
+                            recordCard
+                        }
+                        historyCard
+                    }
+                    .padding()
+                    .padding(.bottom, 24)
+                }
+            }
+            .navigationTitle("Settle Up")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                }
+            }
+        }
+    }
+
+    // MARK: Cards
+
+    private var overviewCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label("Settlement Overview", systemImage: "arrow.left.arrow.right.circle.fill")
+                .font(.headline)
+
+            detailRow(icon: "person.fill", label: "Debtor", person: settlement.from)
+            detailRow(icon: "creditcard.fill", label: "Creditor", person: settlement.to)
+
+            Divider()
+
+            HStack(alignment: .top) {
+                amountColumn(title: "Total Owed", value: settlement.amount, color: .primary)
+                Spacer()
+                amountColumn(
+                    title: "Remaining", value: remaining,
+                    color: remaining <= 0.005 ? Color(hex: 0x10B981) : Color(hex: 0xEF4444)
+                )
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassEffect(.regular, in: .rect(cornerRadius: 24))
+    }
+
+    private var recordCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label("Record a Payment", systemImage: "square.and.pencil")
+                .font(.headline)
+
+            HStack(spacing: 2) {
+                Text(currencySymbol(currencyCode)).foregroundStyle(.secondary)
+                TextField("0.00", text: $amountText)
+                    .keyboardType(.decimalPad)
+            }
+            .font(.title3.weight(.semibold))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(.secondary.opacity(0.12), in: .rect(cornerRadius: 12))
+
+            TextField("Add a note (optional)", text: $note, axis: .vertical)
+                .lineLimit(1...3)
+                .font(.subheadline)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(.secondary.opacity(0.12), in: .rect(cornerRadius: 12))
+
+            Text("Payment method")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(PaymentMethod.allCases) { option in
+                        Button {
+                            method = option
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: option.icon)
+                                Text(option.rawValue)
+                            }
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(method == option ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 9)
+                        }
+                        .buttonStyle(.plain)
+                        .glassEffect(
+                            method == option ? .regular.tint(Color(hex: 0x6366F1)).interactive() : .regular.interactive(),
+                            in: .capsule
+                        )
+                    }
+                }
+            }
+
+            HStack(spacing: 10) {
+                settleButton(
+                    title: "Settle Input", icon: "arrow.left.arrow.right",
+                    tint: Color(hex: 0x10B981), enabled: canSettleInput
+                ) { record(amount: enteredAmount) }
+
+                settleButton(
+                    title: "Settle Full", icon: "checkmark.circle.fill",
+                    tint: Color(hex: 0x3B82F6), enabled: remaining > 0.005
+                ) { record(amount: remaining) }
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassEffect(.regular, in: .rect(cornerRadius: 24))
+    }
+
+    private var historyCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label("Settlement History", systemImage: "clock.arrow.circlepath")
+                .font(.headline)
+
+            if history.isEmpty {
+                Text("No settlement history found for this debt.")
+                    .font(.subheadline)
+                    .italic()
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 8)
+            } else {
+                ForEach(history) { entry in
+                    historyRow(entry)
+                    if entry.id != history.last?.id { Divider() }
+                }
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassEffect(.regular, in: .rect(cornerRadius: 24))
+    }
+
+    // MARK: Reusable pieces
+
+    private func detailRow(icon: String, label: String, person: Person) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Color(hex: 0x6366F1))
+                .frame(width: 22)
+            Text(label).font(.subheadline).foregroundStyle(.secondary)
+            Spacer()
+            avatar(person)
+            Text(person.name.isEmpty ? "—" : person.name)
+                .font(.subheadline.weight(.semibold))
+        }
+    }
+
+    private func amountColumn(title: String, value: Double, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(currency(value)).font(.title3.weight(.bold)).foregroundStyle(color)
+        }
+    }
+
+    private func settleButton(
+        title: String, icon: String, tint: Color, enabled: Bool, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: icon)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.tint(tint).interactive(), in: .capsule)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.5)
+    }
+
+    private func historyRow(_ entry: SettlementRecord) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: entry.method.icon)
+                    .foregroundStyle(Color(hex: 0x6366F1))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(currency(entry.amount)).font(.subheadline.weight(.semibold))
+                    Text("\(entry.method.rawValue) • \(entry.date.formatted(date: .abbreviated, time: .omitted))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                statusBadge(entry.status)
+            }
+            if !entry.note.isEmpty {
+                Text(entry.note).font(.caption).foregroundStyle(.secondary)
+            }
+            if entry.status == .pending {
+                HStack(spacing: 10) {
+                    actionPill(title: "Approve", icon: "checkmark", tint: Color(hex: 0x10B981)) {
+                        update(entry, to: .confirmed)
+                    }
+                    actionPill(title: "Decline", icon: "xmark", tint: Color(hex: 0xEF4444)) {
+                        update(entry, to: .rejected)
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func actionPill(title: String, icon: String, tint: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: icon)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.tint(tint).interactive(), in: .capsule)
+    }
+
+    private func statusBadge(_ status: SettlementStatus) -> some View {
+        let (text, color): (String, Color) = switch status {
+        case .pending: ("Pending", Color(hex: 0xF59E0B))
+        case .confirmed: ("Confirmed", Color(hex: 0x10B981))
+        case .rejected: ("Declined", Color(hex: 0xEF4444))
+        }
+        return Text(text)
+            .font(.caption2.weight(.bold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(color.opacity(0.15), in: .capsule)
+    }
+
+    private func avatar(_ person: Person) -> some View {
+        Text(person.initials)
+            .font(.caption.weight(.bold))
+            .foregroundStyle(.white)
+            .frame(width: 28, height: 28)
+            .background(person.color, in: .circle)
+    }
+
+    private func currency(_ value: Double) -> String {
+        money(value, currencyCode)
+    }
+
+    // MARK: Actions
+
+    /// Records a new payment as `pending`, mirroring the debtor-initiated flow.
+    private func record(amount: Double) {
+        let amt = SplitEngine.roundToTwo(amount)
+        guard amt > 0 else { return }
+        history.insert(
+            SettlementRecord(amount: amt, method: method, note: note, status: .pending, date: Date()),
+            at: 0
+        )
+        amountText = ""
+        note = ""
+    }
+
+    private func update(_ entry: SettlementRecord, to status: SettlementStatus) {
+        guard let index = history.firstIndex(where: { $0.id == entry.id }) else { return }
+        history[index].status = status
+    }
 }
 
 // MARK: - Color helper

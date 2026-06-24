@@ -3,7 +3,16 @@ import SwiftUI
 /// The TripSplit-style main dashboard: greeting, balance card, quick actions,
 /// and recent transactions.
 struct HomeScreen: View {
-    @State private var showSplit = false
+    @Environment(TripStore.self) private var store
+    @State private var showAddTrip = false
+    @State private var selectedTrip: Trip?
+
+    /// The quick action a user tapped, awaiting a trip choice.
+    private enum QuickAction { case split, addExpense }
+    @State private var pendingAction: QuickAction?
+    @State private var showTripPicker = false
+    @State private var splitTrip: Trip?
+    @State private var expenseTrip: Trip?
 
     var body: some View {
         ZStack {
@@ -20,14 +29,98 @@ struct HomeScreen: View {
                     BalanceCard()
                     CurrencyConverterCard()
                     quickActions
+                    tripsSection
                     recentTransactions
                 }
                 .padding()
                 .padding(.bottom, 90) // Clearance for the floating dock.
             }
         }
-        .sheet(isPresented: $showSplit) {
-            SplitView()
+        .sheet(isPresented: $showAddTrip) {
+            AddTripView()
+        }
+        .sheet(item: $selectedTrip) { trip in
+            TripDetailView(tripID: trip.id)
+        }
+        .sheet(item: $splitTrip) { trip in
+            SplitView(people: trip.members, currencyCode: trip.currencyCode)
+        }
+        .sheet(item: $expenseTrip) { trip in
+            AddExpenseView(tripID: trip.id)
+        }
+        .confirmationDialog("Choose a trip", isPresented: $showTripPicker, titleVisibility: .visible) {
+            ForEach(store.myTrips) { trip in
+                Button(trip.name) { choose(trip) }
+            }
+            Button("Cancel", role: .cancel) { pendingAction = nil }
+        } message: {
+            Text(pendingAction == .split ? "Split a bill within which trip?" : "Add an expense to which trip?")
+        }
+        .task {
+            // Load USD exchange rates so the balance card can normalize every trip's currency.
+            await store.refreshRates()
+        }
+    }
+
+    /// Starts a quick action by asking which trip to use (or prompting to create one).
+    private func startQuickAction(_ action: QuickAction) {
+        guard !store.myTrips.isEmpty else {
+            showAddTrip = true
+            return
+        }
+        pendingAction = action
+        showTripPicker = true
+    }
+
+    /// Routes the pending quick action to the chosen trip.
+    private func choose(_ trip: Trip) {
+        switch pendingAction {
+        case .split: splitTrip = trip
+        case .addExpense: expenseTrip = trip
+        case nil: break
+        }
+        pendingAction = nil
+    }
+
+    private var tripsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Your Trips")
+                    .font(.headline)
+                    .padding(.leading, 4)
+                Spacer()
+                Button {
+                    showAddTrip = true
+                } label: {
+                    Label("Add Trip", systemImage: "plus")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.tint(Color(hex: 0x6366F1)).interactive(), in: .capsule)
+            }
+
+            if store.myTrips.isEmpty {
+                Text("No trips yet. Tap Add Trip to create one.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 24)
+                    .glassEffect(.regular, in: .rect(cornerRadius: 20))
+            } else {
+                GlassEffectContainer(spacing: 12) {
+                    VStack(spacing: 12) {
+                        ForEach(store.myTrips) { trip in
+                            Button { selectedTrip = trip } label: {
+                                TripRow(trip: trip, currentUserID: store.currentUser.id)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -37,9 +130,6 @@ struct HomeScreen: View {
                 Text("TRIP VITALS")
                     .font(.caption.weight(.semibold))
                     .tracking(1.5)
-                Circle().frame(width: 4, height: 4)
-                Text("98")
-                    .font(.caption.weight(.bold))
             }
             .foregroundStyle(.secondary)
 
@@ -51,7 +141,7 @@ struct HomeScreen: View {
                     .font(.system(size: 16, weight: .semibold))
                     .frame(width: 40, height: 40)
                     .glassEffect(.regular, in: .circle)
-                Text("Your itinerary is on track. 3 places scheduled for today.")
+                Text("Your itinerary is on track.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -72,13 +162,13 @@ struct HomeScreen: View {
                     title: "Split", subtitle: "Divide a bill",
                     icon: "divide.circle.fill",
                     colors: [Color(hex: 0x818CF8), Color(hex: 0x4F46E5)]
-                ) { showSplit = true }
+                ) { startQuickAction(.split) }
 
                 QuickActionButton(
                     title: "Add Expense", subtitle: "Log spending",
                     icon: "plus.circle.fill",
                     colors: [Color(hex: 0x34D399), Color(hex: 0x059669)]
-                ) {}
+                ) { startQuickAction(.addExpense) }
             }
         }
     }
@@ -89,10 +179,19 @@ struct HomeScreen: View {
                 .font(.headline)
                 .padding(.leading, 4)
 
-            GlassEffectContainer(spacing: 12) {
-                VStack(spacing: 12) {
-                    ForEach(Transaction.samples) { transaction in
-                        TransactionRow(transaction: transaction)
+            if Transaction.samples.isEmpty {
+                Text("No transactions yet.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 24)
+                    .glassEffect(.regular, in: .rect(cornerRadius: 20))
+            } else {
+                GlassEffectContainer(spacing: 12) {
+                    VStack(spacing: 12) {
+                        ForEach(Transaction.samples) { transaction in
+                            TransactionRow(transaction: transaction)
+                        }
                     }
                 }
             }
@@ -102,12 +201,12 @@ struct HomeScreen: View {
 
 // MARK: - Balance Card
 
-/// The gradient budget card with a daily-spending bar chart.
+/// The gradient budget card. Totals are aggregated across every trip the user is part of.
 struct BalanceCard: View {
-    private let dailySpending: [(label: String, amount: Double)] = [
-        ("2", 45), ("3", 62), ("4", 30), ("5", 88), ("6", 54), ("7", 70), ("8", 40),
-        ("9", 95), ("10", 60), ("11", 48), ("12", 80), ("13", 35), ("14", 66), ("15", 52),
-    ]
+    @Environment(TripStore.self) private var store
+
+    /// Daily spending data points; empty until real expenses are recorded.
+    private let dailySpending: [(label: String, amount: Double)] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -119,39 +218,44 @@ struct BalanceCard: View {
             }
             .foregroundStyle(.white.opacity(0.95))
 
-            Text("$2,500.00")
+            Text(money(store.budgetAvailable, "USD"))
                 .font(.system(size: 36, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
 
             HStack {
                 Label("Total spent", systemImage: "wallet.bifold")
                     .font(.footnote.weight(.medium))
-                Text("$1,250.00").font(.footnote.weight(.semibold))
+                Text(money(store.totalSpent, "USD")).font(.footnote.weight(.semibold))
                 Spacer()
-                Text("Combined from 2 currencies").font(.footnote)
+                if !store.myTrips.isEmpty {
+                    Text("Across \(store.myTrips.count) trip\(store.myTrips.count == 1 ? "" : "s")")
+                        .font(.footnote)
+                }
             }
             .foregroundStyle(.white.opacity(0.85))
 
-            // Daily spending bar chart
-            let maxAmount = dailySpending.map(\.amount).max() ?? 1
-            HStack(alignment: .bottom, spacing: 6) {
-                ForEach(Array(dailySpending.enumerated()), id: \.offset) { _, day in
-                    VStack(spacing: 4) {
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(.white.opacity(0.85))
-                            .frame(height: max(6, 110 * (day.amount / maxAmount)))
-                        Text(day.label)
-                            .font(.system(size: 9))
-                            .foregroundStyle(.white.opacity(0.7))
+            // Daily spending bar chart, shown once there is spending to plot.
+            if !dailySpending.isEmpty {
+                let maxAmount = dailySpending.map(\.amount).max() ?? 1
+                HStack(alignment: .bottom, spacing: 6) {
+                    ForEach(Array(dailySpending.enumerated()), id: \.offset) { _, day in
+                        VStack(spacing: 4) {
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(.white.opacity(0.85))
+                                .frame(height: max(6, 110 * (day.amount / maxAmount)))
+                            Text(day.label)
+                                .font(.system(size: 9))
+                                .foregroundStyle(.white.opacity(0.7))
+                        }
+                        .frame(maxWidth: .infinity)
                     }
-                    .frame(maxWidth: .infinity)
                 }
+                .frame(height: 140, alignment: .bottom)
             }
-            .frame(height: 140, alignment: .bottom)
 
             HStack(spacing: 12) {
-                infoColumn(icon: "arrow.up.right", label: "You owe", value: "$150.00")
-                infoColumn(icon: "arrow.down.left", label: "People owe", value: "$300.00")
+                infoColumn(icon: "arrow.up.right", label: "You owe", value: money(store.totalYouOwe, "USD"))
+                infoColumn(icon: "arrow.down.left", label: "People owe", value: money(store.totalOwedToYou, "USD"))
             }
         }
         .padding(20)
@@ -178,6 +282,53 @@ struct BalanceCard: View {
         }
         .foregroundStyle(.white)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// MARK: - Trip Row
+
+/// A summary row for one trip on the home screen, showing the user's net balance.
+struct TripRow: View {
+    let trip: Trip
+    let currentUserID: Person.ID
+
+    private var net: Double {
+        SplitEngine.roundToTwo(trip.owed(to: currentUserID) - trip.owed(by: currentUserID))
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "suitcase.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 40, height: 40)
+                .background(Color(hex: 0x6366F1), in: .circle)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(trip.name).font(.subheadline.weight(.semibold))
+                Text("\(trip.members.count) member\(trip.members.count == 1 ? "" : "s") • \(trip.expenses.count) expense\(trip.expenses.count == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(net == 0 ? "Settled" : (net > 0 ? "You're owed" : "You owe"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if net != 0 {
+                    Text(money(abs(net), trip.currencyCode))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(net > 0 ? Color(hex: 0x10B981) : Color(hex: 0xEF4444))
+                }
+            }
+            Image(systemName: "chevron.right")
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(14)
+        .glassEffect(.regular, in: .rect(cornerRadius: 20))
     }
 }
 
@@ -335,12 +486,7 @@ struct Transaction: Identifiable {
         return String(parts.prefix(2).compactMap(\.first)).uppercased()
     }
 
-    static let samples: [Transaction] = [
-        Transaction(name: "Ramen Dinner", category: "Food", date: "Nov 5", amount: 45.00, color: Color(hex: 0xEC4899)),
-        Transaction(name: "Shinkansen Tickets", category: "Transport", date: "Nov 4", amount: 220.50, color: Color(hex: 0x6366F1)),
-        Transaction(name: "Hotel Kyoto", category: "Lodging", date: "Nov 3", amount: 480.00, color: Color(hex: 0x10B981)),
-        Transaction(name: "Museum Passes", category: "Activities", date: "Nov 3", amount: 36.00, color: Color(hex: 0xF59E0B)),
-    ]
+    static let samples: [Transaction] = []
 }
 
 struct TransactionRow: View {
@@ -372,4 +518,5 @@ struct TransactionRow: View {
 
 #Preview {
     HomeScreen()
+        .environment(TripStore())
 }

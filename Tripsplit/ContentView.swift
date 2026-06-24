@@ -31,6 +31,7 @@ enum DockTab: String, CaseIterable, Identifiable {
 
 struct ContentView: View {
     @State private var selectedTab: DockTab = .home
+    @State private var store = TripStore()
 
     var body: some View {
         ZStack {
@@ -46,6 +47,7 @@ struct ContentView: View {
             FloatingDock(selectedTab: $selectedTab)
                 .padding(.bottom, 8)
         }
+        .environment(store)
     }
 }
 
