@@ -101,12 +101,22 @@ actor AuthService {
     }
 
     func resetPassword(email: String) async throws {
-        _ = try await post("/auth/v1/recover", body: ["email": email])
+        _ = try await send("POST", "/auth/v1/recover", body: ["email": email])
+    }
+
+    /// Updates the signed-in user's password. Requires the user's own access token
+    /// (the anon key is not sufficient for this endpoint).
+    func updatePassword(accessToken: String, newPassword: String) async throws {
+        _ = try await send("PUT", "/auth/v1/user", body: ["password": newPassword], accessToken: accessToken)
     }
 
     // MARK: Networking
 
     private func post(_ path: String, body: [String: String]) async throws -> Data {
+        try await send("POST", path, body: body)
+    }
+
+    private func send(_ method: String, _ path: String, body: [String: String], accessToken: String? = nil) async throws -> Data {
         guard SupabaseConfig.isConfigured else {
             throw AuthError(message: "Supabase isn't configured yet. Add your project URL and anon key in SupabaseConfig.")
         }
@@ -114,10 +124,17 @@ actor AuthService {
             throw AuthError(message: "Invalid Supabase URL.")
         }
 
+        let bearer: String
+        if let accessToken {
+            bearer = accessToken
+        } else {
+            bearer = SupabaseConfig.anonKey
+        }
+
         var request = URLRequest(url: url)
-        request.httpMethod = "POST"
+        request.httpMethod = method
         request.setValue(SupabaseConfig.anonKey, forHTTPHeaderField: "apikey")
-        request.setValue("Bearer \(SupabaseConfig.anonKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
@@ -180,6 +197,24 @@ final class AuthStore {
 
     func resetPassword(email: String) async throws {
         try await AuthService.shared.resetPassword(email: email)
+    }
+
+    /// Changes the signed-in user's password. The current password is verified by
+    /// re-authenticating (which also yields a fresh access token to perform the update).
+    func changePassword(current: String, new: String) async throws {
+        guard let email = session?.email else {
+            throw AuthError(message: "You need to be signed in to change your password.")
+        }
+
+        let verified: AuthSession
+        do {
+            verified = try await AuthService.shared.signIn(email: email, password: current)
+        } catch let error as AuthError where error.message.lowercased().contains("credential") {
+            throw AuthError(message: "Your current password is incorrect.")
+        }
+
+        try await AuthService.shared.updatePassword(accessToken: verified.accessToken, newPassword: new)
+        persist(verified)
     }
 
     func signOut() {
@@ -403,3 +438,86 @@ struct AuthView: View {
         }
     }
 }
+// MARK: - Change password view
+
+/// A sheet that lets a signed-in user change their password by confirming their
+/// current one and entering (and re-entering) a new one.
+struct ChangePasswordView: View {
+    @Environment(AuthStore.self) private var auth
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var current = ""
+    @State private var newPassword = ""
+    @State private var confirm = ""
+    @State private var errorMessage: String?
+    @State private var isWorking = false
+
+    private var passwordsMatch: Bool { newPassword == confirm }
+
+    private var canSubmit: Bool {
+        !current.isEmpty && newPassword.count >= 6 && passwordsMatch
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Current password") {
+                    SecureField("Current password", text: $current)
+                        .textContentType(.password)
+                }
+
+                Section {
+                    SecureField("New password", text: $newPassword)
+                        .textContentType(.newPassword)
+                    SecureField("Confirm new password", text: $confirm)
+                        .textContentType(.newPassword)
+                } header: {
+                    Text("New password")
+                } footer: {
+                    Text("Must be at least 6 characters.")
+                }
+
+                if !confirm.isEmpty && !passwordsMatch {
+                    Text("New passwords don't match.")
+                        .font(.footnote)
+                        .foregroundStyle(Color(hex: 0xEF4444))
+                }
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(Color(hex: 0xEF4444))
+                }
+            }
+            .navigationTitle("Change Password")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    if isWorking {
+                        ProgressView()
+                    } else {
+                        Button("Save") { submit() }
+                            .disabled(!canSubmit)
+                    }
+                }
+            }
+        }
+    }
+
+    private func submit() {
+        errorMessage = nil
+        isWorking = true
+        Task {
+            do {
+                try await auth.changePassword(current: current, new: newPassword)
+                dismiss()
+            } catch {
+                errorMessage = (error as? AuthError)?.message ?? error.localizedDescription
+            }
+            isWorking = false
+        }
+    }
+}
+

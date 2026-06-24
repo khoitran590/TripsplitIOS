@@ -124,6 +124,13 @@ struct HomeScreen: View {
         }
     }
 
+    /// The first-name greeting, falling back to a friendly default until the user
+    /// sets their name in Settings → Personal Information.
+    private var greetingName: String {
+        let trimmed = store.currentUser.name.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? "there" : trimmed
+    }
+
     private var header: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
@@ -133,8 +140,18 @@ struct HomeScreen: View {
             }
             .foregroundStyle(.secondary)
 
-            Text("Hi, Benjamin")
-                .font(.system(size: 40, weight: .regular, design: .serif))
+            HStack(alignment: .center, spacing: 14) {
+                Text("Hi, \(greetingName)")
+                    .font(.system(size: 40, weight: .regular, design: .serif))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                Spacer(minLength: 0)
+                ProfileAvatar(
+                    imageData: store.profileImageData,
+                    initials: store.currentUser.initials,
+                    size: 56
+                )
+            }
 
             HStack(spacing: 12) {
                 Image(systemName: "mappin.and.ellipse")

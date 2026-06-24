@@ -92,6 +92,9 @@ final class TripStore {
     var currentUser: Person
     var trips: [Trip]
 
+    /// The signed-in user's profile photo, persisted across launches as JPEG data.
+    var profileImageData: Data?
+
     /// Exchange rates with base USD (`usdRates["EUR"]` = EUR per 1 USD), used to
     /// convert each trip's currency into USD for the aggregated home card.
     var usdRates: [String: Double] = [:]
@@ -99,9 +102,34 @@ final class TripStore {
     /// Recorded settlement payments, keyed by `"<tripID>|<debtorID>-><creditorID>"`.
     var settlementHistory: [String: [SettlementRecord]] = [:]
 
+    /// The user's editable display name and photo, persisted to `UserDefaults`.
+    private let profileKey = "tripsplit.profile"
+    private struct StoredProfile: Codable {
+        var name: String
+        var imageData: Data?
+    }
+
     init() {
-        currentUser = Person(name: "Benjamin", color: Color(hex: 0x6366F1))
+        let stored = Self.loadProfile(key: profileKey)
+        currentUser = Person(name: stored?.name ?? "", color: Color(hex: 0x6366F1))
+        profileImageData = stored?.imageData
         trips = []
+    }
+
+    /// Updates the signed-in user's display name and photo, persisting both so they
+    /// survive across launches.
+    func updateProfile(name: String, imageData: Data?) {
+        currentUser.name = name
+        profileImageData = imageData
+        let stored = StoredProfile(name: name, imageData: imageData)
+        if let data = try? JSONEncoder().encode(stored) {
+            UserDefaults.standard.set(data, forKey: profileKey)
+        }
+    }
+
+    private static func loadProfile(key: String) -> StoredProfile? {
+        guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
+        return try? JSONDecoder().decode(StoredProfile.self, from: data)
     }
 
     /// Trips the current user created or is a member of.
@@ -291,7 +319,7 @@ struct AddTripView: View {
         TripCard(title: "Members", icon: "person.2.fill") {
             HStack {
                 avatar(store.currentUser, size: 30)
-                Text("\(store.currentUser.name) (You · creator)")
+                Text(store.currentUser.name.isEmpty ? "You (creator)" : "\(store.currentUser.name) (You · creator)")
                     .font(.subheadline.weight(.medium))
                 Spacer()
             }

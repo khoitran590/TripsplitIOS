@@ -1,6 +1,8 @@
 import SwiftUI
 import MapKit
 import Playgrounds
+import PhotosUI
+import UIKit
 
 @main struct MyApp: App {
     var body: some Scene {
@@ -358,6 +360,10 @@ struct DestinationCard: View {
 /// logged in; otherwise the auth screen (sign in / sign up / forgot password) is shown.
 struct SettingsScreen: View {
     @Environment(AuthStore.self) private var auth
+    @Environment(TripStore.self) private var store
+
+    @State private var showPersonalInfo = false
+    @State private var showChangePassword = false
 
     var body: some View {
         ZStack {
@@ -377,8 +383,11 @@ struct SettingsScreen: View {
         }
     }
 
-    /// Derives a friendly display name from the signed-in email's local part.
+    /// The user's chosen name if set, otherwise a friendly name derived from the
+    /// signed-in email's local part.
     private var displayName: String {
+        let name = store.currentUser.name.trimmingCharacters(in: .whitespaces)
+        if !name.isEmpty { return name }
         guard let local = auth.email?.split(separator: "@").first, !local.isEmpty else {
             return "TripSplit User"
         }
@@ -393,11 +402,15 @@ struct SettingsScreen: View {
                 Text("Settings")
                     .font(.largeTitle.bold())
 
-                ProfileCard(name: displayName, email: auth.email ?? "")
+                ProfileCard(name: displayName, email: auth.email ?? "", imageData: store.profileImageData)
 
                 SettingsSection("Account") {
-                    SettingsRow(icon: "person.fill", tint: .blue, title: "Personal Information")
-                    SettingsRow(icon: "key.fill", tint: .orange, title: "Change Password")
+                    SettingsRow(icon: "person.fill", tint: .blue, title: "Personal Information") {
+                        showPersonalInfo = true
+                    }
+                    SettingsRow(icon: "key.fill", tint: .orange, title: "Change Password") {
+                        showChangePassword = true
+                    }
                     SettingsRow(icon: "creditcard.fill", tint: .green, title: "Payment Methods")
                     SettingsRow(icon: "wallet.bifold.fill", tint: .yellow, title: "Wallets & Currencies", value: "USD")
                 }
@@ -422,6 +435,132 @@ struct SettingsScreen: View {
             .padding()
             .padding(.bottom, 80) // Clearance for the floating dock.
         }
+        .sheet(isPresented: $showPersonalInfo) {
+            PersonalInformationView()
+        }
+        .sheet(isPresented: $showChangePassword) {
+            ChangePasswordView()
+        }
+    }
+}
+
+/// A circular avatar showing the user's photo, with their initials or a person
+/// icon as a fallback. Reused by the home greeting and the settings screens.
+struct ProfileAvatar: View {
+    let imageData: Data?
+    var initials: String = ""
+    var size: CGFloat = 48
+
+    var body: some View {
+        Group {
+            if let imageData, let uiImage = UIImage(data: imageData) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .scaledToFill()
+            } else if !initials.isEmpty {
+                LinearGradient(
+                    colors: [Color(hex: 0x818CF8), Color(hex: 0x4F46E5)],
+                    startPoint: .topLeading, endPoint: .bottomTrailing
+                )
+                .overlay(
+                    Text(initials)
+                        .font(.system(size: size * 0.4, weight: .semibold))
+                        .foregroundStyle(.white)
+                )
+            } else {
+                Image(systemName: "person.crop.circle.fill")
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundStyle(.tint)
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(.circle)
+    }
+}
+
+/// An editor for the user's display name and profile photo, presented from
+/// Settings → Personal Information.
+struct PersonalInformationView: View {
+    @Environment(TripStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var name = ""
+    @State private var photoItem: PhotosPickerItem?
+    @State private var imageData: Data?
+
+    private var initials: String {
+        let parts = name.split(separator: " ")
+        return String(parts.prefix(2).compactMap(\.first)).uppercased()
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    HStack {
+                        Spacer()
+                        VStack(spacing: 12) {
+                            ProfileAvatar(imageData: imageData, initials: initials, size: 96)
+                            PhotosPicker(selection: $photoItem, matching: .images) {
+                                Text(imageData == nil ? "Add Photo" : "Change Photo")
+                            }
+                            if imageData != nil {
+                                Button("Remove Photo", role: .destructive) {
+                                    imageData = nil
+                                    photoItem = nil
+                                }
+                            }
+                        }
+                        Spacer()
+                    }
+                    .padding(.vertical, 8)
+                }
+
+                Section("Name") {
+                    TextField("Your name", text: $name)
+                        .textContentType(.name)
+                }
+            }
+            .navigationTitle("Personal Information")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { save() }
+                        .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+            .onAppear {
+                name = store.currentUser.name
+                imageData = store.profileImageData
+            }
+            .onChange(of: photoItem) { _, newItem in
+                Task {
+                    guard let data = try? await newItem?.loadTransferable(type: Data.self) else { return }
+                    imageData = Self.downsized(data) ?? data
+                }
+            }
+        }
+    }
+
+    private func save() {
+        store.updateProfile(name: name.trimmingCharacters(in: .whitespaces), imageData: imageData)
+        dismiss()
+    }
+
+    /// Re-encodes a picked photo down to a modest size so it stays small in storage.
+    private static func downsized(_ data: Data) -> Data? {
+        guard let image = UIImage(data: data) else { return nil }
+        let maxDimension: CGFloat = 512
+        let longestSide = max(image.size.width, image.size.height)
+        let scale = longestSide > maxDimension ? maxDimension / longestSide : 1
+        let newSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: newSize)
+        let resized = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: newSize)) }
+        return resized.jpegData(compressionQuality: 0.8)
     }
 }
 
@@ -429,12 +568,16 @@ struct SettingsScreen: View {
 struct ProfileCard: View {
     let name: String
     let email: String
+    var imageData: Data? = nil
+
+    private var initials: String {
+        let parts = name.split(separator: " ")
+        return String(parts.prefix(2).compactMap(\.first)).uppercased()
+    }
 
     var body: some View {
         HStack(spacing: 14) {
-            Image(systemName: "person.crop.circle.fill")
-                .font(.system(size: 52))
-                .foregroundStyle(.tint)
+            ProfileAvatar(imageData: imageData, initials: initials, size: 56)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(name)
@@ -482,10 +625,11 @@ struct SettingsRow: View {
     let tint: Color
     let title: String
     var value: String? = nil
+    var action: (() -> Void)? = nil
 
     var body: some View {
         Button {
-            // Hook up navigation here later.
+            action?()
         } label: {
             HStack(spacing: 14) {
                 Image(systemName: icon)
