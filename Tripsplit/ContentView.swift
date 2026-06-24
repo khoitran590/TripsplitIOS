@@ -32,6 +32,7 @@ enum DockTab: String, CaseIterable, Identifiable {
 struct ContentView: View {
     @State private var selectedTab: DockTab = .home
     @State private var store = TripStore()
+    @State private var auth = AuthStore()
 
     var body: some View {
         ZStack {
@@ -48,6 +49,7 @@ struct ContentView: View {
                 .padding(.bottom, 8)
         }
         .environment(store)
+        .environment(auth)
     }
 }
 
@@ -352,8 +354,11 @@ struct DestinationCard: View {
     }
 }
 
-/// A Liquid Glass settings screen with a profile card and grouped option rows.
+/// A Liquid Glass settings screen. The content only appears once the user has
+/// logged in; otherwise the auth screen (sign in / sign up / forgot password) is shown.
 struct SettingsScreen: View {
+    @Environment(AuthStore.self) private var auth
+
     var body: some View {
         ZStack {
             // A soft backdrop so the Liquid Glass cards have content to refract.
@@ -364,28 +369,58 @@ struct SettingsScreen: View {
             )
             .ignoresSafeArea()
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    Text("Settings")
-                        .font(.largeTitle.bold())
-
-                    ProfileCard(name: "Peter Tran", email: "khoitran590@gmail.com")
-
-                    SettingsSection("Account") {
-                        SettingsRow(icon: "person.fill", tint: .blue, title: "Personal Information")
-                        SettingsRow(icon: "key.fill", tint: .orange, title: "Change Password")
-                        SettingsRow(icon: "creditcard.fill", tint: .green, title: "Payment Methods")
-                        SettingsRow(icon: "wallet.bifold.fill", tint: .yellow, title: "Wallets & Currencies", value: "USD")
-                    }
-
-                    SettingsSection("Preferences") {
-                        SettingsRow(icon: "bell.fill", tint: .indigo, title: "Notifications")
-                        SettingsRow(icon: "globe", tint: .orange, title: "Language", value: "English")
-                    }
-                }
-                .padding()
-                .padding(.bottom, 80) // Clearance for the floating dock.
+            if auth.isAuthenticated {
+                settingsContent
+            } else {
+                AuthView()
             }
+        }
+    }
+
+    /// Derives a friendly display name from the signed-in email's local part.
+    private var displayName: String {
+        guard let local = auth.email?.split(separator: "@").first, !local.isEmpty else {
+            return "TripSplit User"
+        }
+        return local.split(whereSeparator: { $0 == "." || $0 == "_" })
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+            .joined(separator: " ")
+    }
+
+    private var settingsContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                Text("Settings")
+                    .font(.largeTitle.bold())
+
+                ProfileCard(name: displayName, email: auth.email ?? "")
+
+                SettingsSection("Account") {
+                    SettingsRow(icon: "person.fill", tint: .blue, title: "Personal Information")
+                    SettingsRow(icon: "key.fill", tint: .orange, title: "Change Password")
+                    SettingsRow(icon: "creditcard.fill", tint: .green, title: "Payment Methods")
+                    SettingsRow(icon: "wallet.bifold.fill", tint: .yellow, title: "Wallets & Currencies", value: "USD")
+                }
+
+                SettingsSection("Preferences") {
+                    SettingsRow(icon: "bell.fill", tint: .indigo, title: "Notifications")
+                    SettingsRow(icon: "globe", tint: .orange, title: "Language", value: "English")
+                }
+
+                Button(role: .destructive) {
+                    auth.signOut()
+                } label: {
+                    Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
+                        .font(.headline)
+                        .foregroundStyle(Color(hex: 0xEF4444))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: .capsule)
+            }
+            .padding()
+            .padding(.bottom, 80) // Clearance for the floating dock.
         }
     }
 }
