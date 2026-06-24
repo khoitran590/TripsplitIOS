@@ -5,8 +5,8 @@ import Observation
 
 /// A single expense within a trip. The payer fronts the whole `amount`; everyone in
 /// `participantIDs` shares it equally, mirroring TripSplit's equal-split debts.
-struct Expense: Identifiable {
-    let id = UUID()
+struct Expense: Identifiable, Codable {
+    var id = UUID()
     var title: String
     var amount: Double
     var payerID: Person.ID
@@ -16,14 +16,19 @@ struct Expense: Identifiable {
 
 /// A trip the user creates or belongs to. The `creatorID` may assign expenses to any
 /// member; other members can only log expenses they paid themselves.
-struct Trip: Identifiable {
-    let id = UUID()
+struct Trip: Identifiable, Codable {
+    var id = UUID()
     var name: String
     var currencyCode: String
     var creatorID: Person.ID
     var members: [Person]
     var budgets: [Person.ID: Double]
     var expenses: [Expense] = []
+
+    /// Recorded settlement payments toward this trip's debts, keyed by
+    /// `"<debtorID>-><creditorID>"`. Stored on the trip so settle-up progress
+    /// syncs to the cloud alongside members, budgets, and expenses.
+    var settlementRecords: [String: [SettlementRecord]] = [:]
 }
 
 extension Trip {
@@ -78,6 +83,37 @@ extension Trip {
     func settlements() -> [Settlement] {
         SplitEngine.settleUp(net: netBalances(), people: members)
     }
+
+    /// Rewrites the original creator's member id to `newID` everywhere it appears —
+    /// `creatorID`, the member list, budgets, expense payers/participants, and settlement
+    /// keys — so a trip loaded from the cloud lines up with the signed-in user's stable
+    /// identity even when it was created under a previous (random) local id.
+    func reanchoringCreator(to newID: Person.ID) -> Trip {
+        let oldID = creatorID
+        guard oldID != newID else { return self }
+        var copy = self
+        copy.creatorID = newID
+        copy.members = members.map { member in
+            guard member.id == oldID else { return member }
+            var renamed = member
+            renamed.id = newID
+            return renamed
+        }
+        if let budget = copy.budgets.removeValue(forKey: oldID) { copy.budgets[newID] = budget }
+        copy.expenses = expenses.map { expense in
+            var updated = expense
+            if updated.payerID == oldID { updated.payerID = newID }
+            if updated.participantIDs.remove(oldID) != nil { updated.participantIDs.insert(newID) }
+            return updated
+        }
+        copy.settlementRecords = Dictionary(
+            settlementRecords.map { key, value in
+                (key.replacingOccurrences(of: oldID.uuidString, with: newID.uuidString), value)
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
+        return copy
+    }
 }
 
 // MARK: - Trip Store
@@ -99,8 +135,9 @@ final class TripStore {
     /// convert each trip's currency into USD for the aggregated home card.
     var usdRates: [String: Double] = [:]
 
-    /// Recorded settlement payments, keyed by `"<tripID>|<debtorID>-><creditorID>"`.
-    var settlementHistory: [String: [SettlementRecord]] = [:]
+    /// The signed-in user's Supabase access token. Set by the app when the auth
+    /// session changes; persistence to the cloud is skipped while this is nil.
+    var accessToken: String?
 
     /// The user's editable display name and photo, persisted to `UserDefaults`.
     private let profileKey = "tripsplit.profile"
@@ -166,25 +203,119 @@ final class TripStore {
 
     func isCreator(of trip: Trip) -> Bool { trip.creatorID == currentUser.id }
 
-    func addTrip(_ trip: Trip) { trips.append(trip) }
+    func addTrip(_ trip: Trip) {
+        trips.append(trip)
+        persist(trip)
+    }
 
     func addExpense(_ expense: Expense, to tripID: Trip.ID) {
         guard let index = trips.firstIndex(where: { $0.id == tripID }) else { return }
         trips[index].expenses.append(expense)
+        persist(trips[index])
+    }
+
+    /// Replaces an existing expense (matched by id) and syncs the change.
+    func updateExpense(_ expense: Expense, in tripID: Trip.ID) {
+        guard let index = trips.firstIndex(where: { $0.id == tripID }),
+              let expenseIndex = trips[index].expenses.firstIndex(where: { $0.id == expense.id }) else { return }
+        trips[index].expenses[expenseIndex] = expense
+        persist(trips[index])
+    }
+
+    /// Removes an expense from a trip and syncs the change.
+    func deleteExpense(_ expenseID: Expense.ID, from tripID: Trip.ID) {
+        guard let index = trips.firstIndex(where: { $0.id == tripID }) else { return }
+        trips[index].expenses.removeAll { $0.id == expenseID }
+        persist(trips[index])
+    }
+
+    /// Replaces a whole trip (name, members, budgets, …) and syncs the change.
+    func updateTrip(_ trip: Trip) {
+        guard let index = trips.firstIndex(where: { $0.id == trip.id }) else { return }
+        trips[index] = trip
+        persist(trip)
+    }
+
+    /// Sets a member's budget on a trip and syncs the change.
+    func setBudget(_ amount: Double, for userID: Person.ID, in tripID: Trip.ID) {
+        guard let index = trips.firstIndex(where: { $0.id == tripID }) else { return }
+        trips[index].budgets[userID] = amount
+        persist(trips[index])
+    }
+
+    /// Deletes a trip locally and from the cloud.
+    func deleteTrip(_ tripID: Trip.ID) {
+        trips.removeAll { $0.id == tripID }
+        guard let accessToken else { return }
+        Task { try? await TripsRepository.shared.delete(id: tripID, accessToken: accessToken) }
+    }
+
+    // MARK: Supabase sync
+
+    /// Aligns the in-memory user's identity with their authenticated account, so trip
+    /// membership (and every balance figure derived from `currentUser.id`) resolves
+    /// consistently across launches and devices. The id is the Supabase user's stable
+    /// UUID, read from the access token's `sub` claim — no extra network call, and it
+    /// works for already-persisted sessions too.
+    func bindIdentity(accessToken: String?) {
+        guard let accessToken, let uuid = Self.userID(fromJWT: accessToken) else { return }
+        currentUser.id = uuid
+    }
+
+    /// Extracts the `sub` (subject = user id) claim from a JWT access token.
+    private static func userID(fromJWT token: String) -> UUID? {
+        let parts = token.split(separator: ".")
+        guard parts.count == 3 else { return nil }
+        var payload = String(parts[1])
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        while payload.count % 4 != 0 { payload += "=" }
+        guard let data = Data(base64Encoded: payload),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let sub = json["sub"] as? String else { return nil }
+        return UUID(uuidString: sub)
+    }
+
+    /// Loads the signed-in user's trips from Supabase, replacing the in-memory list.
+    /// No-op when signed out (the app stays usable with local-only trips).
+    ///
+    /// Each row is re-anchored to the current user's stable id so trips created under a
+    /// previous (random) local identity still show up and settle correctly. Any trip
+    /// that needed re-anchoring is pushed back once so the cloud copy heals itself.
+    func loadFromCloud() async {
+        guard let accessToken else { return }
+        guard let loaded = try? await TripsRepository.shared.fetch(accessToken: accessToken) else { return }
+        var healed: [Trip] = []
+        var changed: [Trip] = []
+        for trip in loaded {
+            let anchored = trip.reanchoringCreator(to: currentUser.id)
+            healed.append(anchored)
+            if anchored.creatorID != trip.creatorID { changed.append(anchored) }
+        }
+        await MainActor.run { self.trips = healed }
+        for trip in changed { persist(trip) }
+    }
+
+    /// Pushes a single trip (members, budgets, and expenses) to Supabase.
+    private func persist(_ trip: Trip) {
+        guard let accessToken else { return }
+        Task { try? await TripsRepository.shared.upsert(trip, accessToken: accessToken) }
     }
 
     // MARK: Settlements
 
-    func settleKey(tripID: Trip.ID, _ settlement: Settlement) -> String {
-        "\(tripID.uuidString)|\(settlement.from.id.uuidString)->\(settlement.to.id.uuidString)"
+    func settleKey(_ settlement: Settlement) -> String {
+        "\(settlement.from.id.uuidString)->\(settlement.to.id.uuidString)"
     }
 
     func history(tripID: Trip.ID, for settlement: Settlement) -> [SettlementRecord] {
-        settlementHistory[settleKey(tripID: tripID, settlement)] ?? []
+        trip(tripID)?.settlementRecords[settleKey(settlement)] ?? []
     }
 
     func setHistory(_ records: [SettlementRecord], tripID: Trip.ID, for settlement: Settlement) {
-        settlementHistory[settleKey(tripID: tripID, settlement)] = records
+        guard let index = trips.firstIndex(where: { $0.id == tripID }) else { return }
+        trips[index].settlementRecords[settleKey(settlement)] = records
+        persist(trips[index])
     }
 
     /// Remaining on a transfer = original amount minus confirmed settlement payments.
@@ -197,6 +328,88 @@ final class TripStore {
 
     func isFullySettled(tripID: Trip.ID, _ settlement: Settlement) -> Bool {
         remaining(tripID: tripID, for: settlement) <= 0.005
+    }
+}
+
+// MARK: - Trips repository (Supabase PostgREST)
+
+/// Persists trips to a single `trips` table in Supabase, storing each trip as a
+/// JSON blob in a `jsonb` column. Row ownership is enforced by RLS via `auth.uid()`,
+/// so the client only ever sends the access token — never a user id.
+///
+/// Run `supabase_schema.sql` (at the repo root) once in the Supabase SQL editor to
+/// create the table and its row-level-security policy.
+actor TripsRepository {
+    static let shared = TripsRepository()
+
+    private let session = URLSession.shared
+
+    private let encoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        return encoder
+    }()
+
+    private let decoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }()
+
+    /// One persisted row: the trip's id plus its JSON payload.
+    private struct Row: Decodable { let data: Trip }
+
+    /// Fetches every trip owned by the token's user.
+    func fetch(accessToken: String) async throws -> [Trip] {
+        let data = try await send("GET", "/rest/v1/trips?select=data&order=updated_at.desc", accessToken: accessToken)
+        return (try? decoder.decode([Row].self, from: data))?.map(\.data) ?? []
+    }
+
+    /// Inserts or updates a trip (keyed on its id) for the token's user.
+    func upsert(_ trip: Trip, accessToken: String) async throws {
+        // Wrap the encoded trip as the `data` jsonb value alongside its primary key.
+        let tripJSON = try JSONSerialization.jsonObject(with: encoder.encode(trip))
+        let body = try JSONSerialization.data(withJSONObject: [
+            "id": trip.id.uuidString,
+            "data": tripJSON,
+        ])
+        _ = try await send(
+            "POST",
+            "/rest/v1/trips?on_conflict=id",
+            accessToken: accessToken,
+            body: body,
+            extraHeaders: ["Prefer": "resolution=merge-duplicates,return=minimal"]
+        )
+    }
+
+    /// Deletes a trip the user owns.
+    func delete(id: Trip.ID, accessToken: String) async throws {
+        _ = try await send("DELETE", "/rest/v1/trips?id=eq.\(id.uuidString)", accessToken: accessToken)
+    }
+
+    private func send(
+        _ method: String,
+        _ path: String,
+        accessToken: String,
+        body: Data? = nil,
+        extraHeaders: [String: String] = [:]
+    ) async throws -> Data {
+        guard SupabaseConfig.isConfigured, let url = URL(string: SupabaseConfig.url + path) else {
+            throw AuthError(message: "Supabase isn't configured.")
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.setValue(SupabaseConfig.anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        for (key, value) in extraHeaders { request.setValue(value, forHTTPHeaderField: key) }
+        request.httpBody = body
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw AuthError(message: "Sync request failed.")
+        }
+        return data
     }
 }
 
@@ -242,7 +455,7 @@ struct AddTripView: View {
         NavigationStack {
             ZStack {
                 LinearGradient(
-                    colors: [Color(hex: 0xF8F9FF), Color(.systemBackground)],
+                    colors: Theme.sheetGradient,
                     startPoint: .top, endPoint: .bottom
                 )
                 .ignoresSafeArea()
@@ -276,7 +489,7 @@ struct AddTripView: View {
                 .font(.title3.weight(.semibold))
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
-                .background(.secondary.opacity(0.12), in: .rect(cornerRadius: 12))
+                .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
 
             HStack {
                 Text("Currency").font(.subheadline).foregroundStyle(.secondary)
@@ -311,7 +524,7 @@ struct AddTripView: View {
             .font(.title3.weight(.semibold))
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
-            .background(.secondary.opacity(0.12), in: .rect(cornerRadius: 12))
+            .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
         }
     }
 
@@ -342,7 +555,7 @@ struct AddTripView: View {
                 TextField("Add member name", text: $memberName)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
-                    .background(.secondary.opacity(0.12), in: .rect(cornerRadius: 12))
+                    .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
                 Button { addMember() } label: {
                     Image(systemName: "plus")
                         .font(.subheadline.weight(.bold))
@@ -388,6 +601,7 @@ struct TripDetailView: View {
 
     @State private var showAddExpense = false
     @State private var activeSettlement: Settlement?
+    @State private var editingExpense: Expense?
 
     private var trip: Trip? { store.trip(tripID) }
 
@@ -395,7 +609,7 @@ struct TripDetailView: View {
         NavigationStack {
             ZStack {
                 LinearGradient(
-                    colors: [Color(hex: 0xF8F9FF), Color(.systemBackground)],
+                    colors: Theme.sheetGradient,
                     startPoint: .top, endPoint: .bottom
                 )
                 .ignoresSafeArea()
@@ -431,6 +645,9 @@ struct TripDetailView: View {
             }
             .sheet(isPresented: $showAddExpense) {
                 AddExpenseView(tripID: tripID)
+            }
+            .sheet(item: $editingExpense) { expense in
+                AddExpenseView(tripID: tripID, editing: expense)
             }
             .sheet(item: $activeSettlement) { settlement in
                 SettleView(
@@ -530,6 +747,22 @@ struct TripDetailView: View {
             Text("remaining of \(money(trip.budget(for: me), trip.currencyCode)) budget")
                 .font(.footnote).foregroundStyle(.secondary)
 
+            // Budget-usage bar: fills toward the limit and turns red once exceeded.
+            let budgetTotal = trip.budget(for: me)
+            if budgetTotal > 0 {
+                let fraction = min(trip.spent(for: me) / budgetTotal, 1)
+                let overBudget = trip.spent(for: me) > budgetTotal
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Theme.fieldBackground)
+                        Capsule()
+                            .fill(overBudget ? Theme.negative : Theme.positive)
+                            .frame(width: max(0, geo.size.width * fraction))
+                    }
+                }
+                .frame(height: 8)
+            }
+
             Divider()
 
             HStack {
@@ -572,12 +805,30 @@ struct TripDetailView: View {
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 8)
             } else {
-                ForEach(trip.expenses) { expense in
-                    expenseRow(trip, expense)
-                    if expense.id != trip.expenses.last?.id { Divider() }
+                VStack(spacing: 8) {
+                    ForEach(trip.expenses) { expense in
+                        if canModify(trip, expense) {
+                            SwipeToDeleteRow {
+                                store.deleteExpense(expense.id, from: trip.id)
+                            } content: {
+                                Button { editingExpense = expense } label: {
+                                    expenseRow(trip, expense)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        } else {
+                            expenseRow(trip, expense)
+                        }
+                    }
                 }
             }
         }
+    }
+
+    /// Whether the signed-in user may edit or delete an expense: the trip creator can
+    /// modify any expense; other members can modify only the ones they paid.
+    private func canModify(_ trip: Trip, _ expense: Expense) -> Bool {
+        store.isCreator(of: trip) || expense.payerID == store.currentUser.id
     }
 
     private func expenseRow(_ trip: Trip, _ expense: Expense) -> some View {
@@ -598,10 +849,13 @@ struct TripDetailView: View {
             if expense.participantIDs.contains(me) {
                 Text("Your share: \(money(yourShare, trip.currencyCode))")
                     .font(.caption)
-                    .foregroundStyle(expense.payerID == me ? Color(hex: 0x10B981) : Color(hex: 0xEF4444))
+                    .foregroundStyle(expense.payerID == me ? Theme.positive : Theme.negative)
             }
         }
-        .padding(.vertical, 4)
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(.rect)
+        .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
     }
 
     private func statColumn(_ title: String, _ value: String, _ color: Color) -> some View {
@@ -620,6 +874,8 @@ struct AddExpenseView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(TripStore.self) private var store
     let tripID: Trip.ID
+    /// When set, the sheet edits this expense in place instead of creating a new one.
+    var editing: Expense? = nil
 
     @State private var title = ""
     @State private var amountText = ""
@@ -627,6 +883,7 @@ struct AddExpenseView: View {
     @State private var participants: Set<Person.ID> = []
     @State private var date = Date()
 
+    private var isEditing: Bool { editing != nil }
     private var trip: Trip? { store.trip(tripID) }
     private var isCreator: Bool { trip.map { store.isCreator(of: $0) } ?? false }
 
@@ -638,7 +895,7 @@ struct AddExpenseView: View {
         NavigationStack {
             ZStack {
                 LinearGradient(
-                    colors: [Color(hex: 0xF8F9FF), Color(.systemBackground)],
+                    colors: Theme.sheetGradient,
                     startPoint: .top, endPoint: .bottom
                 )
                 .ignoresSafeArea()
@@ -655,7 +912,7 @@ struct AddExpenseView: View {
                     }
                 }
             }
-            .navigationTitle("Add Expense")
+            .navigationTitle(isEditing ? "Edit Expense" : "Add Expense")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -674,7 +931,7 @@ struct AddExpenseView: View {
             TextField("Title (e.g. Dinner)", text: $title)
                 .font(.subheadline.weight(.medium))
                 .padding(.horizontal, 14).padding(.vertical, 12)
-                .background(.secondary.opacity(0.12), in: .rect(cornerRadius: 12))
+                .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
 
             HStack(spacing: 2) {
                 Text(currencySymbol(trip.currencyCode)).foregroundStyle(.secondary)
@@ -683,7 +940,7 @@ struct AddExpenseView: View {
             }
             .font(.title3.weight(.semibold))
             .padding(.horizontal, 14).padding(.vertical, 12)
-            .background(.secondary.opacity(0.12), in: .rect(cornerRadius: 12))
+            .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
 
             DatePicker("Date", selection: $date, displayedComponents: .date)
                 .font(.subheadline)
@@ -756,6 +1013,15 @@ struct AddExpenseView: View {
 
     private func configureDefaults() {
         guard let trip else { return }
+        if let editing {
+            // Prefill once from the expense being edited.
+            title = editing.title
+            amountText = editing.amount.formatted(.number.precision(.fractionLength(0...2)).grouping(.never))
+            payerID = editing.payerID
+            participants = editing.participantIDs
+            date = editing.date
+            return
+        }
         if payerID == nil {
             // Creators and members alike default to paying themselves.
             payerID = store.currentUser.id
@@ -768,19 +1034,76 @@ struct AddExpenseView: View {
     private func save() {
         guard let trip, let amount = Double(amountText), amount > 0, !participants.isEmpty else { return }
         let payer = isCreator ? (payerID ?? store.currentUser.id) : store.currentUser.id
-        let expense = Expense(
-            title: title.trimmingCharacters(in: .whitespaces).isEmpty ? "Expense" : title,
-            amount: amount,
-            payerID: payer,
-            participantIDs: participants,
-            date: date
-        )
-        store.addExpense(expense, to: trip.id)
+        let resolvedTitle = title.trimmingCharacters(in: .whitespaces).isEmpty ? "Expense" : title
+        if let editing {
+            var updated = editing
+            updated.title = resolvedTitle
+            updated.amount = amount
+            updated.payerID = payer
+            updated.participantIDs = participants
+            updated.date = date
+            store.updateExpense(updated, in: trip.id)
+        } else {
+            let expense = Expense(
+                title: resolvedTitle,
+                amount: amount,
+                payerID: payer,
+                participantIDs: participants,
+                date: date
+            )
+            store.addExpense(expense, to: trip.id)
+        }
         dismiss()
     }
 }
 
 // MARK: - Shared pieces
+
+/// A row wrapper that reveals a destructive delete button when swiped left, giving the
+/// app's custom card rows the `List` swipe-to-delete affordance without adopting `List`.
+struct SwipeToDeleteRow<Content: View>: View {
+    let onDelete: () -> Void
+    @ViewBuilder var content: Content
+
+    @State private var offset: CGFloat = 0
+    @State private var startOffset: CGFloat = 0
+    private let actionWidth: CGFloat = 76
+    private let settle = Animation.spring(response: 0.3, dampingFraction: 0.8)
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            Button(role: .destructive) {
+                withAnimation(settle) { offset = 0 }
+                startOffset = 0
+                onDelete()
+            } label: {
+                Image(systemName: "trash.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: actionWidth)
+                    .frame(maxHeight: .infinity)
+            }
+            .background(Theme.negative, in: .rect(cornerRadius: 12))
+
+            content
+                .offset(x: offset)
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 18)
+                        .onChanged { value in
+                            // Only react to predominantly-horizontal drags so vertical
+                            // scrolling still wins inside the enclosing ScrollView.
+                            guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                            offset = min(0, max(startOffset + value.translation.width, -actionWidth))
+                        }
+                        .onEnded { _ in
+                            let opened = offset < -actionWidth / 2
+                            withAnimation(settle) { offset = opened ? -actionWidth : 0 }
+                            startOffset = opened ? -actionWidth : 0
+                        }
+                )
+        }
+    }
+}
 
 /// A standard Liquid Glass card with a labeled header, used across the trip screens.
 struct TripCard<Content: View>: View {

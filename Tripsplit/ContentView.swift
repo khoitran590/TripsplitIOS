@@ -52,6 +52,13 @@ struct ContentView: View {
         }
         .environment(store)
         .environment(auth)
+        .task(id: auth.session?.accessToken) {
+            // Keep the trip store's token + identity in sync with the auth session and
+            // reload the user's trips from Supabase whenever they sign in (or back out).
+            store.accessToken = auth.session?.accessToken
+            store.bindIdentity(accessToken: auth.session?.accessToken)
+            await store.loadFromCloud()
+        }
     }
 }
 
@@ -451,9 +458,16 @@ struct ProfileAvatar: View {
     var initials: String = ""
     var size: CGFloat = 48
 
+    /// Decoded once per `imageData` value rather than on every render. Avatars appear in
+    /// the always-visible header, so re-decoding the JPEG on each body pass is wasteful.
+    private var decodedImage: UIImage? {
+        guard let imageData else { return nil }
+        return ProfileImageCache.image(for: imageData)
+    }
+
     var body: some View {
         Group {
-            if let imageData, let uiImage = UIImage(data: imageData) {
+            if let uiImage = decodedImage {
                 Image(uiImage: uiImage)
                     .resizable()
                     .scaledToFill()
@@ -476,6 +490,20 @@ struct ProfileAvatar: View {
         }
         .frame(width: size, height: size)
         .clipShape(.circle)
+    }
+}
+
+/// A tiny in-memory cache of decoded profile images, keyed by the raw JPEG bytes, so the
+/// same photo isn't re-decoded each time an avatar view re-renders.
+private enum ProfileImageCache {
+    private static let cache = NSCache<NSData, UIImage>()
+
+    static func image(for data: Data) -> UIImage? {
+        let key = data as NSData
+        if let cached = cache.object(forKey: key) { return cached }
+        guard let image = UIImage(data: data) else { return nil }
+        cache.setObject(image, forKey: key)
+        return image
     }
 }
 

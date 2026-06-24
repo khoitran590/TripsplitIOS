@@ -3,6 +3,7 @@ import SwiftUI
 /// Shows the TripSplit splash screen on launch, then transitions into the app.
 struct RootView: View {
     @State private var isActive = false
+    @AppStorage("appearancePreference") private var appearance: AppearancePreference = .system
 
     var body: some View {
         ZStack {
@@ -14,6 +15,7 @@ struct RootView: View {
                     .transition(.opacity)
             }
         }
+        .preferredColorScheme(appearance.colorScheme)
         .task {
             // Brief hold so the logo animation reads, then hand off to the app.
             try? await Task.sleep(for: .seconds(0.9))

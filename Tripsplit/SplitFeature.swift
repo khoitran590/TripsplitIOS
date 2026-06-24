@@ -3,8 +3,8 @@ import SwiftUI
 // MARK: - Models
 
 /// A trip member who can pay for or share in an expense.
-struct Person: Identifiable, Hashable {
-    let id = UUID()
+struct Person: Identifiable, Hashable, Codable {
+    var id = UUID()
     var name: String
     var color: Color
 
@@ -12,6 +12,29 @@ struct Person: Identifiable, Hashable {
         let parts = name.split(separator: " ")
         let letters = parts.prefix(2).compactMap { $0.first }
         return String(letters).uppercased()
+    }
+
+    // `Color` isn't `Codable`, so members persist their color as a hex integer.
+    private enum CodingKeys: String, CodingKey { case id, name, colorHex }
+
+    init(id: UUID = UUID(), name: String, color: Color) {
+        self.id = id
+        self.name = name
+        self.color = color
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        color = Color(hex: try container.decode(UInt32.self, forKey: .colorHex))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(color.hexValue, forKey: .colorHex)
     }
 }
 
@@ -68,7 +91,7 @@ struct Settlement: Identifiable {
 }
 
 /// How a settlement payment was made, mirroring TripSplit's settlement payment methods.
-enum PaymentMethod: String, CaseIterable, Identifiable {
+enum PaymentMethod: String, CaseIterable, Identifiable, Codable {
     case cash = "Cash"
     case venmo = "Venmo"
     case paypal = "PayPal"
@@ -88,12 +111,12 @@ enum PaymentMethod: String, CaseIterable, Identifiable {
 
 /// The lifecycle of a settlement request, mirroring TripSplit's `status` field:
 /// the debtor records a `pending` payment and the creditor confirms or declines it.
-enum SettlementStatus: String {
+enum SettlementStatus: String, Codable {
     case pending, confirmed, rejected
 }
 
 /// A recorded settlement payment toward a debt between two people.
-struct SettlementRecord: Identifiable {
+struct SettlementRecord: Identifiable, Codable {
     let id = UUID()
     var amount: Double
     var method: PaymentMethod
@@ -274,7 +297,7 @@ struct SplitView: View {
         NavigationStack {
             ZStack {
                 LinearGradient(
-                    colors: [Color(hex: 0xF8F9FF), Color(.systemBackground)],
+                    colors: Theme.sheetGradient,
                     startPoint: .top, endPoint: .bottom
                 )
                 .ignoresSafeArea()
@@ -682,7 +705,7 @@ struct SettleView: View {
         NavigationStack {
             ZStack {
                 LinearGradient(
-                    colors: [Color(hex: 0xF8F9FF), Color(.systemBackground)],
+                    colors: Theme.sheetGradient,
                     startPoint: .top, endPoint: .bottom
                 )
                 .ignoresSafeArea()

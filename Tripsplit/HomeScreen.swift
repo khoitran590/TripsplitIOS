@@ -4,6 +4,7 @@ import SwiftUI
 /// and recent transactions.
 struct HomeScreen: View {
     @Environment(TripStore.self) private var store
+    @AppStorage("appearancePreference") private var appearance: AppearancePreference = .system
     @State private var showAddTrip = false
     @State private var selectedTrip: Trip?
 
@@ -13,12 +14,13 @@ struct HomeScreen: View {
     @State private var showTripPicker = false
     @State private var splitTrip: Trip?
     @State private var expenseTrip: Trip?
+    @State private var tripToDelete: Trip?
 
     var body: some View {
         ZStack {
-            // Screen background gradient (TripSplit light palette).
+            // Screen background gradient — light pastel, deep "Arctic Depths" in dark mode.
             LinearGradient(
-                colors: [Color(hex: 0xCCE0FF), Color(hex: 0xCCF0F5), Color(hex: 0xEBD0F0), Color(hex: 0xFAD0DE)],
+                colors: Theme.homeGradient,
                 startPoint: .top, endPoint: .bottom
             )
             .ignoresSafeArea()
@@ -55,6 +57,19 @@ struct HomeScreen: View {
             Button("Cancel", role: .cancel) { pendingAction = nil }
         } message: {
             Text(pendingAction == .split ? "Split a bill within which trip?" : "Add an expense to which trip?")
+        }
+        .confirmationDialog(
+            "Delete this trip?",
+            isPresented: Binding(get: { tripToDelete != nil }, set: { if !$0 { tripToDelete = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Delete Trip", role: .destructive) {
+                if let tripToDelete { store.deleteTrip(tripToDelete.id) }
+                tripToDelete = nil
+            }
+            Button("Cancel", role: .cancel) { tripToDelete = nil }
+        } message: {
+            Text(tripToDelete.map { "“\($0.name)” and its expenses will be removed for everyone." } ?? "")
         }
         .task {
             // Load USD exchange rates so the balance card can normalize every trip's currency.
@@ -117,6 +132,15 @@ struct HomeScreen: View {
                                 TripRow(trip: trip, currentUserID: store.currentUser.id)
                             }
                             .buttonStyle(.plain)
+                            .contextMenu {
+                                if store.isCreator(of: trip) {
+                                    Button(role: .destructive) {
+                                        tripToDelete = trip
+                                    } label: {
+                                        Label("Delete Trip", systemImage: "trash")
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -146,6 +170,7 @@ struct HomeScreen: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
                 Spacer(minLength: 0)
+                appearanceToggle
                 ProfileAvatar(
                     imageData: store.profileImageData,
                     initials: store.currentUser.initials,
@@ -166,6 +191,24 @@ struct HomeScreen: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .glassEffect(.regular, in: .rect(cornerRadius: 24))
         }
+    }
+
+    /// A glass button that switches the app between System, Light, and Dark appearance.
+    private var appearanceToggle: some View {
+        Menu {
+            Picker("Appearance", selection: $appearance) {
+                ForEach(AppearancePreference.allCases) { option in
+                    Label(option.label, systemImage: option.icon).tag(option)
+                }
+            }
+        } label: {
+            Image(systemName: appearance.icon)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.primary)
+                .frame(width: 44, height: 44)
+                .glassEffect(.regular.interactive(), in: .circle)
+        }
+        .accessibilityLabel("Appearance: \(appearance.label)")
     }
 
     private var quickActions: some View {
@@ -190,14 +233,37 @@ struct HomeScreen: View {
         }
     }
 
+    /// Every expense across the user's trips, newest first, as transaction rows.
+    /// This drives the "Recent Transactions" card so it reflects real activity.
+    private var allTransactions: [Transaction] {
+        store.myTrips
+            .flatMap { trip in
+                trip.expenses.map { expense in
+                    let payer = trip.members.first { $0.id == expense.payerID }
+                    let payerLabel = payer.map { $0.id == store.currentUser.id ? "You" : $0.name } ?? "—"
+                    return Transaction(
+                        name: expense.title,
+                        category: "\(trip.name) • Paid by \(payerLabel)",
+                        date: expense.date.formatted(date: .abbreviated, time: .omitted),
+                        amount: expense.amount,
+                        currencyCode: trip.currencyCode,
+                        color: payer?.color ?? Theme.accent,
+                        sortDate: expense.date
+                    )
+                }
+            }
+            .sorted { $0.sortDate > $1.sortDate }
+    }
+
     private var recentTransactions: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Recent Transactions")
                 .font(.headline)
                 .padding(.leading, 4)
 
-            if Transaction.samples.isEmpty {
-                Text("No transactions yet.")
+            let transactions = allTransactions
+            if transactions.isEmpty {
+                Text("No transactions yet. Add an expense to a trip to see it here.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
@@ -206,7 +272,7 @@ struct HomeScreen: View {
             } else {
                 GlassEffectContainer(spacing: 12) {
                     VStack(spacing: 12) {
-                        ForEach(Transaction.samples) { transaction in
+                        ForEach(transactions) { transaction in
                             TransactionRow(transaction: transaction)
                         }
                     }
@@ -221,9 +287,6 @@ struct HomeScreen: View {
 /// The gradient budget card. Totals are aggregated across every trip the user is part of.
 struct BalanceCard: View {
     @Environment(TripStore.self) private var store
-
-    /// Daily spending data points; empty until real expenses are recorded.
-    private let dailySpending: [(label: String, amount: Double)] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -250,25 +313,6 @@ struct BalanceCard: View {
                 }
             }
             .foregroundStyle(.white.opacity(0.85))
-
-            // Daily spending bar chart, shown once there is spending to plot.
-            if !dailySpending.isEmpty {
-                let maxAmount = dailySpending.map(\.amount).max() ?? 1
-                HStack(alignment: .bottom, spacing: 6) {
-                    ForEach(Array(dailySpending.enumerated()), id: \.offset) { _, day in
-                        VStack(spacing: 4) {
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(.white.opacity(0.85))
-                                .frame(height: max(6, 110 * (day.amount / maxAmount)))
-                            Text(day.label)
-                                .font(.system(size: 9))
-                                .foregroundStyle(.white.opacity(0.7))
-                        }
-                        .frame(maxWidth: .infinity)
-                    }
-                }
-                .frame(height: 140, alignment: .bottom)
-            }
 
             HStack(spacing: 12) {
                 infoColumn(icon: "arrow.up.right", label: "You owe", value: money(store.totalYouOwe, "USD"))
@@ -496,14 +540,15 @@ struct Transaction: Identifiable {
     let category: String
     let date: String
     let amount: Double
+    let currencyCode: String
     let color: Color
+    /// The underlying date, used to sort newest-first.
+    let sortDate: Date
 
     var initials: String {
         let parts = name.split(separator: " ")
         return String(parts.prefix(2).compactMap(\.first)).uppercased()
     }
-
-    static let samples: [Transaction] = []
 }
 
 struct TransactionRow: View {
@@ -524,9 +569,9 @@ struct TransactionRow: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Text(String(format: "$%.2f", transaction.amount))
+            Text(money(transaction.amount, transaction.currencyCode))
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(Color(hex: 0x10B981))
+                .foregroundStyle(.primary)
         }
         .padding(14)
         .glassEffect(.regular, in: .rect(cornerRadius: 20))
