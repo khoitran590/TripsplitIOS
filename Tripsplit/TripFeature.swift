@@ -285,7 +285,15 @@ extension Trip {
 
 /// The app's in-memory source of truth for the current user and their trips.
 /// All balance figures on the home screen are derived from here.
+///
+/// Main-actor isolated so its `@Observable` state (`trips`, `syncState`, `currentUser`, …)
+/// is only ever mutated on the main thread. Network I/O still runs off-main because the
+/// actual requests live in their own actors (`TripsRepository`, `ReceiptStorage`, …) and
+/// the `await` points release the main thread. Mutating observable state off the main
+/// thread (as the old non-isolated `persist`/`loadFromCloud` did) is undefined behavior
+/// and was crashing the app right after sign-in once a trip needed re-syncing.
 @Observable
+@MainActor
 final class TripStore {
     /// The home card always reports in USD, regardless of each trip's own currency.
     static let baseCurrency = "USD"
@@ -316,18 +324,22 @@ final class TripStore {
     /// the next sync, and used to stop `loadFromCloud` from resurrecting them.
     private(set) var pendingDeletions: Set<Trip.ID> = []
 
-    /// The user's editable display name and photo, persisted to `UserDefaults`.
-    private let profileKey = "tripsplit.profile"
     private static let pendingDeletionsKey = "tripsplit.pendingDeletions"
     private struct StoredProfile: Codable {
         var name: String
         var imageData: Data?
+        var avatarURL: String?
+    }
+
+    /// Returns a UserDefaults key scoped to the given user UUID, so different accounts
+    /// on the same device never share profile data.
+    private static func profileKey(for userID: UUID) -> String {
+        "tripsplit.profile.\(userID.uuidString)"
     }
 
     init() {
-        let stored = Self.loadProfile(key: profileKey)
-        currentUser = Person(name: stored?.name ?? "", color: Color(hex: 0x6366F1))
-        profileImageData = stored?.imageData
+        currentUser = Person(name: "", color: Color(hex: 0x6366F1))
+        profileImageData = nil
         trips = []
         pendingDeletions = Self.loadPendingDeletions()
     }
@@ -342,17 +354,58 @@ final class TripStore {
     }
 
     /// Updates the signed-in user's display name and photo, persisting both so they
-    /// survive across launches.
+    /// survive across launches. Also pushes the updated name into every trip immediately.
     func updateProfile(name: String, imageData: Data?) {
+        let nameChanged = currentUser.name != name
         currentUser.name = name
         profileImageData = imageData
-        let stored = StoredProfile(name: name, imageData: imageData)
+        let stored = StoredProfile(name: name, imageData: imageData, avatarURL: currentUser.avatarURL)
         if let data = try? JSONEncoder().encode(stored) {
-            UserDefaults.standard.set(data, forKey: profileKey)
+            UserDefaults.standard.set(data, forKey: Self.profileKey(for: currentUser.id))
+        }
+        guard nameChanged else { return }
+        for index in trips.indices {
+            if let memberIndex = trips[index].members.firstIndex(where: { $0.id == currentUser.id }) {
+                trips[index].members[memberIndex].name = name
+                persist(trips[index])
+            }
         }
     }
 
-    private static func loadProfile(key: String) -> StoredProfile? {
+    /// Uploads the given JPEG to Supabase Storage as the user's avatar, stores the public
+    /// URL on `currentUser.avatarURL`, and pushes the updated Person into every trip so
+    /// other members see the new photo on their next sync.
+    func uploadAndSetAvatar(_ jpeg: Data) async {
+        guard let accessToken = try? await authorizedAccessToken() else { return }
+        let path = "\(currentUser.id.uuidString.lowercased())/profile.jpg"
+        guard let url = try? await withFreshTokenIfNeeded(initialToken: accessToken, operation: { token in
+            try await ReceiptStorage.shared.upload(jpeg, path: path, accessToken: token)
+        }) else { return }
+        currentUser.avatarURL = url
+        // Persist locally so the URL survives a relaunch.
+        let stored = StoredProfile(name: currentUser.name, imageData: profileImageData, avatarURL: url)
+        if let data = try? JSONEncoder().encode(stored) {
+            UserDefaults.standard.set(data, forKey: Self.profileKey(for: currentUser.id))
+        }
+        // Push the updated Person (name + avatarURL) into every trip the user belongs to
+        // so other members pick up the change on their next loadFromCloud.
+        for index in trips.indices {
+            if let memberIndex = trips[index].members.firstIndex(where: { $0.id == currentUser.id }) {
+                trips[index].members[memberIndex].name = currentUser.name
+                trips[index].members[memberIndex].avatarURL = url
+                persist(trips[index])
+            }
+        }
+    }
+
+    /// Clears the in-memory profile. Called on sign-out so the next account starts blank.
+    func resetProfile() {
+        currentUser.name = ""
+        profileImageData = nil
+    }
+
+    private static func loadProfile(for userID: UUID) -> StoredProfile? {
+        let key = profileKey(for: userID)
         guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
         return try? JSONDecoder().decode(StoredProfile.self, from: data)
     }
@@ -557,8 +610,17 @@ final class TripStore {
     /// across launches and devices. The id is the Supabase user's stable UUID, read from
     /// the access token's `sub` claim.
     func bindIdentity(accessToken: String?) {
-        guard let accessToken, let uuid = Self.userID(fromJWT: accessToken) else { return }
+        guard let accessToken, let uuid = Self.userID(fromJWT: accessToken) else {
+            // Signed out — clear in-memory profile so the next user starts blank.
+            resetProfile()
+            return
+        }
         currentUser.id = uuid
+        // Load this specific user's saved profile (name, photo, avatarURL) keyed to their UUID.
+        let stored = Self.loadProfile(for: uuid)
+        currentUser.name = stored?.name ?? ""
+        profileImageData = stored?.imageData
+        currentUser.avatarURL = stored?.avatarURL
     }
 
     /// Extracts the `sub` (subject = user id) claim from a JWT access token.
@@ -596,18 +658,28 @@ final class TripStore {
         }
         catch { return }
         var healed: [Trip] = []
-        var changed: [Trip] = []
+        var toPersist: Set<Trip.ID> = []
         for trip in loaded {
             // Skip trips still queued for deletion (their cloud delete hasn't landed yet).
             if pendingDeletions.contains(trip.id) { continue }
-            let anchored = trip.creatorID == currentUser.id || trip.members.contains { $0.id == currentUser.id }
+            var anchored = trip.creatorID == currentUser.id || trip.members.contains { $0.id == currentUser.id }
                 ? trip
                 : trip.reanchoringCreator(to: currentUser.id)
+            if anchored.creatorID != trip.creatorID { toPersist.insert(anchored.id) }
+            // Keep the current user's name and avatar up-to-date so other members see
+            // the latest profile without requiring an explicit trip edit.
+            if let idx = anchored.members.firstIndex(where: { $0.id == currentUser.id }) {
+                let stored = anchored.members[idx]
+                if stored.name != currentUser.name || stored.avatarURL != currentUser.avatarURL {
+                    anchored.members[idx].name = currentUser.name
+                    anchored.members[idx].avatarURL = currentUser.avatarURL
+                    toPersist.insert(anchored.id)
+                }
+            }
             healed.append(anchored)
-            if anchored.creatorID != trip.creatorID { changed.append(anchored) }
         }
         await MainActor.run { self.trips = healed }
-        for trip in changed { persist(trip) }
+        for trip in healed where toPersist.contains(trip.id) { persist(trip) }
     }
 
     /// Pushes a single shared trip (members, budgets, and expenses) to Supabase, updating
@@ -1272,7 +1344,11 @@ struct TripDetailView: View {
                 HStack(spacing: 14) {
                     ForEach(trip.members) { member in
                         VStack(spacing: 6) {
-                            avatar(member, size: 40)
+                            AvatarView(
+                                person: member,
+                                imageData: member.id == store.currentUser.id ? store.profileImageData : nil,
+                                size: 40
+                            )
                             Text(member.id == store.currentUser.id ? "You" : member.name)
                                 .font(.caption)
                                 .lineLimit(1)
@@ -2551,13 +2627,54 @@ struct TripCard<Content: View>: View {
     }
 }
 
-/// A colored initials avatar for a person.
+/// A colored initials avatar for a person (no image — initials only).
 private func avatar(_ person: Person, size: CGFloat) -> some View {
     Text(person.initials)
         .font(.system(size: size * 0.4, weight: .bold))
         .foregroundStyle(.white)
         .frame(width: size, height: size)
         .background(person.color, in: .circle)
+}
+
+/// Avatar that shows a real photo when available.
+/// Priority: local `imageData` (current user) → remote `person.avatarURL` → colored initials.
+struct AvatarView: View {
+    let person: Person
+    var imageData: Data? = nil
+    let size: CGFloat
+
+    var body: some View {
+        Group {
+            if let data = imageData, let ui = UIImage(data: data) {
+                Image(uiImage: ui)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: size, height: size)
+                    .clipShape(.circle)
+            } else if let urlString = person.avatarURL, let url = URL(string: urlString) {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image.resizable().scaledToFill()
+                            .frame(width: size, height: size)
+                            .clipShape(.circle)
+                    default:
+                        initialsCircle
+                    }
+                }
+            } else {
+                initialsCircle
+            }
+        }
+    }
+
+    private var initialsCircle: some View {
+        Text(person.initials)
+            .font(.system(size: size * 0.4, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: size, height: size)
+            .background(person.color, in: .circle)
+    }
 }
 
 /// Formats a value with a currency code's symbol, e.g. `€12.50`.

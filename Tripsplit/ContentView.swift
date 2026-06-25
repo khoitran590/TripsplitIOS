@@ -436,6 +436,7 @@ struct SettingsScreen: View {
                 }
 
                 Button(role: .destructive) {
+                    store.resetProfile()
                     auth.signOut()
                 } label: {
                     Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
@@ -583,7 +584,11 @@ struct PersonalInformationView: View {
     }
 
     private func save() {
-        store.updateProfile(name: name.trimmingCharacters(in: .whitespaces), imageData: imageData)
+        let trimmedName = name.trimmingCharacters(in: .whitespaces)
+        store.updateProfile(name: trimmedName, imageData: imageData)
+        if let imageData {
+            Task { await store.uploadAndSetAvatar(imageData) }
+        }
         dismiss()
     }
 

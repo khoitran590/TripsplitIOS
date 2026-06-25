@@ -7,6 +7,8 @@ struct Person: Identifiable, Hashable, Codable {
     var id = UUID()
     var name: String
     var color: Color
+    /// Public URL of the member's profile picture in Supabase Storage, if they have one.
+    var avatarURL: String? = nil
 
     var initials: String {
         let parts = name.split(separator: " ")
@@ -15,12 +17,13 @@ struct Person: Identifiable, Hashable, Codable {
     }
 
     // `Color` isn't `Codable`, so members persist their color as a hex integer.
-    private enum CodingKeys: String, CodingKey { case id, name, colorHex }
+    private enum CodingKeys: String, CodingKey { case id, name, colorHex, avatarURL }
 
-    init(id: UUID = UUID(), name: String, color: Color) {
+    init(id: UUID = UUID(), name: String, color: Color, avatarURL: String? = nil) {
         self.id = id
         self.name = name
         self.color = color
+        self.avatarURL = avatarURL
     }
 
     init(from decoder: Decoder) throws {
@@ -28,6 +31,7 @@ struct Person: Identifiable, Hashable, Codable {
         id = try container.decode(UUID.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
         color = Color(hex: try container.decode(UInt32.self, forKey: .colorHex))
+        avatarURL = try container.decodeIfPresent(String.self, forKey: .avatarURL)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -35,6 +39,7 @@ struct Person: Identifiable, Hashable, Codable {
         try container.encode(id, forKey: .id)
         try container.encode(name, forKey: .name)
         try container.encode(color.hexValue, forKey: .colorHex)
+        try container.encodeIfPresent(avatarURL, forKey: .avatarURL)
     }
 }
 
