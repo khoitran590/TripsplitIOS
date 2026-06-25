@@ -2,6 +2,7 @@ import SwiftUI
 import Observation
 import PhotosUI
 import UIKit
+import VisionKit
 
 // MARK: - Trip Models
 
@@ -27,6 +28,11 @@ struct Expense: Identifiable, Codable {
     /// Line items scanned from the receipt, shown for reference on the expense.
     var items: [ReceiptItem] = []
 
+    /// Tax and tip allocated across the items (already folded into `shares` and
+    /// `amount`); kept so editing can re-show and re-distribute them.
+    var tax: Double = 0
+    var tip: Double = 0
+
     init(
         id: UUID = UUID(),
         title: String,
@@ -36,7 +42,9 @@ struct Expense: Identifiable, Codable {
         date: Date,
         shares: [Person.ID: Double] = [:],
         receiptURL: String? = nil,
-        items: [ReceiptItem] = []
+        items: [ReceiptItem] = [],
+        tax: Double = 0,
+        tip: Double = 0
     ) {
         self.id = id
         self.title = title
@@ -47,10 +55,12 @@ struct Expense: Identifiable, Codable {
         self.shares = shares
         self.receiptURL = receiptURL
         self.items = items
+        self.tax = tax
+        self.tip = tip
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, amount, payerID, participantIDs, date, shares, receiptURL, items
+        case id, title, amount, payerID, participantIDs, date, shares, receiptURL, items, tax, tip
     }
 
     // Custom decoder so expenses saved before `shares`/`receiptURL`/`items` existed still
@@ -66,6 +76,8 @@ struct Expense: Identifiable, Codable {
         shares = try c.decodeIfPresent([Person.ID: Double].self, forKey: .shares) ?? [:]
         receiptURL = try c.decodeIfPresent(String.self, forKey: .receiptURL)
         items = try c.decodeIfPresent([ReceiptItem].self, forKey: .items) ?? []
+        tax = try c.decodeIfPresent(Double.self, forKey: .tax) ?? 0
+        tip = try c.decodeIfPresent(Double.self, forKey: .tip) ?? 0
     }
 }
 
@@ -1103,6 +1115,9 @@ struct AddExpenseView: View {
     @State private var isScanning = false
     @State private var isUploading = false
     @State private var configuringIndex: Int?
+    @State private var showCamera = false
+    @State private var taxText = ""
+    @State private var tipText = ""
 
     private var isEditing: Bool { editing != nil }
     private var trip: Trip? { store.trip(tripID) }
@@ -1127,7 +1142,7 @@ struct AddExpenseView: View {
 
     private func canSave(_ trip: Trip) -> Bool {
         if !items.isEmpty {
-            return itemsTotal > 0 && perItemShares(trip).valid
+            return itemsTotal > 0 && allocatedShares(trip).valid
         }
         return total > 0 && result(for: trip).isValid
     }
@@ -1150,6 +1165,7 @@ struct AddExpenseView: View {
                             if items.isEmpty {
                                 splitCard(trip)
                             } else {
+                                taxTipCard(trip)
                                 itemSplitsCard(trip)
                             }
                         }
@@ -1172,6 +1188,14 @@ struct AddExpenseView: View {
             .onChange(of: receiptPick) { _, newValue in
                 guard let newValue else { return }
                 Task { await handlePickedReceipt(newValue) }
+            }
+            .fullScreenCover(isPresented: $showCamera) {
+                DocumentCameraView { image in
+                    showCamera = false
+                    guard let image else { return }
+                    Task { await processReceipt(image, originalData: nil) }
+                }
+                .ignoresSafeArea()
             }
             .sheet(isPresented: Binding(
                 get: { configuringIndex != nil },
@@ -1202,24 +1226,36 @@ struct AddExpenseView: View {
                     .clipShape(.rect(cornerRadius: 12))
             }
 
-            PhotosPicker(selection: $receiptPick, matching: .images) {
-                HStack(spacing: 10) {
-                    Image(systemName: receiptImage == nil ? "camera.viewfinder" : "arrow.triangle.2.circlepath")
-                    Text(receiptImage == nil ? "Scan a receipt" : "Replace receipt")
-                        .font(.subheadline.weight(.semibold))
-                    Spacer()
-                    if isScanning {
-                        Text("Scanning…").font(.caption).foregroundStyle(.secondary)
-                        ProgressView()
-                    } else if isUploading {
-                        Text("Uploading…").font(.caption).foregroundStyle(.secondary)
-                        ProgressView()
+            HStack(spacing: 10) {
+                if VNDocumentCameraViewController.isSupported {
+                    Button {
+                        showCamera = true
+                    } label: {
+                        receiptActionLabel(icon: "camera.fill", title: "Camera")
                     }
+                    .buttonStyle(.plain)
                 }
-                .padding(.horizontal, 14).padding(.vertical, 12)
-                .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+
+                PhotosPicker(selection: $receiptPick, matching: .images) {
+                    receiptActionLabel(
+                        icon: receiptImage == nil ? "photo.on.rectangle" : "arrow.triangle.2.circlepath",
+                        title: receiptImage == nil ? "Library" : "Replace"
+                    )
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
+
+            if isScanning {
+                HStack(spacing: 6) {
+                    ProgressView()
+                    Text("Scanning…").font(.caption).foregroundStyle(.secondary)
+                }
+            } else if isUploading {
+                HStack(spacing: 6) {
+                    ProgressView()
+                    Text("Uploading…").font(.caption).foregroundStyle(.secondary)
+                }
+            }
 
             if !items.isEmpty {
                 itemsEditor(trip)
@@ -1228,6 +1264,16 @@ struct AddExpenseView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
+    }
+
+    private func receiptActionLabel(icon: String, title: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+            Text(title).font(.subheadline.weight(.semibold))
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
     }
 
     private func itemsEditor(_ trip: Trip) -> some View {
@@ -1273,30 +1319,46 @@ struct AddExpenseView: View {
         SplitEngine.roundToTwo(items.reduce(0) { $0 + $1.price })
     }
 
+    private var taxAmount: Double { max(0, Double(taxText) ?? 0) }
+    private var tipAmount: Double { max(0, Double(tipText) ?? 0) }
+    private var extras: Double { SplitEngine.roundToTwo(taxAmount + tipAmount) }
+    /// Items subtotal plus tax and tip — the amount actually charged.
+    private var grandTotal: Double { SplitEngine.roundToTwo(itemsTotal + extras) }
+
     @MainActor
     private func handlePickedReceipt(_ pick: PhotosPickerItem) async {
         guard let data = try? await pick.loadTransferable(type: Data.self),
               let image = UIImage(data: data) else { return }
+        await processReceipt(image, originalData: data)
+    }
+
+    /// Scans an image (from the photo picker or the live camera), populates the editable
+    /// item list plus any detected tax/tip, and uploads the photo in the background.
+    @MainActor
+    private func processReceipt(_ image: UIImage, originalData: Data?) async {
         receiptImage = image
 
         isScanning = true
-        let scanned = await ReceiptScanner.scan(image)
+        let scan = await ReceiptScanner.scan(image)
         isScanning = false
-        if !scanned.isEmpty {
+        if !scan.items.isEmpty {
             // Each item starts split equally across everyone; the user can retune any item.
             let everyone = Set(store.trip(tripID)?.members.map(\.id) ?? [])
-            items = scanned.map { item in
+            items = scan.items.map { item in
                 var configured = item
                 configured.splitMethod = .equalAll
                 configured.participantIDs = everyone
                 return configured
             }
-            amountText = formatted(itemsTotal)
+            if let tax = scan.tax { taxText = formatted(tax) }
+            if let tip = scan.tip { tipText = formatted(tip) }
+            amountText = formatted(grandTotal)
         }
 
         // Upload in the background; the URL is attached on save if it finishes in time.
         guard let token = store.accessToken else { return }
-        let jpeg = image.jpegData(compressionQuality: 0.7) ?? data
+        let jpeg = image.jpegData(compressionQuality: 0.7) ?? originalData ?? Data()
+        guard !jpeg.isEmpty else { return }
         let path = "\(store.currentUser.id.uuidString)/\(expenseID.uuidString).jpg"
         isUploading = true
         receiptURL = try? await ReceiptStorage.shared.upload(jpeg, path: path, accessToken: token)
@@ -1516,8 +1578,45 @@ struct AddExpenseView: View {
         return (totals.mapValues { SplitEngine.roundToTwo($0) }, valid)
     }
 
+    /// Per-item shares with tax and tip allocated on top, proportional to each person's
+    /// subtotal. The combined shares sum exactly to `grandTotal`.
+    private func allocatedShares(_ trip: Trip) -> (shares: [Person.ID: Double], valid: Bool) {
+        let base = perItemShares(trip)
+        guard extras > 0.005 else { return base }
+
+        let allocation = SplitEngine.allocateProportionally(extras, weights: base.shares)
+        var combined = base.shares
+        for (id, add) in allocation {
+            combined[id] = SplitEngine.roundToTwo((combined[id] ?? 0) + add)
+        }
+        return (combined, base.valid)
+    }
+
+    private func taxTipCard(_ trip: Trip) -> some View {
+        TripCard(title: "Tax & tip", icon: "percent") {
+            Text("Allocated across items by each person's subtotal.")
+                .font(.caption).foregroundStyle(.secondary)
+            extraField(trip, title: "Tax", text: $taxText)
+            extraField(trip, title: "Tip", text: $tipText)
+        }
+    }
+
+    private func extraField(_ trip: Trip, title: String, text: Binding<String>) -> some View {
+        HStack(spacing: 10) {
+            Text(title).font(.subheadline.weight(.medium))
+            Spacer()
+            Text(currencySymbol(trip.currencyCode)).font(.subheadline).foregroundStyle(.secondary)
+            TextField("0.00", text: text)
+                .keyboardType(.decimalPad)
+                .multilineTextAlignment(.trailing)
+                .frame(width: 80)
+                .padding(.horizontal, 10).padding(.vertical, 8)
+                .background(Theme.fieldBackground, in: .rect(cornerRadius: 10))
+        }
+    }
+
     private func itemSplitsCard(_ trip: Trip) -> some View {
-        let outcome = perItemShares(trip)
+        let outcome = allocatedShares(trip)
         return TripCard(title: "Item splits", icon: "list.bullet.indent") {
             Text("Tap an item to choose how it's split.")
                 .font(.caption).foregroundStyle(.secondary)
@@ -1553,6 +1652,12 @@ struct AddExpenseView: View {
             }
 
             Divider()
+            totalRow("Subtotal", itemsTotal, trip)
+            if taxAmount > 0.005 { totalRow("Tax", taxAmount, trip) }
+            if tipAmount > 0.005 { totalRow("Tip", tipAmount, trip) }
+            totalRow("Total", grandTotal, trip, bold: true)
+
+            Divider()
             Text("Each person owes").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             ForEach(trip.members) { member in
                 let owed = outcome.shares[member.id] ?? 0
@@ -1565,6 +1670,17 @@ struct AddExpenseView: View {
                     }
                 }
             }
+        }
+    }
+
+    private func totalRow(_ label: String, _ value: Double, _ trip: Trip, bold: Bool = false) -> some View {
+        HStack {
+            Text(label)
+                .font(bold ? .caption.weight(.bold) : .caption)
+                .foregroundStyle(bold ? .primary : .secondary)
+            Spacer()
+            Text(money(value, trip.currencyCode))
+                .font(.caption.weight(bold ? .bold : .semibold))
         }
     }
 
@@ -1597,6 +1713,8 @@ struct AddExpenseView: View {
             items = editing.items
             receiptURL = editing.receiptURL
             selected = editing.participantIDs
+            if editing.tax > 0 { taxText = formatted(editing.tax) }
+            if editing.tip > 0 { tipText = formatted(editing.tip) }
             // Reconstruct an editable split from the stored per-member shares.
             if !editing.shares.isEmpty {
                 method = .amount
@@ -1621,14 +1739,17 @@ struct AddExpenseView: View {
             amountToSave = total
             shares = outcome.owed.filter { $0.value > 0.005 }
         } else {
-            let outcome = perItemShares(trip)
+            let outcome = allocatedShares(trip)
             guard itemsTotal > 0, outcome.valid else { return }
-            amountToSave = itemsTotal
+            amountToSave = grandTotal
             shares = outcome.shares.filter { $0.value > 0.005 }
         }
 
         let participantIDs = Set(shares.keys)
         let resolvedTitle = title.trimmingCharacters(in: .whitespaces).isEmpty ? "Expense" : title
+        // Tax/tip only apply to the per-item receipt flow.
+        let savedTax = items.isEmpty ? 0 : taxAmount
+        let savedTip = items.isEmpty ? 0 : tipAmount
 
         if let editing {
             var updated = editing
@@ -1640,6 +1761,8 @@ struct AddExpenseView: View {
             updated.shares = shares
             updated.items = items
             updated.receiptURL = receiptURL ?? editing.receiptURL
+            updated.tax = savedTax
+            updated.tip = savedTip
             store.updateExpense(updated, in: trip.id)
         } else {
             let expense = Expense(
@@ -1651,7 +1774,9 @@ struct AddExpenseView: View {
                 date: date,
                 shares: shares,
                 receiptURL: receiptURL,
-                items: items
+                items: items,
+                tax: savedTax,
+                tip: savedTip
             )
             store.addExpense(expense, to: trip.id)
         }

@@ -148,6 +148,29 @@ enum SplitEngine {
         }
     }
 
+    /// Splits `amount` across people in proportion to `weights` (e.g. allocating tax/tip
+    /// by each person's subtotal share), distributing leftover cents by largest remainder
+    /// so the parts sum exactly to `amount`. Returns an empty map if there's no weight.
+    static func allocateProportionally(_ amount: Double, weights: [Person.ID: Double]) -> [Person.ID: Double] {
+        let totalWeight = weights.values.reduce(0, +)
+        let cents = Int((amount * 100).rounded())
+        guard totalWeight > 0, cents != 0 else { return [:] }
+
+        let keys = Array(weights.keys)
+        let exact = keys.map { Double(cents) * ((weights[$0] ?? 0) / totalWeight) }
+        var base = exact.map { Int($0.rounded(.down)) }
+        var leftover = cents - base.reduce(0, +)
+
+        // Hand the remaining cents to the largest fractional remainders first.
+        for index in (0..<keys.count).sorted(by: { (exact[$0] - Double(base[$0])) > (exact[$1] - Double(base[$1])) }) {
+            guard leftover > 0 else { break }
+            base[index] += 1
+            leftover -= 1
+        }
+
+        return Dictionary(uniqueKeysWithValues: zip(keys, base.map { Double($0) / 100.0 }))
+    }
+
     /// Computes the per-person shares and net balances for the given configuration.
     static func calculate(
         total: Double,

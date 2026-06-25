@@ -1,6 +1,8 @@
 import Foundation
+import SwiftUI
 import UIKit
 import Vision
+import VisionKit
 
 // MARK: - Receipt scanning (on-device, Apple Vision)
 
@@ -8,6 +10,14 @@ import Vision
 /// network, no API key, fully private. Item extraction is heuristic (Vision returns
 /// text lines; we pair names with trailing prices), so the results are presented as an
 /// editable list the user can correct before saving.
+/// The outcome of scanning a receipt: the purchasable line items plus any tax/tip rows
+/// detected separately so they can be allocated across the items.
+struct ReceiptScanResult {
+    var items: [ReceiptItem] = []
+    var tax: Double? = nil
+    var tip: Double? = nil
+}
+
 enum ReceiptScanner {
 
     /// Words that mark a line as a total/tax/payment row rather than a purchasable item.
@@ -17,10 +27,15 @@ enum ReceiptScanner {
         "amount", "due", "payment", "tendered", "auth", "approval",
     ]
 
-    /// Recognizes text and parses it into line items. Returns an empty array if nothing
-    /// usable is found.
-    static func scan(_ image: UIImage) async -> [ReceiptItem] {
-        guard let cgImage = image.cgImage else { return [] }
+    /// Keywords identifying a tax row, kept apart so the amount can be allocated.
+    private static let taxKeywords = ["tax", "vat", "gst", "hst", "pst"]
+    /// Keywords identifying a tip / gratuity row.
+    private static let tipKeywords = ["tip", "gratuity", "service charge", "service chg"]
+
+    /// Recognizes text and parses it into line items plus tax/tip. Returns an empty
+    /// result if nothing usable is found.
+    static func scan(_ image: UIImage) async -> ReceiptScanResult {
+        guard let cgImage = image.cgImage else { return ReceiptScanResult() }
 
         let lines: [String] = await withCheckedContinuation { continuation in
             let request = VNRecognizeTextRequest { request, _ in
@@ -46,19 +61,19 @@ enum ReceiptScanner {
         return parseItems(from: lines)
     }
 
-    /// Pairs each text line with a trailing price (e.g. "Burger  12.99"), skipping
-    /// total/tax/payment rows.
-    static func parseItems(from lines: [String]) -> [ReceiptItem] {
+    /// Pairs each text line with a trailing price (e.g. "Burger  12.99"). Item rows
+    /// become `ReceiptItem`s; tax and tip rows are pulled out so they can be allocated
+    /// proportionally across the items rather than treated as purchasable lines.
+    static func parseItems(from lines: [String]) -> ReceiptScanResult {
         let priceRegex = try? NSRegularExpression(pattern: #"(\d{1,5}[.,]\d{2})\s*$"#)
-        guard let priceRegex else { return [] }
+        guard let priceRegex else { return ReceiptScanResult() }
 
-        var items: [ReceiptItem] = []
+        var result = ReceiptScanResult()
         for raw in lines {
             let line = raw.trimmingCharacters(in: .whitespaces)
             guard !line.isEmpty else { continue }
 
             let lower = line.lowercased()
-            if nonItemKeywords.contains(where: { lower.contains($0) }) { continue }
 
             let range = NSRange(line.startIndex..., in: line)
             guard let match = priceRegex.firstMatch(in: line, range: range),
@@ -66,14 +81,66 @@ enum ReceiptScanner {
 
             let priceText = line[priceRange].replacingOccurrences(of: ",", with: ".")
             guard let price = Double(priceText), price > 0 else { continue }
+            let rounded = SplitEngine.roundToTwo(price)
+
+            // Capture tax / tip rows for allocation, taking the largest match of each
+            // (receipts often print a "tax" subtotal line plus a final total).
+            if taxKeywords.contains(where: { lower.contains($0) }) {
+                result.tax = max(result.tax ?? 0, rounded)
+                continue
+            }
+            if tipKeywords.contains(where: { lower.contains($0) }) {
+                result.tip = max(result.tip ?? 0, rounded)
+                continue
+            }
+            if nonItemKeywords.contains(where: { lower.contains($0) }) { continue }
 
             var name = String(line[line.startIndex..<priceRange.lowerBound])
                 .trimmingCharacters(in: CharacterSet(charactersIn: " .-*x×@"))
             if name.isEmpty { name = "Item" }
 
-            items.append(ReceiptItem(name: name, price: SplitEngine.roundToTwo(price)))
+            result.items.append(ReceiptItem(name: name, price: rounded))
         }
-        return items
+        return result
+    }
+}
+
+// MARK: - Live camera capture (VisionKit document scanner)
+
+/// Presents Apple's edge-detecting document camera so the user can photograph a receipt
+/// directly instead of picking one from their library. Returns the first scanned page as
+/// a `UIImage`, or `nil` if the user cancels or scanning fails.
+struct DocumentCameraView: UIViewControllerRepresentable {
+    var onComplete: (UIImage?) -> Void
+
+    func makeUIViewController(context: Context) -> VNDocumentCameraViewController {
+        let controller = VNDocumentCameraViewController()
+        controller.delegate = context.coordinator
+        return controller
+    }
+
+    func updateUIViewController(_ controller: VNDocumentCameraViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(onComplete: onComplete) }
+
+    final class Coordinator: NSObject, VNDocumentCameraViewControllerDelegate {
+        let onComplete: (UIImage?) -> Void
+        init(onComplete: @escaping (UIImage?) -> Void) { self.onComplete = onComplete }
+
+        func documentCameraViewController(_ controller: VNDocumentCameraViewController,
+                                          didFinishWith scan: VNDocumentCameraScan) {
+            let image = scan.pageCount > 0 ? scan.imageOfPage(at: 0) : nil
+            onComplete(image)
+        }
+
+        func documentCameraViewControllerDidCancel(_ controller: VNDocumentCameraViewController) {
+            onComplete(nil)
+        }
+
+        func documentCameraViewController(_ controller: VNDocumentCameraViewController,
+                                          didFailWithError error: Error) {
+            onComplete(nil)
+        }
     }
 }
 
