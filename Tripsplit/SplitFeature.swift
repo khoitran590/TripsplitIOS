@@ -39,7 +39,7 @@ struct Person: Identifiable, Hashable, Codable {
 }
 
 /// The supported ways to split an expense, mirroring TripSplit's `splitMethods`.
-enum SplitMethod: String, CaseIterable, Identifiable {
+enum SplitMethod: String, CaseIterable, Identifiable, Codable {
     case equalAll = "Split Equally (All)"
     case equalSelected = "Split Equally (Selected)"
     case noSplit = "No Split (Single Payer)"

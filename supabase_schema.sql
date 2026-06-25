@@ -37,3 +37,43 @@ create policy "Users manage their own trips"
     for all
     using (auth.uid() = user_id)
     with check (auth.uid() = user_id);
+
+-- Receipt image storage ------------------------------------------------------
+--
+-- Scanned receipt photos are uploaded to a public `receipts` bucket; each file is
+-- namespaced under the uploader's user id ("<auth.uid()>/<expenseId>.jpg"). Reads are
+-- public (so the URL stored on the expense renders anywhere); writes/updates/deletes
+-- are restricted to the owner via the leading-folder convention.
+
+insert into storage.buckets (id, name, public)
+values ('receipts', 'receipts', true)
+on conflict (id) do update set public = true;
+
+drop policy if exists "Anyone can view receipts" on storage.objects;
+create policy "Anyone can view receipts"
+    on storage.objects for select
+    using (bucket_id = 'receipts');
+
+drop policy if exists "Users upload their own receipts" on storage.objects;
+create policy "Users upload their own receipts"
+    on storage.objects for insert
+    with check (
+        bucket_id = 'receipts'
+        and auth.uid()::text = (storage.foldername(name))[1]
+    );
+
+drop policy if exists "Users update their own receipts" on storage.objects;
+create policy "Users update their own receipts"
+    on storage.objects for update
+    using (
+        bucket_id = 'receipts'
+        and auth.uid()::text = (storage.foldername(name))[1]
+    );
+
+drop policy if exists "Users delete their own receipts" on storage.objects;
+create policy "Users delete their own receipts"
+    on storage.objects for delete
+    using (
+        bucket_id = 'receipts'
+        and auth.uid()::text = (storage.foldername(name))[1]
+    );

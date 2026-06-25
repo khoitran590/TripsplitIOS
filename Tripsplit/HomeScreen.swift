@@ -28,6 +28,7 @@ struct HomeScreen: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     header
+                    syncBanner
                     BalanceCard()
                     CurrencyConverterCard()
                     quickActions
@@ -145,6 +146,41 @@ struct HomeScreen: View {
                     }
                 }
             }
+        }
+    }
+
+    /// Surfaces cloud-sync status so a failed save isn't silent: a spinner while saving
+    /// and a retryable error banner when a save couldn't reach Supabase.
+    @ViewBuilder
+    private var syncBanner: some View {
+        switch store.syncState {
+        case .idle:
+            EmptyView()
+        case .syncing:
+            HStack(spacing: 8) {
+                ProgressView()
+                Text("Saving to cloud…").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .glassEffect(.regular, in: .rect(cornerRadius: 14))
+        case .failed:
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.icloud.fill").foregroundStyle(.white)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Couldn't save to cloud").font(.caption.weight(.bold)).foregroundStyle(.white)
+                    Text("Changes are saved on this device only.").font(.caption2).foregroundStyle(.white.opacity(0.85))
+                }
+                Spacer()
+                Button { store.retrySync() } label: {
+                    Text("Retry").font(.caption.weight(.bold)).foregroundStyle(Color(hex: 0xDC2626))
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .background(.white, in: .capsule)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .background(Color(hex: 0xDC2626), in: .rect(cornerRadius: 14))
         }
     }
 
@@ -348,16 +384,49 @@ struct BalanceCard: View {
 
 // MARK: - Trip Row
 
-/// A summary row for one trip on the home screen, showing the user's net balance.
+/// A summary card for one trip on the home screen. Adapted from the capstone's
+/// `UserTripCard`: the signed-in user's spent/remaining budget shown as paired stat
+/// boxes, a budget-usage bar that shifts color as they approach (amber) or exceed (red)
+/// their limit, a member badge, a budget-health badge, and a "View trip" affordance —
+/// plus this app's core owe / owed status.
 struct TripRow: View {
     let trip: Trip
     let currentUserID: Person.ID
+
+    // Budget health (per the signed-in user's own budget on this trip).
+    private var budget: Double { trip.budget(for: currentUserID) }
+    private var spent: Double { trip.spent(for: currentUserID) }
+    private var remaining: Double { trip.remainingBudget(for: currentUserID) }
+    private var hasBudget: Bool { budget > 0 }
+    private var percent: Double { hasBudget ? (spent / budget) * 100 : 0 }
+    private var isOver: Bool { hasBudget && spent > budget }
+    private var isNear: Bool { hasBudget && !isOver && percent >= 80 }
 
     private var net: Double {
         SplitEngine.roundToTwo(trip.owed(to: currentUserID) - trip.owed(by: currentUserID))
     }
 
+    private var accent: Color {
+        isOver ? Color(hex: 0xDC2626) : isNear ? Color(hex: 0xD97706) : Color(hex: 0x16A34A)
+    }
+    private var progressColors: [Color] {
+        isOver ? [Color(hex: 0xF87171), Color(hex: 0xDC2626)]
+            : isNear ? [Color(hex: 0xFBBF24), Color(hex: 0xD97706)]
+            : [Color(hex: 0x6366F1), Color(hex: 0x8B5CF6)]
+    }
+
     var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            header
+            budgetBoxes
+            progress
+            footer
+        }
+        .padding(16)
+        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+    }
+
+    private var header: some View {
         HStack(spacing: 12) {
             Image(systemName: "suitcase.fill")
                 .font(.system(size: 16, weight: .semibold))
@@ -366,30 +435,110 @@ struct TripRow: View {
                 .background(Color(hex: 0x6366F1), in: .circle)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(trip.name).font(.subheadline.weight(.semibold))
-                Text("\(trip.members.count) member\(trip.members.count == 1 ? "" : "s") • \(trip.expenses.count) expense\(trip.expenses.count == 1 ? "" : "s")")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Text(trip.name).font(.subheadline.weight(.bold)).lineLimit(1)
+                Text("\(trip.expenses.count) expense\(trip.expenses.count == 1 ? "" : "s")")
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
-            Spacer()
+            Spacer(minLength: 6)
 
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(net == 0 ? "Settled" : (net > 0 ? "You're owed" : "You owe"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if net != 0 {
-                    Text(money(abs(net), trip.currencyCode))
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(net > 0 ? Color(hex: 0x10B981) : Color(hex: 0xEF4444))
+            if isOver || isNear { healthBadge }
+            memberBadge
+        }
+    }
+
+    private var healthBadge: some View {
+        HStack(spacing: 4) {
+            Image(systemName: isOver ? "exclamationmark.triangle.fill" : "gauge.high")
+                .font(.system(size: 10, weight: .bold))
+            Text(isOver ? "Over budget" : "Near limit")
+                .font(.system(size: 11, weight: .bold))
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 9).padding(.vertical, 5)
+        .background(accent, in: .capsule)
+    }
+
+    private var memberBadge: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "person.2.fill").font(.system(size: 11))
+            Text("\(trip.members.count)").font(.caption.weight(.semibold))
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(.primary.opacity(0.06), in: .capsule)
+    }
+
+    private var budgetBoxes: some View {
+        HStack(spacing: 12) {
+            statBox(
+                label: "SPENT (YOU)",
+                value: money(spent, trip.currencyCode),
+                valueColor: Color(hex: 0x6366F1),
+                background: Theme.fieldBackground
+            )
+            statBox(
+                label: isOver ? "OVER BY (YOU)" : "REMAINING (YOU)",
+                value: money(abs(remaining), trip.currencyCode),
+                valueColor: accent,
+                background: (isOver ? Color(hex: 0xDC2626) : Color(hex: 0x16A34A)).opacity(0.12)
+            )
+        }
+    }
+
+    private func statBox(label: String, value: String, valueColor: Color, background: Color) -> some View {
+        VStack(spacing: 4) {
+            Text(label)
+                .font(.system(size: 10, weight: .semibold)).tracking(0.5)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.subheadline.weight(.bold)).foregroundStyle(valueColor)
+                .lineLimit(1).minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10).padding(.horizontal, 8)
+        .background(background, in: .rect(cornerRadius: 10))
+    }
+
+    private var progress: some View {
+        VStack(spacing: 6) {
+            HStack {
+                Text("Your Budget Usage").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Text(hasBudget ? "\(Int(percent.rounded()))%" : "No budget set")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(isOver || isNear ? accent : .secondary)
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(.primary.opacity(0.1))
+                    Capsule()
+                        .fill(LinearGradient(colors: progressColors, startPoint: .leading, endPoint: .trailing))
+                        .frame(width: geo.size.width * min(1, max(0, percent / 100)))
                 }
             }
-            Image(systemName: "chevron.right")
-                .font(.caption2.weight(.bold))
-                .foregroundStyle(.tertiary)
+            .frame(height: 8)
         }
-        .padding(14)
-        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+    }
+
+    @ViewBuilder
+    private var footer: some View {
+        HStack {
+            if net == 0 {
+                Label("Settled up", systemImage: "checkmark.circle.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color(hex: 0x16A34A))
+            } else {
+                Text("\(net > 0 ? "You're owed" : "You owe") \(money(abs(net), trip.currencyCode))")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(net > 0 ? Color(hex: 0x16A34A) : Color(hex: 0xDC2626))
+            }
+            Spacer()
+            HStack(spacing: 4) {
+                Text("View trip").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Image(systemName: "chevron.right").font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
+            }
+        }
     }
 }
 
