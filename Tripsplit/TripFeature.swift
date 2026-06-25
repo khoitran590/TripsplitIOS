@@ -307,8 +307,14 @@ final class TripStore {
     enum SyncState: Equatable { case idle, syncing, failed }
     var syncState: SyncState = .idle
 
+    /// IDs of trips deleted locally whose cloud delete hasn't succeeded yet (e.g. the
+    /// delete happened offline). Persisted so the deletion survives relaunch, retried on
+    /// the next sync, and used to stop `loadFromCloud` from resurrecting them.
+    private(set) var pendingDeletions: Set<Trip.ID> = []
+
     /// The user's editable display name and photo, persisted to `UserDefaults`.
     private let profileKey = "tripsplit.profile"
+    private static let pendingDeletionsKey = "tripsplit.pendingDeletions"
     private struct StoredProfile: Codable {
         var name: String
         var imageData: Data?
@@ -319,6 +325,16 @@ final class TripStore {
         currentUser = Person(name: stored?.name ?? "", color: Color(hex: 0x6366F1))
         profileImageData = stored?.imageData
         trips = []
+        pendingDeletions = Self.loadPendingDeletions()
+    }
+
+    private static func loadPendingDeletions() -> Set<Trip.ID> {
+        guard let raw = UserDefaults.standard.array(forKey: pendingDeletionsKey) as? [String] else { return [] }
+        return Set(raw.compactMap(UUID.init(uuidString:)))
+    }
+
+    private func savePendingDeletions() {
+        UserDefaults.standard.set(pendingDeletions.map(\.uuidString), forKey: Self.pendingDeletionsKey)
     }
 
     /// Updates the signed-in user's display name and photo, persisting both so they
@@ -411,19 +427,47 @@ final class TripStore {
         persist(trips[index])
     }
 
-    /// Deletes a trip locally and from the cloud.
+    /// Deletes a trip locally and from the cloud. If the cloud delete fails (or there's
+    /// no token yet), the id is queued so the deletion is retried later and the trip isn't
+    /// resurrected by `loadFromCloud` in the meantime.
     func deleteTrip(_ tripID: Trip.ID) {
         trips.removeAll { $0.id == tripID }
+        pendingDeletions.insert(tripID)
+        savePendingDeletions()
+
         guard let accessToken else { return }
         syncState = .syncing
         Task {
             do {
                 try await TripsRepository.shared.delete(id: tripID, accessToken: accessToken)
-                await MainActor.run { self.syncState = .idle }
+                await MainActor.run {
+                    self.pendingDeletions.remove(tripID)
+                    self.savePendingDeletions()
+                    self.syncState = .idle
+                }
             } catch {
                 await MainActor.run { self.syncState = .failed }
             }
         }
+    }
+
+    /// Retries any queued cloud deletions, removing each id from the queue once Supabase
+    /// confirms it's gone. Returns whether every pending deletion succeeded.
+    @discardableResult
+    private func flushPendingDeletions(accessToken: String) async -> Bool {
+        var allSucceeded = true
+        for tripID in pendingDeletions {
+            do {
+                try await TripsRepository.shared.delete(id: tripID, accessToken: accessToken)
+                await MainActor.run {
+                    self.pendingDeletions.remove(tripID)
+                    self.savePendingDeletions()
+                }
+            } catch {
+                allSucceeded = false
+            }
+        }
+        return allSucceeded
     }
 
     // MARK: Supabase sync
@@ -460,6 +504,10 @@ final class TripStore {
     /// that needed re-anchoring is pushed back once so the cloud copy heals itself.
     func loadFromCloud() async {
         guard let accessToken else { return }
+
+        // Retry any queued deletions first so a trip pending deletion can't come back.
+        await flushPendingDeletions(accessToken: accessToken)
+
         // Keep whatever we have if the server is unreachable; only replace on success.
         let loaded: [Trip]
         do { loaded = try await TripsRepository.shared.fetch(accessToken: accessToken) }
@@ -467,6 +515,8 @@ final class TripStore {
         var healed: [Trip] = []
         var changed: [Trip] = []
         for trip in loaded {
+            // Skip trips still queued for deletion (their cloud delete hasn't landed yet).
+            if pendingDeletions.contains(trip.id) { continue }
             let anchored = trip.reanchoringCreator(to: currentUser.id)
             healed.append(anchored)
             if anchored.creatorID != trip.creatorID { changed.append(anchored) }
@@ -496,10 +546,11 @@ final class TripStore {
         syncState = .syncing
         Task {
             do {
+                let deletionsCleared = await flushPendingDeletions(accessToken: accessToken)
                 for trip in trips {
                     try await TripsRepository.shared.upsert(trip, accessToken: accessToken)
                 }
-                await MainActor.run { self.syncState = .idle }
+                await MainActor.run { self.syncState = deletionsCleared ? .idle : .failed }
             } catch {
                 await MainActor.run { self.syncState = .failed }
             }
@@ -1118,6 +1169,10 @@ struct AddExpenseView: View {
     @State private var showCamera = false
     @State private var taxText = ""
     @State private var tipText = ""
+    @State private var uploadError: String?
+    @State private var isSaving = false
+    /// Removed items kept so a deletion can be undone (most-recent first).
+    @State private var removedItems: [(item: ReceiptItem, index: Int)] = []
 
     private var isEditing: Bool { editing != nil }
     private var trip: Trip? { store.trip(tripID) }
@@ -1181,7 +1236,12 @@ struct AddExpenseView: View {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { save() }.disabled(!(trip.map(canSave) ?? false))
+                    if isSaving {
+                        ProgressView()
+                    } else {
+                        Button("Save") { Task { await save() } }
+                            .disabled(!(trip.map(canSave) ?? false))
+                    }
                 }
             }
             .onAppear(perform: configureDefaults)
@@ -1255,9 +1315,24 @@ struct AddExpenseView: View {
                     ProgressView()
                     Text("Uploading…").font(.caption).foregroundStyle(.secondary)
                 }
+            } else if let uploadError {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label(uploadError, systemImage: "exclamationmark.icloud.fill")
+                        .font(.caption).foregroundStyle(Theme.negative)
+                    if let receiptImage {
+                        Button("Retry upload") {
+                            Task { await uploadReceipt(receiptImage, originalData: nil) }
+                        }
+                        .font(.caption.weight(.semibold)).foregroundStyle(Theme.accent)
+                        .buttonStyle(.plain)
+                    }
+                }
+            } else if receiptURL != nil {
+                Label("Receipt photo saved", systemImage: "checkmark.icloud.fill")
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
-            if !items.isEmpty {
+            if !items.isEmpty || !removedItems.isEmpty {
                 itemsEditor(trip)
             } else if receiptImage != nil && !isScanning {
                 Text("No items detected — enter the amount manually below.")
@@ -1294,8 +1369,7 @@ struct AddExpenseView: View {
                         .multilineTextAlignment(.trailing)
                         .frame(width: 64)
                     Button {
-                        items.removeAll { $0.id == item.id }
-                        amountText = formatted(itemsTotal)
+                        removeItem(item)
                     } label: {
                         Image(systemName: "minus.circle.fill").foregroundStyle(.secondary)
                     }
@@ -1304,6 +1378,32 @@ struct AddExpenseView: View {
                 .padding(.horizontal, 12).padding(.vertical, 8)
                 .background(Theme.fieldBackground, in: .rect(cornerRadius: 10))
             }
+
+            HStack {
+                Button {
+                    addBlankItem(trip)
+                } label: {
+                    Label("Add item", systemImage: "plus.circle.fill")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.accent)
+                }
+                .buttonStyle(.plain)
+
+                Spacer()
+
+                if let last = removedItems.first {
+                    Button {
+                        undoRemove()
+                    } label: {
+                        Label("Undo \"\(last.item.name)\"", systemImage: "arrow.uturn.backward")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Theme.accent)
+                            .lineLimit(1)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
             Button {
                 amountText = formatted(itemsTotal)
             } label: {
@@ -1313,6 +1413,32 @@ struct AddExpenseView: View {
             }
             .buttonStyle(.plain)
         }
+    }
+
+    /// Removes an item, remembering it (and its position) so the removal can be undone.
+    private func removeItem(_ item: ReceiptItem) {
+        guard let index = items.firstIndex(where: { $0.id == item.id }) else { return }
+        removedItems.insert((item, index), at: 0)
+        items.remove(at: index)
+        amountText = formatted(grandTotal)
+    }
+
+    /// Restores the most recently removed item to its original position.
+    private func undoRemove() {
+        guard let restored = removedItems.first else { return }
+        removedItems.removeFirst()
+        let index = min(restored.index, items.count)
+        items.insert(restored.item, at: index)
+        amountText = formatted(grandTotal)
+    }
+
+    /// Appends a blank item the user can fill in for something the scan missed. It splits
+    /// equally across everyone by default, matching freshly scanned items.
+    private func addBlankItem(_ trip: Trip) {
+        var item = ReceiptItem(name: "", price: 0)
+        item.splitMethod = .equalAll
+        item.participantIDs = Set(trip.members.map(\.id))
+        items.append(item)
     }
 
     private var itemsTotal: Double {
@@ -1343,6 +1469,7 @@ struct AddExpenseView: View {
         isScanning = false
         if !scan.items.isEmpty {
             // Each item starts split equally across everyone; the user can retune any item.
+            removedItems = []
             let everyone = Set(store.trip(tripID)?.members.map(\.id) ?? [])
             items = scan.items.map { item in
                 var configured = item
@@ -1355,13 +1482,34 @@ struct AddExpenseView: View {
             amountText = formatted(grandTotal)
         }
 
-        // Upload in the background; the URL is attached on save if it finishes in time.
-        guard let token = store.accessToken else { return }
+        // Upload in the background; the URL is attached on save (and the save path retries
+        // if this hasn't finished or failed by the time the user taps Save).
+        await uploadReceipt(image, originalData: originalData)
+    }
+
+    /// Uploads the current receipt image to Supabase Storage, recording the public URL on
+    /// success or a user-facing reason on failure. Safe to call again to retry.
+    @MainActor
+    private func uploadReceipt(_ image: UIImage, originalData: Data?) async {
+        guard receiptURL == nil else { return }
+        guard let token = store.accessToken else {
+            uploadError = "Sign in to upload the receipt photo."
+            return
+        }
         let jpeg = image.jpegData(compressionQuality: 0.7) ?? originalData ?? Data()
-        guard !jpeg.isEmpty else { return }
-        let path = "\(store.currentUser.id.uuidString)/\(expenseID.uuidString).jpg"
+        guard !jpeg.isEmpty else { uploadError = "Couldn't read the receipt image."; return }
+
+        // Lowercase the id: the storage RLS policy compares the leading folder against
+        // `auth.uid()::text`, which Postgres renders lowercase, whereas Swift's
+        // `uuidString` is uppercase — a mismatch trips "violates row-level security".
+        let path = "\(store.currentUser.id.uuidString.lowercased())/\(expenseID.uuidString.lowercased()).jpg"
         isUploading = true
-        receiptURL = try? await ReceiptStorage.shared.upload(jpeg, path: path, accessToken: token)
+        uploadError = nil
+        do {
+            receiptURL = try await ReceiptStorage.shared.upload(jpeg, path: path, accessToken: token)
+        } catch {
+            uploadError = (error as? AuthError)?.message ?? "Receipt upload failed."
+        }
         isUploading = false
     }
 
@@ -1726,8 +1874,18 @@ struct AddExpenseView: View {
         if selected.isEmpty { selected = Set(trip.members.map(\.id)) }
     }
 
-    private func save() {
+    @MainActor
+    private func save() async {
         guard let trip else { return }
+
+        // If a receipt photo was captured but its upload hasn't landed (still in flight,
+        // or failed earlier), make one more attempt so the URL is attached before saving.
+        // The expense is saved regardless — the photo is optional, the split data isn't.
+        if let receiptImage, receiptURL == nil {
+            isSaving = true
+            await uploadReceipt(receiptImage, originalData: nil)
+            isSaving = false
+        }
 
         // When the receipt has items, the total and split come from the per-item config;
         // otherwise they come from the single expense-level split.
@@ -1965,23 +2123,29 @@ struct SwipeToDeleteRow<Content: View>: View {
 
     var body: some View {
         ZStack(alignment: .trailing) {
-            Button(role: .destructive) {
-                withAnimation(settle) { offset = 0 }
-                startOffset = 0
-                onDelete()
-            } label: {
-                Image(systemName: "trash.fill")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: actionWidth)
-                    .frame(maxHeight: .infinity)
+            // The red action is sized to exactly the swiped-open width and only drawn while
+            // open, so it never sits behind (and bleeds through) a translucent glass row.
+            if offset < 0 {
+                Button(role: .destructive) {
+                    withAnimation(settle) { offset = 0 }
+                    startOffset = 0
+                    onDelete()
+                } label: {
+                    Image(systemName: "trash.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: min(-offset, actionWidth))
+                        .frame(maxHeight: .infinity)
+                        .background(Theme.negative, in: .rect(cornerRadius: 20))
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
             }
-            .background(Theme.negative, in: .rect(cornerRadius: 12))
 
             content
                 .offset(x: offset)
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 18)
+                .highPriorityGesture(
+                    DragGesture(minimumDistance: 20)
                         .onChanged { value in
                             // Only react to predominantly-horizontal drags so vertical
                             // scrolling still wins inside the enclosing ScrollView.

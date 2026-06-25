@@ -40,10 +40,7 @@ enum ReceiptScanner {
         let lines: [String] = await withCheckedContinuation { continuation in
             let request = VNRecognizeTextRequest { request, _ in
                 let observations = request.results as? [VNRecognizedTextObservation] ?? []
-                // Sort top-to-bottom (Vision's origin is bottom-left, so larger y is higher).
-                let ordered = observations.sorted { $0.boundingBox.midY > $1.boundingBox.midY }
-                let strings = ordered.compactMap { $0.topCandidates(1).first?.string }
-                continuation.resume(returning: strings)
+                continuation.resume(returning: groupIntoRows(observations))
             }
             request.recognitionLevel = .accurate
             request.usesLanguageCorrection = true
@@ -59,6 +56,34 @@ enum ReceiptScanner {
         }
 
         return parseItems(from: lines)
+    }
+
+    /// Receipts print item names and prices in separate columns, which Vision returns as
+    /// distinct text observations. This regroups observations that sit on the same
+    /// horizontal line (similar `midY`) into one left-to-right string, so a name and its
+    /// price end up on the same logical line for `parseItems` to pair.
+    static func groupIntoRows(_ observations: [VNRecognizedTextObservation]) -> [String] {
+        let entries = observations.compactMap { obs -> (text: String, midY: CGFloat, minX: CGFloat)? in
+            guard let text = obs.topCandidates(1).first?.string else { return nil }
+            return (text, obs.boundingBox.midY, obs.boundingBox.minX)
+        }
+        // Top-to-bottom (Vision's origin is bottom-left, so larger y is higher).
+        let sorted = entries.sorted { $0.midY > $1.midY }
+
+        // Fraction of image height within which observations count as the same row.
+        let rowTolerance: CGFloat = 0.012
+        var rows: [[(text: String, midY: CGFloat, minX: CGFloat)]] = []
+        for entry in sorted {
+            if let reference = rows.last?.first, abs(reference.midY - entry.midY) < rowTolerance {
+                rows[rows.count - 1].append(entry)
+            } else {
+                rows.append([entry])
+            }
+        }
+
+        return rows.map { row in
+            row.sorted { $0.minX < $1.minX }.map(\.text).joined(separator: " ")
+        }
     }
 
     /// Pairs each text line with a trailing price (e.g. "Burger  12.99"). Item rows
@@ -96,7 +121,11 @@ enum ReceiptScanner {
             if nonItemKeywords.contains(where: { lower.contains($0) }) { continue }
 
             var name = String(line[line.startIndex..<priceRange.lowerBound])
-                .trimmingCharacters(in: CharacterSet(charactersIn: " .-*x×@"))
+            // Drop a leading quantity count (e.g. "1  Grande Latte" → "Grande Latte").
+            if let qtyRange = name.range(of: #"^\s*\d{1,3}\s+"#, options: .regularExpression) {
+                name.removeSubrange(qtyRange)
+            }
+            name = name.trimmingCharacters(in: CharacterSet(charactersIn: " .-*x×@$€£¥"))
             if name.isEmpty { name = "Item" }
 
             result.items.append(ReceiptItem(name: name, price: rounded))
@@ -155,6 +184,17 @@ actor ReceiptStorage {
     private let session = URLSession.shared
     private let bucket = "receipts"
 
+    /// Pulls a human-readable reason out of a Supabase error body, which is JSON like
+    /// `{"statusCode":"400","error":"...","message":"..."}`.
+    nonisolated static func messageField(from body: String) -> String? {
+        guard let data = body.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        for key in ["message", "error", "msg"] {
+            if let value = json[key] as? String, !value.isEmpty { return value }
+        }
+        return nil
+    }
+
     /// Uploads JPEG data at `path` (e.g. "<userID>/<expenseID>.jpg") and returns the
     /// public URL. The signed-in user's token authorizes the write via storage RLS.
     func upload(_ jpeg: Data, path: String, accessToken: String) async throws -> String {
@@ -169,9 +209,22 @@ actor ReceiptStorage {
         request.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
         request.setValue("true", forHTTPHeaderField: "x-upsert")
 
-        let (_, response) = try await session.upload(for: request, from: jpeg)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+        let (data, response) = try await session.upload(for: request, from: jpeg)
+        guard let http = response as? HTTPURLResponse else {
             throw AuthError(message: "Receipt upload failed.")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            // Surface the most common, actionable cause: the bucket hasn't been created.
+            // Supabase returns 404 with `{"error":"Bucket not found"}` in that case.
+            let body = String(data: data, encoding: .utf8) ?? ""
+            if http.statusCode == 404 || body.localizedCaseInsensitiveContains("bucket not found") {
+                throw AuthError(message: "Receipt storage isn't set up — run the storage section of supabase_schema.sql to create the \"receipts\" bucket.")
+            }
+            // Include the server's explanation (e.g. an RLS / policy message) so the
+            // failure is diagnosable instead of an opaque status code.
+            let detail = ReceiptStorage.messageField(from: body)
+            throw AuthError(message: detail.map { "Receipt upload failed: \($0)" }
+                ?? "Receipt upload failed (HTTP \(http.statusCode)).")
         }
         return "\(SupabaseConfig.url)/storage/v1/object/public/\(bucket)/\(path)"
     }

@@ -129,7 +129,7 @@ struct HomeScreen: View {
                 GlassEffectContainer(spacing: 12) {
                     VStack(spacing: 12) {
                         ForEach(store.myTrips) { trip in
-                            Button { selectedTrip = trip } label: {
+                            let row = Button { selectedTrip = trip } label: {
                                 TripRow(trip: trip, currentUserID: store.currentUser.id)
                             }
                             .buttonStyle(.plain)
@@ -141,6 +141,13 @@ struct HomeScreen: View {
                                         Label("Delete Trip", systemImage: "trash")
                                     }
                                 }
+                            }
+
+                            // Only the creator can delete, so only they get swipe-to-delete.
+                            if store.isCreator(of: trip) {
+                                SwipeToDeleteRow { tripToDelete = trip } content: { row }
+                            } else {
+                                row
                             }
                         }
                     }
