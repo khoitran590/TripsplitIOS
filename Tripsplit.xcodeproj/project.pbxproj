@@ -257,6 +257,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleURLTypes = "({CFBundleURLName = tripsplit; CFBundleURLSchemes = (tripsplit);})";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Used to scan receipts so their items and prices can be split.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
@@ -298,6 +299,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleURLTypes = "({CFBundleURLName = tripsplit; CFBundleURLSchemes = (tripsplit);})";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Used to scan receipts so their items and prices can be split.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;

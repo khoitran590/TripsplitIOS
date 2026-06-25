@@ -3,9 +3,12 @@
 -- Run this once in your Supabase project:
 --   Dashboard → SQL Editor → New query → paste → Run.
 --
--- Each trip (with its members, budgets, and expenses) is stored as a single JSON
--- blob in the `data` column. Row-level security ties every row to the signed-in
--- user via auth.uid(), so the app only ever sends the user's access token.
+create extension if not exists pgcrypto;
+
+-- Each trip (with its participants, budgets, and expenses) is stored as a single
+-- JSON blob in the `data` column. Cross-account access is granted through the
+-- `trip_members` table: the trip creator owns the row, and invited Supabase
+-- users may read/update that same row once they are members.
 
 create table if not exists public.trips (
     id         uuid primary key,
@@ -13,6 +16,43 @@ create table if not exists public.trips (
     data       jsonb not null,
     updated_at timestamptz not null default now()
 );
+
+create table if not exists public.profiles (
+    user_id    uuid primary key references auth.users (id) on delete cascade,
+    email      text unique not null,
+    updated_at timestamptz not null default now()
+);
+
+create table if not exists public.trip_members (
+    trip_id    uuid not null references public.trips (id) on delete cascade,
+    user_id    uuid not null references auth.users (id) on delete cascade,
+    role       text not null default 'member' check (role in ('owner', 'member')),
+    created_at timestamptz not null default now(),
+    primary key (trip_id, user_id)
+);
+
+create table if not exists public.trip_invitations (
+    id          uuid primary key default gen_random_uuid(),
+    trip_id     uuid not null references public.trips (id) on delete cascade,
+    email       text,
+    token       text unique not null default encode(gen_random_bytes(18), 'hex'),
+    invited_by  uuid not null references auth.users (id) on delete cascade,
+    status      text not null default 'pending' check (status in ('pending', 'accepted', 'revoked')),
+    created_at  timestamptz not null default now(),
+    accepted_at timestamptz
+);
+
+alter table public.trip_invitations add column if not exists token text;
+alter table public.trip_invitations alter column email drop not null;
+update public.trip_invitations
+set token = encode(gen_random_bytes(18), 'hex')
+where token is null;
+alter table public.trip_invitations alter column token set not null;
+alter table public.trip_invitations alter column token set default encode(gen_random_bytes(18), 'hex');
+create unique index if not exists trip_invitations_token_idx on public.trip_invitations (token);
+
+create index if not exists trip_members_user_id_idx on public.trip_members (user_id);
+create index if not exists trip_invitations_email_idx on public.trip_invitations (lower(email));
 
 -- Keep updated_at fresh on every upsert so fetches can order newest-first.
 create or replace function public.set_trips_updated_at()
@@ -28,15 +68,240 @@ create trigger trips_set_updated_at
     before insert or update on public.trips
     for each row execute function public.set_trips_updated_at();
 
--- Row-level security: users may only read/write their own trips.
+create or replace function public.set_profiles_updated_at()
+returns trigger as $$
+begin
+    new.updated_at = now();
+    return new;
+end;
+$$ language plpgsql;
+
+drop trigger if exists profiles_set_updated_at on public.profiles;
+create trigger profiles_set_updated_at
+    before update on public.profiles
+    for each row execute function public.set_profiles_updated_at();
+
+create or replace function public.handle_new_user_profile()
+returns trigger
+security definer
+set search_path = public
+as $$
+begin
+    insert into public.profiles (user_id, email)
+    values (new.id, lower(new.email))
+    on conflict (user_id) do update set email = excluded.email;
+    return new;
+end;
+$$ language plpgsql;
+
+drop trigger if exists auth_users_create_profile on auth.users;
+create trigger auth_users_create_profile
+    after insert or update of email on auth.users
+    for each row execute function public.handle_new_user_profile();
+
+insert into public.profiles (user_id, email)
+select id, lower(email)
+from auth.users
+where email is not null
+on conflict (user_id) do update set email = excluded.email;
+
+create or replace function public.is_trip_member(p_trip_id uuid)
+returns boolean
+security definer
+set search_path = public
+as $$
+begin
+    return exists (
+        select 1
+        from public.trip_members tm
+        where tm.trip_id = p_trip_id
+          and tm.user_id = auth.uid()
+    );
+end;
+$$ language plpgsql stable;
+
+create or replace function public.ensure_trip_owner_membership()
+returns trigger
+security definer
+set search_path = public
+as $$
+begin
+    insert into public.trip_members (trip_id, user_id, role)
+    values (new.id, new.user_id, 'owner')
+    on conflict (trip_id, user_id) do update set role = 'owner';
+    return new;
+end;
+$$ language plpgsql;
+
+drop trigger if exists trips_create_owner_membership on public.trips;
+create trigger trips_create_owner_membership
+    after insert on public.trips
+    for each row execute function public.ensure_trip_owner_membership();
+
+insert into public.trip_members (trip_id, user_id, role)
+select id, user_id, 'owner'
+from public.trips
+on conflict (trip_id, user_id) do update set role = 'owner';
+
+create or replace function public.invite_trip_member(p_trip_id uuid, p_email text)
+returns table(member_user_id uuid, invitation_id uuid, accepted boolean)
+security definer
+set search_path = public
+as $$
+declare
+    normalized_email text := lower(trim(p_email));
+    target_user_id uuid;
+    invite_id uuid;
+begin
+    if not exists (
+        select 1
+        from public.trips t
+        where t.id = p_trip_id
+          and t.user_id = auth.uid()
+    ) then
+        raise exception 'Only the trip owner can invite members.';
+    end if;
+
+    select user_id into target_user_id
+    from public.profiles
+    where email = normalized_email;
+
+    insert into public.trip_invitations (trip_id, email, invited_by, status, accepted_at)
+    values (
+        p_trip_id,
+        normalized_email,
+        auth.uid(),
+        case when target_user_id is null then 'pending' else 'accepted' end,
+        case when target_user_id is null then null else now() end
+    )
+    returning id into invite_id;
+
+    if target_user_id is not null then
+        insert into public.trip_members (trip_id, user_id, role)
+        values (p_trip_id, target_user_id, 'member')
+        on conflict (trip_id, user_id) do nothing;
+    end if;
+
+    return query select target_user_id, invite_id, target_user_id is not null;
+end;
+$$ language plpgsql;
+
+create or replace function public.create_trip_invitation_link(p_trip_id uuid)
+returns table(invitation_id uuid, token text)
+security definer
+set search_path = public
+as $$
+declare
+    invite_id uuid;
+    invite_token text;
+begin
+    if not exists (
+        select 1
+        from public.trips t
+        where t.id = p_trip_id
+          and t.user_id = auth.uid()
+    ) then
+        raise exception 'Only the trip owner can invite members.';
+    end if;
+
+    insert into public.trip_invitations (trip_id, email, invited_by, status)
+    values (p_trip_id, null, auth.uid(), 'pending')
+    returning trip_invitations.id, trip_invitations.token into invite_id, invite_token;
+
+    return query select invite_id, invite_token;
+end;
+$$ language plpgsql;
+
+create or replace function public.accept_trip_invitation(p_token text)
+returns table(trip_id uuid)
+security definer
+set search_path = public
+as $$
+declare
+    invite_trip_id uuid;
+begin
+    select i.trip_id into invite_trip_id
+    from public.trip_invitations i
+    where i.token = p_token
+      and i.status <> 'revoked';
+
+    if invite_trip_id is null then
+        raise exception 'This invitation link is invalid or has been revoked.';
+    end if;
+
+    insert into public.trip_members (trip_id, user_id, role)
+    values (invite_trip_id, auth.uid(), 'member')
+    on conflict (trip_id, user_id) do nothing;
+
+    update public.trip_invitations i
+    set status = 'accepted',
+        accepted_at = coalesce(accepted_at, now()),
+        email = coalesce(email, (select email from public.profiles where user_id = auth.uid()))
+    where i.token = p_token;
+
+    return query select invite_trip_id;
+end;
+$$ language plpgsql;
+
+-- Row-level security: users may read/write trips through membership.
 alter table public.trips enable row level security;
+alter table public.profiles enable row level security;
+alter table public.trip_members enable row level security;
+alter table public.trip_invitations enable row level security;
 
 drop policy if exists "Users manage their own trips" on public.trips;
-create policy "Users manage their own trips"
-    on public.trips
-    for all
+drop policy if exists "Trip members can read trips" on public.trips;
+create policy "Trip members can read trips"
+    on public.trips for select
+    using (public.is_trip_member(id));
+
+drop policy if exists "Users create owned trips" on public.trips;
+create policy "Users create owned trips"
+    on public.trips for insert
+    with check (auth.uid() = user_id);
+
+drop policy if exists "Trip members can update trips" on public.trips;
+create policy "Trip members can update trips"
+    on public.trips for update
+    using (public.is_trip_member(id))
+    with check (public.is_trip_member(id));
+
+drop policy if exists "Owners can delete trips" on public.trips;
+create policy "Owners can delete trips"
+    on public.trips for delete
+    using (auth.uid() = user_id);
+
+drop policy if exists "Authenticated users can find profiles by email" on public.profiles;
+drop policy if exists "Users can view their own profile" on public.profiles;
+create policy "Users can view their own profile"
+    on public.profiles for select
+    using (auth.uid() = user_id);
+
+drop policy if exists "Users update their own profile" on public.profiles;
+create policy "Users update their own profile"
+    on public.profiles for update
     using (auth.uid() = user_id)
     with check (auth.uid() = user_id);
+
+drop policy if exists "Trip members can view memberships" on public.trip_members;
+create policy "Trip members can view memberships"
+    on public.trip_members for select
+    using (public.is_trip_member(trip_id));
+
+drop policy if exists "Trip members can add memberships" on public.trip_members;
+create policy "Trip members can add memberships"
+    on public.trip_members for insert
+    with check (public.is_trip_member(trip_id));
+
+drop policy if exists "Trip members can view invitations" on public.trip_invitations;
+create policy "Trip members can view invitations"
+    on public.trip_invitations for select
+    using (public.is_trip_member(trip_id));
+
+drop policy if exists "Trip members can create invitations" on public.trip_invitations;
+create policy "Trip members can create invitations"
+    on public.trip_invitations for insert
+    with check (public.is_trip_member(trip_id) and auth.uid() = invited_by);
 
 -- Receipt image storage ------------------------------------------------------
 --

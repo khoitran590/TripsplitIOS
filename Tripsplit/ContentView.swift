@@ -56,8 +56,16 @@ struct ContentView: View {
             // Keep the trip store's token + identity in sync with the auth session and
             // reload the user's trips from Supabase whenever they sign in (or back out).
             store.accessToken = auth.session?.accessToken
+            store.refreshAccessToken = {
+                try await auth.refreshSession().accessToken
+            }
             store.bindIdentity(accessToken: auth.session?.accessToken)
             await store.loadFromCloud()
+        }
+        .onOpenURL { url in
+            Task {
+                try? await store.acceptInvitationLink(url)
+            }
         }
     }
 }

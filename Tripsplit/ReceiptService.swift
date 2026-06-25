@@ -224,7 +224,8 @@ actor ReceiptStorage {
             // failure is diagnosable instead of an opaque status code.
             let detail = ReceiptStorage.messageField(from: body)
             throw AuthError(message: detail.map { "Receipt upload failed: \($0)" }
-                ?? "Receipt upload failed (HTTP \(http.statusCode)).")
+                ?? "Receipt upload failed (HTTP \(http.statusCode)).",
+                statusCode: http.statusCode)
         }
         return "\(SupabaseConfig.url)/storage/v1/object/public/\(bucket)/\(path)"
     }

@@ -1,5 +1,6 @@
 import SwiftUI
 import Observation
+import Security
 
 // MARK: - Supabase configuration
 
@@ -24,7 +25,13 @@ enum SupabaseConfig {
 /// A simple typed auth error whose message is safe to show to the user.
 struct AuthError: Error, LocalizedError {
     let message: String
+    var statusCode: Int?
     var errorDescription: String? { message }
+
+    init(message: String, statusCode: Int? = nil) {
+        self.message = message
+        self.statusCode = statusCode
+    }
 }
 
 /// The persisted result of a successful sign-in.
@@ -104,6 +111,15 @@ actor AuthService {
         _ = try await send("POST", "/auth/v1/recover", body: ["email": email])
     }
 
+    func refreshSession(refreshToken: String, email: String?) async throws -> AuthSession {
+        let data = try await post("/auth/v1/token?grant_type=refresh_token", body: ["refresh_token": refreshToken])
+        let token = try JSONDecoder().decode(TokenResponse.self, from: data)
+        guard let access = token.accessToken, let refresh = token.refreshToken else {
+            throw AuthError(message: "Unexpected response from the server.")
+        }
+        return AuthSession(accessToken: access, refreshToken: refresh, email: token.user?.email ?? email)
+    }
+
     /// Updates the signed-in user's password. Requires the user's own access token
     /// (the anon key is not sufficient for this endpoint).
     func updatePassword(accessToken: String, newPassword: String) async throws {
@@ -150,11 +166,61 @@ actor AuthService {
         }
         guard (200..<300).contains(http.statusCode) else {
             if let decoded = try? JSONDecoder().decode(GoTrueError.self, from: data) {
-                throw AuthError(message: decoded.text)
+                throw AuthError(message: decoded.text, statusCode: http.statusCode)
             }
-            throw AuthError(message: "Request failed (\(http.statusCode)).")
+            throw AuthError(message: "Request failed (\(http.statusCode)).", statusCode: http.statusCode)
         }
         return data
+    }
+}
+
+// MARK: - Secure auth storage
+
+enum AuthSessionStore {
+    private static let service = "com.tripsplit.auth"
+    private static let account = "session"
+
+    static func load() -> AuthSession? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data else { return nil }
+        return try? JSONDecoder().decode(AuthSession.self, from: data)
+    }
+
+    static func save(_ session: AuthSession) {
+        guard let data = try? JSONEncoder().encode(session) else { return }
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+        let attributes: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        ]
+
+        let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        if status == errSecItemNotFound {
+            var add = query
+            attributes.forEach { add[$0.key] = $0.value }
+            SecItemAdd(add as CFDictionary, nil)
+        }
+    }
+
+    static func delete() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+        SecItemDelete(query as CFDictionary)
     }
 }
 
@@ -173,9 +239,13 @@ final class AuthStore {
     var email: String? { session?.email }
 
     init() {
-        if let data = UserDefaults.standard.data(forKey: storageKey),
-           let saved = try? JSONDecoder().decode(AuthSession.self, from: data) {
+        if let saved = AuthSessionStore.load() {
             session = saved
+        } else if let data = UserDefaults.standard.data(forKey: storageKey),
+                  let saved = try? JSONDecoder().decode(AuthSession.self, from: data) {
+            // One-time migration from the previous UserDefaults storage.
+            persist(saved)
+            UserDefaults.standard.removeObject(forKey: storageKey)
         }
     }
 
@@ -199,6 +269,18 @@ final class AuthStore {
         try await AuthService.shared.resetPassword(email: email)
     }
 
+    func refreshSession() async throws -> AuthSession {
+        guard let session else {
+            throw AuthError(message: "You need to be signed in.")
+        }
+        let refreshed = try await AuthService.shared.refreshSession(
+            refreshToken: session.refreshToken,
+            email: session.email
+        )
+        persist(refreshed)
+        return refreshed
+    }
+
     /// Changes the signed-in user's password. The current password is verified by
     /// re-authenticating (which also yields a fresh access token to perform the update).
     func changePassword(current: String, new: String) async throws {
@@ -219,14 +301,14 @@ final class AuthStore {
 
     func signOut() {
         session = nil
+        AuthSessionStore.delete()
         UserDefaults.standard.removeObject(forKey: storageKey)
     }
 
     private func persist(_ session: AuthSession) {
         self.session = session
-        if let data = try? JSONEncoder().encode(session) {
-            UserDefaults.standard.set(data, forKey: storageKey)
-        }
+        AuthSessionStore.save(session)
+        UserDefaults.standard.removeObject(forKey: storageKey)
     }
 }
 
@@ -520,4 +602,3 @@ struct ChangePasswordView: View {
         }
     }
 }
-

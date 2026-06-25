@@ -135,8 +135,9 @@ struct ReceiptItem: Identifiable, Codable, Hashable {
     }
 }
 
-/// A trip the user creates or belongs to. The `creatorID` may assign expenses to any
-/// member; other members can only log expenses they paid themselves.
+/// A shared trip. The creator owns the row, and any invited Supabase user in
+/// `trip_members` may read/update the same cloud copy. `members` are the bill-splitting
+/// participants shown in the app; authenticated participants use their Supabase user id.
 struct Trip: Identifiable, Codable {
     var id = UUID()
     var name: String
@@ -148,7 +149,7 @@ struct Trip: Identifiable, Codable {
 
     /// Recorded settlement payments toward this trip's debts, keyed by
     /// `"<debtorID>-><creditorID>"`. Stored on the trip so settle-up progress
-    /// syncs to the cloud alongside members, budgets, and expenses.
+    /// syncs to the shared cloud row alongside members, budgets, and expenses.
     var settlementRecords: [String: [SettlementRecord]] = [:]
 
     init(
@@ -303,6 +304,9 @@ final class TripStore {
     /// session changes; persistence to the cloud is skipped while this is nil.
     var accessToken: String?
 
+    /// Called when Supabase rejects a request because the access token expired.
+    @ObservationIgnored var refreshAccessToken: (() async throws -> String?)?
+
     /// Live cloud-sync status, surfaced in the UI so failed saves aren't silent.
     enum SyncState: Equatable { case idle, syncing, failed }
     var syncState: SyncState = .idle
@@ -353,10 +357,9 @@ final class TripStore {
         return try? JSONDecoder().decode(StoredProfile.self, from: data)
     }
 
-    /// Trips the current user created or is a member of.
-    var myTrips: [Trip] {
-        trips.filter { trip in trip.members.contains { $0.id == currentUser.id } }
-    }
+    /// Trips available on this device. Cloud loads are already filtered by Supabase RLS,
+    /// so every fetched row is a trip this account can access.
+    var myTrips: [Trip] { trips }
 
     /// Converts an amount in `code` into USD using the cached rates. Falls back to the
     /// original amount when a rate is unavailable (e.g. offline before rates load).
@@ -420,6 +423,78 @@ final class TripStore {
         persist(trip)
     }
 
+    func addManualMember(name: String, to tripID: Trip.ID) {
+        guard let index = trips.firstIndex(where: { $0.id == tripID }) else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let color = Color(hex: memberPalette[max(trips[index].members.count - 1, 0) % memberPalette.count])
+        let member = Person(name: trimmed, color: color)
+        trips[index].members.append(member)
+        trips[index].budgets[member.id] = 0
+        persist(trips[index])
+    }
+
+    func inviteMember(email: String, displayName: String?, to tripID: Trip.ID) async throws {
+        guard let index = trips.firstIndex(where: { $0.id == tripID }) else { return }
+        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmedEmail.isEmpty else { return }
+        guard let accessToken = try await authorizedAccessToken() else {
+            throw AuthError(message: "Sign in to invite members.")
+        }
+
+        let result = try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
+            try await TripsRepository.shared.inviteMember(tripID: tripID, email: trimmedEmail, accessToken: token)
+        }
+        guard result.accepted, let userID = result.memberUserID else {
+            throw AuthError(message: "No TripSplit account was found for \(trimmedEmail). Ask them to sign up first, then invite them again.")
+        }
+
+        if !trips[index].members.contains(where: { $0.id == userID }) {
+            let resolvedName = displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let fallbackName = trimmedEmail.split(separator: "@").first.map(String.init) ?? trimmedEmail
+            let color = Color(hex: memberPalette[max(trips[index].members.count - 1, 0) % memberPalette.count])
+            trips[index].members.append(Person(id: userID, name: resolvedName?.isEmpty == false ? resolvedName! : fallbackName, color: color))
+            trips[index].budgets[userID] = trips[index].budgets[userID] ?? 0
+            persist(trips[index])
+        }
+    }
+
+    func createInvitationLink(for tripID: Trip.ID) async throws -> URL {
+        guard let accessToken = try await authorizedAccessToken() else {
+            throw AuthError(message: "Sign in to create an invitation link.")
+        }
+        let token = try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
+            try await TripsRepository.shared.createInvitationLink(tripID: tripID, accessToken: token)
+        }
+        var components = URLComponents()
+        components.scheme = "tripsplit"
+        components.host = "invite"
+        components.queryItems = [URLQueryItem(name: "token", value: token)]
+        guard let url = components.url else {
+            throw AuthError(message: "Couldn't create an invitation link.")
+        }
+        return url
+    }
+
+    func acceptInvitationLink(_ url: URL) async throws {
+        guard url.scheme == "tripsplit", url.host == "invite",
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let token = components.queryItems?.first(where: { $0.name == "token" })?.value,
+              !token.isEmpty else { return }
+        guard let accessToken = try await authorizedAccessToken() else {
+            throw AuthError(message: "Sign in to accept this invitation.")
+        }
+        let tripID = try await withFreshTokenIfNeeded(initialToken: accessToken) { tokenValue in
+            try await TripsRepository.shared.acceptInvitation(token: token, accessToken: tokenValue)
+        }
+        await loadFromCloud()
+        guard let index = trips.firstIndex(where: { $0.id == tripID }),
+              !trips[index].members.contains(where: { $0.id == currentUser.id }) else { return }
+        trips[index].members.append(currentUser)
+        trips[index].budgets[currentUser.id] = trips[index].budgets[currentUser.id] ?? 0
+        persist(trips[index])
+    }
+
     /// Sets a member's budget on a trip and syncs the change.
     func setBudget(_ amount: Double, for userID: Person.ID, in tripID: Trip.ID) {
         guard let index = trips.firstIndex(where: { $0.id == tripID }) else { return }
@@ -435,10 +510,13 @@ final class TripStore {
         pendingDeletions.insert(tripID)
         savePendingDeletions()
 
-        guard let accessToken else { return }
         syncState = .syncing
         Task {
             do {
+                guard let accessToken = try await authorizedAccessToken() else {
+                    await MainActor.run { self.syncState = .idle }
+                    return
+                }
                 try await TripsRepository.shared.delete(id: tripID, accessToken: accessToken)
                 await MainActor.run {
                     self.pendingDeletions.remove(tripID)
@@ -458,7 +536,9 @@ final class TripStore {
         var allSucceeded = true
         for tripID in pendingDeletions {
             do {
-                try await TripsRepository.shared.delete(id: tripID, accessToken: accessToken)
+                try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
+                    try await TripsRepository.shared.delete(id: tripID, accessToken: token)
+                }
                 await MainActor.run {
                     self.pendingDeletions.remove(tripID)
                     self.savePendingDeletions()
@@ -472,11 +552,10 @@ final class TripStore {
 
     // MARK: Supabase sync
 
-    /// Aligns the in-memory user's identity with their authenticated account, so trip
-    /// membership (and every balance figure derived from `currentUser.id`) resolves
-    /// consistently across launches and devices. The id is the Supabase user's stable
-    /// UUID, read from the access token's `sub` claim — no extra network call, and it
-    /// works for already-persisted sessions too.
+    /// Aligns the in-memory user's identity with their authenticated account, so shared
+    /// trips and every balance figure derived from `currentUser.id` resolve consistently
+    /// across launches and devices. The id is the Supabase user's stable UUID, read from
+    /// the access token's `sub` claim.
     func bindIdentity(accessToken: String?) {
         guard let accessToken, let uuid = Self.userID(fromJWT: accessToken) else { return }
         currentUser.id = uuid
@@ -499,25 +578,31 @@ final class TripStore {
     /// Loads the signed-in user's trips from Supabase, replacing the in-memory list.
     /// No-op when signed out (the app stays usable with local-only trips).
     ///
-    /// Each row is re-anchored to the current user's stable id so trips created under a
-    /// previous (random) local identity still show up and settle correctly. Any trip
-    /// that needed re-anchoring is pushed back once so the cloud copy heals itself.
+    /// Each creator-owned row is re-anchored to the signed-in user's stable id so trips
+    /// created under a previous random local identity still show up and settle correctly.
+    /// Shared trips created by other accounts are left with their original creator id.
     func loadFromCloud() async {
-        guard let accessToken else { return }
+        guard let accessToken = try? await authorizedAccessToken() else { return }
 
         // Retry any queued deletions first so a trip pending deletion can't come back.
         await flushPendingDeletions(accessToken: accessToken)
 
         // Keep whatever we have if the server is unreachable; only replace on success.
         let loaded: [Trip]
-        do { loaded = try await TripsRepository.shared.fetch(accessToken: accessToken) }
+        do {
+            loaded = try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
+                try await TripsRepository.shared.fetch(accessToken: token)
+            }
+        }
         catch { return }
         var healed: [Trip] = []
         var changed: [Trip] = []
         for trip in loaded {
             // Skip trips still queued for deletion (their cloud delete hasn't landed yet).
             if pendingDeletions.contains(trip.id) { continue }
-            let anchored = trip.reanchoringCreator(to: currentUser.id)
+            let anchored = trip.creatorID == currentUser.id || trip.members.contains { $0.id == currentUser.id }
+                ? trip
+                : trip.reanchoringCreator(to: currentUser.id)
             healed.append(anchored)
             if anchored.creatorID != trip.creatorID { changed.append(anchored) }
         }
@@ -525,14 +610,19 @@ final class TripStore {
         for trip in changed { persist(trip) }
     }
 
-    /// Pushes a single trip (members, budgets, and expenses) to Supabase, updating
+    /// Pushes a single shared trip (members, budgets, and expenses) to Supabase, updating
     /// `syncState` so the UI can show progress and surface failures.
     private func persist(_ trip: Trip) {
-        guard let accessToken else { return }
         syncState = .syncing
         Task {
             do {
-                try await TripsRepository.shared.upsert(trip, accessToken: accessToken)
+                guard let accessToken = try await authorizedAccessToken() else {
+                    await MainActor.run { self.syncState = .idle }
+                    return
+                }
+                try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
+                    try await TripsRepository.shared.upsert(trip, accessToken: token)
+                }
                 await MainActor.run { self.syncState = .idle }
             } catch {
                 await MainActor.run { self.syncState = .failed }
@@ -542,18 +632,58 @@ final class TripStore {
 
     /// Re-pushes every trip to Supabase. Used by the "Retry" action after a failed save.
     func retrySync() {
-        guard let accessToken else { return }
         syncState = .syncing
         Task {
             do {
+                guard let accessToken = try await authorizedAccessToken() else {
+                    await MainActor.run { self.syncState = .idle }
+                    return
+                }
                 let deletionsCleared = await flushPendingDeletions(accessToken: accessToken)
                 for trip in trips {
-                    try await TripsRepository.shared.upsert(trip, accessToken: accessToken)
+                    try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
+                        try await TripsRepository.shared.upsert(trip, accessToken: token)
+                    }
                 }
                 await MainActor.run { self.syncState = deletionsCleared ? .idle : .failed }
             } catch {
                 await MainActor.run { self.syncState = .failed }
             }
+        }
+    }
+
+    func uploadReceipt(_ jpeg: Data, path: String) async throws -> String {
+        guard let accessToken = try await authorizedAccessToken() else {
+            throw AuthError(message: "Sign in to upload the receipt photo.")
+        }
+        return try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
+            try await ReceiptStorage.shared.upload(jpeg, path: path, accessToken: token)
+        }
+    }
+
+    private func authorizedAccessToken() async throws -> String? {
+        if let accessToken { return accessToken }
+        guard let refreshed = try await refreshAccessToken?() else { return nil }
+        await MainActor.run {
+            self.accessToken = refreshed
+            self.bindIdentity(accessToken: refreshed)
+        }
+        return refreshed
+    }
+
+    private func withFreshTokenIfNeeded<T>(
+        initialToken: String,
+        operation: (String) async throws -> T
+    ) async throws -> T {
+        do {
+            return try await operation(initialToken)
+        } catch let error as AuthError where error.statusCode == 401 {
+            guard let refreshed = try await refreshAccessToken?() else { throw error }
+            await MainActor.run {
+                self.accessToken = refreshed
+                self.bindIdentity(accessToken: refreshed)
+            }
+            return try await operation(refreshed)
         }
     }
 
@@ -588,9 +718,9 @@ final class TripStore {
 
 // MARK: - Trips repository (Supabase PostgREST)
 
-/// Persists trips to a single `trips` table in Supabase, storing each trip as a
-/// JSON blob in a `jsonb` column. Row ownership is enforced by RLS via `auth.uid()`,
-/// so the client only ever sends the access token — never a user id.
+/// Persists shared trips to a single `trips` table in Supabase, storing each trip as a
+/// JSON blob in a `jsonb` column. Access is enforced by RLS through `trip_members`, so
+/// the client only ever sends the access token.
 ///
 /// Run `supabase_schema.sql` (at the repo root) once in the Supabase SQL editor to
 /// create the table and its row-level-security policy.
@@ -611,7 +741,37 @@ actor TripsRepository {
         return decoder
     }()
 
-    /// Fetches every trip owned by the token's user. Decodes rows individually so a
+    struct InviteResult: Decodable {
+        let memberUserID: UUID?
+        let invitationID: UUID
+        let accepted: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case memberUserID = "member_user_id"
+            case invitationID = "invitation_id"
+            case accepted
+        }
+    }
+
+    private struct LinkInviteResult: Decodable {
+        let invitationID: UUID
+        let token: String
+
+        enum CodingKeys: String, CodingKey {
+            case invitationID = "invitation_id"
+            case token
+        }
+    }
+
+    private struct AcceptedInviteResult: Decodable {
+        let tripID: UUID
+
+        enum CodingKeys: String, CodingKey {
+            case tripID = "trip_id"
+        }
+    }
+
+    /// Fetches every trip visible to the token through `trip_members`. Decodes rows individually so a
     /// single malformed trip can't drop the entire list. Throws only on network/HTTP
     /// failure, letting callers distinguish "couldn't reach the server" from "no trips".
     func fetch(accessToken: String) async throws -> [Trip] {
@@ -624,7 +784,7 @@ actor TripsRepository {
         }
     }
 
-    /// Inserts or updates a trip (keyed on its id) for the token's user.
+    /// Inserts or updates a trip (keyed on its id) for any account that can access it.
     func upsert(_ trip: Trip, accessToken: String) async throws {
         // Wrap the encoded trip as the `data` jsonb value alongside its primary key.
         let tripJSON = try JSONSerialization.jsonObject(with: encoder.encode(trip))
@@ -641,9 +801,57 @@ actor TripsRepository {
         )
     }
 
-    /// Deletes a trip the user owns.
+    /// Deletes a trip the token's account owns.
     func delete(id: Trip.ID, accessToken: String) async throws {
         _ = try await send("DELETE", "/rest/v1/trips?id=eq.\(id.uuidString)", accessToken: accessToken)
+    }
+
+    func inviteMember(tripID: Trip.ID, email: String, accessToken: String) async throws -> InviteResult {
+        let body = try JSONSerialization.data(withJSONObject: [
+            "p_trip_id": tripID.uuidString,
+            "p_email": email,
+        ])
+        let data = try await send(
+            "POST",
+            "/rest/v1/rpc/invite_trip_member",
+            accessToken: accessToken,
+            body: body,
+            extraHeaders: ["Prefer": "return=representation"]
+        )
+        if let rows = try? decoder.decode([InviteResult].self, from: data), let first = rows.first {
+            return first
+        }
+        return try decoder.decode(InviteResult.self, from: data)
+    }
+
+    func createInvitationLink(tripID: Trip.ID, accessToken: String) async throws -> String {
+        let body = try JSONSerialization.data(withJSONObject: ["p_trip_id": tripID.uuidString])
+        let data = try await send(
+            "POST",
+            "/rest/v1/rpc/create_trip_invitation_link",
+            accessToken: accessToken,
+            body: body,
+            extraHeaders: ["Prefer": "return=representation"]
+        )
+        if let rows = try? decoder.decode([LinkInviteResult].self, from: data), let first = rows.first {
+            return first.token
+        }
+        return try decoder.decode(LinkInviteResult.self, from: data).token
+    }
+
+    func acceptInvitation(token: String, accessToken: String) async throws -> Trip.ID {
+        let body = try JSONSerialization.data(withJSONObject: ["p_token": token])
+        let data = try await send(
+            "POST",
+            "/rest/v1/rpc/accept_trip_invitation",
+            accessToken: accessToken,
+            body: body,
+            extraHeaders: ["Prefer": "return=representation"]
+        )
+        if let rows = try? decoder.decode([AcceptedInviteResult].self, from: data), let first = rows.first {
+            return first.tripID
+        }
+        return try decoder.decode(AcceptedInviteResult.self, from: data).tripID
     }
 
     private func send(
@@ -665,8 +873,16 @@ actor TripsRepository {
         request.httpBody = body
 
         let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw AuthError(message: "Sync request failed.")
+        guard let http = response as? HTTPURLResponse else {
+            throw AuthError(message: "No response from the server.")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            let detail = ReceiptStorage.messageField(from: body)
+            throw AuthError(
+                message: detail.map { "Sync request failed: \($0)" } ?? "Sync request failed (HTTP \(http.statusCode)).",
+                statusCode: http.statusCode
+            )
         }
         return data
     }
@@ -695,7 +911,7 @@ let memberPalette: [UInt32] = [0x10B981, 0xF59E0B, 0xEC4899, 0x3B82F6, 0x8B5CF6,
 
 // MARK: - Add Trip
 
-/// A sheet for creating a trip: name, currency, the creator's personal budget, and members.
+/// A sheet for creating a trip: name, currency, the owner's personal budget, and local participants.
 struct AddTripView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(TripStore.self) private var store
@@ -791,7 +1007,7 @@ struct AddTripView: View {
         TripCard(title: "Members", icon: "person.2.fill") {
             HStack {
                 avatar(store.currentUser, size: 30)
-                Text(store.currentUser.name.isEmpty ? "You (creator)" : "\(store.currentUser.name) (You · creator)")
+                Text(store.currentUser.name.isEmpty ? "You (owner)" : "\(store.currentUser.name) (You · owner)")
                     .font(.subheadline.weight(.medium))
                 Spacer()
             }
@@ -861,6 +1077,13 @@ struct TripDetailView: View {
     @State private var showAddExpense = false
     @State private var activeSettlement: Settlement?
     @State private var editingExpense: Expense?
+    @State private var manualMemberName = ""
+    @State private var inviteEmail = ""
+    @State private var inviteName = ""
+    @State private var inviteMessage: String?
+    @State private var inviteLink: URL?
+    @State private var isInviting = false
+    @State private var isGeneratingLink = false
 
     private var trip: Trip? { store.trip(tripID) }
 
@@ -992,11 +1215,17 @@ struct TripDetailView: View {
                     .font(.headline)
                 Spacer()
                 if store.isCreator(of: trip) {
-                    Text("Creator")
+                    Text("Owner")
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(Color(hex: 0x6366F1))
                         .padding(.horizontal, 10).padding(.vertical, 4)
                         .background(Color(hex: 0x6366F1).opacity(0.15), in: .capsule)
+                } else {
+                    Text("Shared")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(Color(hex: 0x10B981))
+                        .padding(.horizontal, 10).padding(.vertical, 4)
+                        .background(Color(hex: 0x10B981).opacity(0.15), in: .capsule)
                 }
             }
 
@@ -1052,6 +1281,143 @@ struct TripDetailView: View {
                     }
                 }
             }
+
+            if store.isCreator(of: trip) {
+                Divider()
+                VStack(spacing: 10) {
+                    HStack(spacing: 10) {
+                        TextField("Add manual member", text: $manualMemberName)
+                            .font(.subheadline)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+                        Button { addManualMember(trip) } label: {
+                            Image(systemName: "plus")
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 40, height: 40)
+                        }
+                        .buttonStyle(.plain)
+                        .glassEffect(.regular.tint(Color(hex: 0x6366F1)).interactive(), in: .circle)
+                        .disabled(manualMemberName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+
+                    TextField("Invite by email", text: $inviteEmail)
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.emailAddress)
+                        .autocorrectionDisabled()
+                        .font(.subheadline)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+
+                    TextField("Display name (optional)", text: $inviteName)
+                        .font(.subheadline)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+
+                    Button { invite(trip) } label: {
+                        HStack(spacing: 8) {
+                            if isInviting { ProgressView().tint(.white) }
+                            Label("Invite Member", systemImage: "person.badge.plus")
+                        }
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.tint(Color(hex: 0x6366F1)).interactive(), in: .capsule)
+                    .disabled(inviteEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isInviting)
+                    .opacity(inviteEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isInviting ? 0.55 : 1)
+
+                    if let inviteMessage {
+                        Text(inviteMessage)
+                            .font(.caption)
+                            .foregroundStyle(inviteMessage.localizedCaseInsensitiveContains("invited") || inviteMessage.localizedCaseInsensitiveContains("copied") ? Theme.positive : Theme.negative)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    Divider()
+
+                    Button { generateInviteLink(trip) } label: {
+                        HStack(spacing: 8) {
+                            if isGeneratingLink { ProgressView().tint(.white) }
+                            Label("Generate Invitation Link", systemImage: "link")
+                        }
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.tint(Color(hex: 0x10B981)).interactive(), in: .capsule)
+                    .disabled(isGeneratingLink)
+
+                    if let inviteLink {
+                        HStack(spacing: 8) {
+                            Text(inviteLink.absoluteString)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Button {
+                                UIPasteboard.general.string = inviteLink.absoluteString
+                                inviteMessage = "Invitation link copied."
+                            } label: {
+                                Image(systemName: "doc.on.doc")
+                                    .font(.caption.weight(.bold))
+                            }
+                            .buttonStyle(.plain)
+                            ShareLink(item: inviteLink) {
+                                Image(systemName: "square.and.arrow.up")
+                                    .font(.caption.weight(.bold))
+                            }
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+                    }
+                }
+            }
+        }
+    }
+
+    private func addManualMember(_ trip: Trip) {
+        store.addManualMember(name: manualMemberName, to: trip.id)
+        manualMemberName = ""
+    }
+
+    private func invite(_ trip: Trip) {
+        inviteMessage = nil
+        isInviting = true
+        let email = inviteEmail
+        let name = inviteName
+        Task {
+            do {
+                try await store.inviteMember(email: email, displayName: name, to: trip.id)
+                inviteEmail = ""
+                inviteName = ""
+                inviteMessage = "Member invited and added to this trip."
+            } catch {
+                inviteMessage = (error as? AuthError)?.message ?? error.localizedDescription
+            }
+            isInviting = false
+        }
+    }
+
+    private func generateInviteLink(_ trip: Trip) {
+        inviteMessage = nil
+        isGeneratingLink = true
+        Task {
+            do {
+                inviteLink = try await store.createInvitationLink(for: trip.id)
+                inviteMessage = "Invitation link ready to share."
+            } catch {
+                inviteMessage = (error as? AuthError)?.message ?? error.localizedDescription
+            }
+            isGeneratingLink = false
         }
     }
 
@@ -1084,8 +1450,8 @@ struct TripDetailView: View {
         }
     }
 
-    /// Whether the signed-in user may edit or delete an expense: the trip creator can
-    /// modify any expense; other members can modify only the ones they paid.
+    /// Whether the signed-in account may edit or delete an expense. The trip owner may
+    /// edit everything; shared members can edit expenses they personally paid.
     private func canModify(_ trip: Trip, _ expense: Expense) -> Bool {
         store.isCreator(of: trip) || expense.payerID == store.currentUser.id
     }
@@ -1135,8 +1501,8 @@ struct TripDetailView: View {
 
 // MARK: - Add Expense
 
-/// A sheet for logging an expense. The trip creator may assign any member as payer and
-/// choose who shares it; other members can only record expenses they paid themselves.
+/// A sheet for logging an expense. The trip owner may assign any local participant as
+/// payer and choose who shares it.
 struct AddExpenseView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(TripStore.self) private var store
@@ -1492,7 +1858,7 @@ struct AddExpenseView: View {
     @MainActor
     private func uploadReceipt(_ image: UIImage, originalData: Data?) async {
         guard receiptURL == nil else { return }
-        guard let token = store.accessToken else {
+        guard store.accessToken != nil else {
             uploadError = "Sign in to upload the receipt photo."
             return
         }
@@ -1506,7 +1872,7 @@ struct AddExpenseView: View {
         isUploading = true
         uploadError = nil
         do {
-            receiptURL = try await ReceiptStorage.shared.upload(jpeg, path: path, accessToken: token)
+            receiptURL = try await store.uploadReceipt(jpeg, path: path)
         } catch {
             uploadError = (error as? AuthError)?.message ?? "Receipt upload failed."
         }
@@ -1555,7 +1921,7 @@ struct AddExpenseView: View {
                     avatar(store.currentUser, size: 30)
                     Text("You").font(.subheadline.weight(.medium))
                     Spacer()
-                    Text("Only the creator can assign payers.")
+                    Text("Only the owner can assign payers.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }

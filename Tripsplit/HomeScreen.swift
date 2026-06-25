@@ -70,7 +70,7 @@ struct HomeScreen: View {
             }
             Button("Cancel", role: .cancel) { tripToDelete = nil }
         } message: {
-            Text(tripToDelete.map { "“\($0.name)” and its expenses will be removed for everyone." } ?? "")
+            Text(tripToDelete.map { "“\($0.name)” and its expenses will be removed from your synced trips." } ?? "")
         }
         .task {
             // Load USD exchange rates so the balance card can normalize every trip's currency.
@@ -143,7 +143,8 @@ struct HomeScreen: View {
                                 }
                             }
 
-                            // Only the creator can delete, so only they get swipe-to-delete.
+                            // Synced trips are owned by this account; legacy local data may
+                            // still include a different creator id until it is re-anchored.
                             if store.isCreator(of: trip) {
                                 SwipeToDeleteRow { tripToDelete = trip } content: { row }
                             } else {
