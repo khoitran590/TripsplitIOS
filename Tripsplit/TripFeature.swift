@@ -244,9 +244,67 @@ extension Trip {
         return net
     }
 
-    /// The minimal set of transfers that settles every member's balance.
+    /// The transfers that settle the trip, computed pair-by-pair from the actual shared
+    /// expenses. Unlike a greedy "minimize the number of transactions" pass, this never
+    /// reroutes a debt through a third person: you only ever owe someone whose expenses you
+    /// shared in, for exactly your share. For each pair the two directions are netted into a
+    /// single transfer. (Greedy minimization would bundle, say, your share of B's dinner into
+    /// a larger payment to A just because A is the biggest creditor — which misreports who
+    /// you actually owe.)
     func settlements() -> [Settlement] {
-        SplitEngine.settleUp(net: netBalances(), people: members)
+        // gross[debtor][creditor] = what `debtor` owes `creditor`, i.e. the debtor's share of
+        // every expense the creditor paid, summed across the trip.
+        var gross: [Person.ID: [Person.ID: Double]] = [:]
+        for expense in expenses {
+            let payer = expense.payerID
+            for member in members where member.id != payer {
+                let owed = share(for: member.id, in: expense)
+                guard owed > 0 else { continue }
+                gross[member.id, default: [:]][payer, default: 0] += owed
+            }
+        }
+
+        // Net each unordered pair once, walking in member-list order for stable output.
+        var settlements: [Settlement] = []
+        for (index, a) in members.enumerated() {
+            for b in members[(index + 1)...] {
+                let aOwesB = gross[a.id]?[b.id] ?? 0
+                let bOwesA = gross[b.id]?[a.id] ?? 0
+                let net = SplitEngine.roundToTwo(aOwesB - bOwesA)
+                if net > 0.005 {
+                    settlements.append(Settlement(from: a, to: b, amount: net))
+                } else if net < -0.005 {
+                    settlements.append(Settlement(from: b, to: a, amount: -net))
+                }
+            }
+        }
+        return settlements
+    }
+
+    /// Amount this user still owes others after subtracting confirmed settlement payments.
+    func remainingOwed(by userID: Person.ID) -> Double {
+        settlements()
+            .filter { $0.from.id == userID }
+            .reduce(0.0) { sum, s in
+                let key = "\(s.from.id.uuidString)->\(s.to.id.uuidString)"
+                let confirmed = (settlementRecords[key] ?? [])
+                    .filter { $0.status == .confirmed }
+                    .reduce(0.0) { $0 + $1.amount }
+                return sum + max(0, SplitEngine.roundToTwo(s.amount - confirmed))
+            }
+    }
+
+    /// Amount others still owe this user after subtracting confirmed settlement payments.
+    func remainingOwed(to userID: Person.ID) -> Double {
+        settlements()
+            .filter { $0.to.id == userID }
+            .reduce(0.0) { sum, s in
+                let key = "\(s.from.id.uuidString)->\(s.to.id.uuidString)"
+                let confirmed = (settlementRecords[key] ?? [])
+                    .filter { $0.status == .confirmed }
+                    .reduce(0.0) { $0 + $1.amount }
+                return sum + max(0, SplitEngine.roundToTwo(s.amount - confirmed))
+            }
     }
 
     /// Rewrites the original creator's member id to `newID` everywhere it appears —
@@ -436,8 +494,8 @@ final class TripStore {
     var totalBudget: Double { aggregate { $0.budget(for: currentUser.id) } }
     var totalSpent: Double { aggregate { $0.spent(for: currentUser.id) } }
     var budgetAvailable: Double { SplitEngine.roundToTwo(totalBudget - totalSpent) }
-    var totalYouOwe: Double { aggregate { $0.owed(by: currentUser.id) } }
-    var totalOwedToYou: Double { aggregate { $0.owed(to: currentUser.id) } }
+    var totalYouOwe: Double { aggregate { $0.remainingOwed(by: currentUser.id) } }
+    var totalOwedToYou: Double { aggregate { $0.remainingOwed(to: currentUser.id) } }
 
     func trip(_ id: Trip.ID) -> Trip? { trips.first { $0.id == id } }
 
@@ -1207,7 +1265,8 @@ struct TripDetailView: View {
                 SettleView(
                     settlement: settlement,
                     history: historyBinding(for: settlement),
-                    currencyCode: trip?.currencyCode ?? "USD"
+                    currencyCode: trip?.currencyCode ?? "USD",
+                    currentUserID: store.currentUser.id
                 )
             }
         }
@@ -1328,9 +1387,9 @@ struct TripDetailView: View {
             HStack {
                 statColumn("Spent", money(trip.spent(for: me), trip.currencyCode), .primary)
                 Spacer()
-                statColumn("You owe", money(trip.owed(by: me), trip.currencyCode), Color(hex: 0xEF4444))
+                statColumn("You owe", money(trip.remainingOwed(by: me), trip.currencyCode), Color(hex: 0xEF4444))
                 Spacer()
-                statColumn("You're owed", money(trip.owed(to: me), trip.currencyCode), Color(hex: 0x10B981))
+                statColumn("You're owed", money(trip.remainingOwed(to: me), trip.currencyCode), Color(hex: 0x10B981))
             }
         }
         .padding(18)
@@ -1588,7 +1647,6 @@ struct AddExpenseView: View {
 
     @State private var title = ""
     @State private var amountText = ""
-    @State private var payerID: Person.ID?
     @State private var date = Date()
 
     // Split configuration (mirrors the capstone's per-method split: equal/all,
@@ -1613,6 +1671,9 @@ struct AddExpenseView: View {
     @State private var tipText = ""
     @State private var uploadError: String?
     @State private var isSaving = false
+    /// When false (default) the expense only covers the current user's share.
+    /// Toggling true unlocks the full split-method picker and per-item configuration.
+    @State private var payForOthers = false
     /// Removed items kept so a deletion can be undone (most-recent first).
     @State private var removedItems: [(item: ReceiptItem, index: Int)] = []
 
@@ -1621,7 +1682,7 @@ struct AddExpenseView: View {
     private var isCreator: Bool { trip.map { store.isCreator(of: $0) } ?? false }
 
     private var total: Double { Double(amountText) ?? 0 }
-    private var resolvedPayer: Person.ID { isCreator ? (payerID ?? store.currentUser.id) : store.currentUser.id }
+    private var resolvedPayer: Person.ID { store.currentUser.id }
 
     /// Live split computation, reused for validation, the per-person preview, and save.
     private func result(for trip: Trip) -> SplitResult {
@@ -1874,12 +1935,16 @@ struct AddExpenseView: View {
         amountText = formatted(grandTotal)
     }
 
-    /// Appends a blank item the user can fill in for something the scan missed. It splits
-    /// equally across everyone by default, matching freshly scanned items.
+    /// Appends a blank item the user can fill in for something the scan missed.
     private func addBlankItem(_ trip: Trip) {
         var item = ReceiptItem(name: "", price: 0)
-        item.splitMethod = .equalAll
-        item.participantIDs = Set(trip.members.map(\.id))
+        if payForOthers {
+            item.splitMethod = .equalAll
+            item.participantIDs = Set(trip.members.map(\.id))
+        } else {
+            item.splitMethod = .equalSelected
+            item.participantIDs = [store.currentUser.id]
+        }
         items.append(item)
     }
 
@@ -1910,13 +1975,17 @@ struct AddExpenseView: View {
         let scan = await ReceiptScanner.scan(image)
         isScanning = false
         if !scan.items.isEmpty {
-            // Each item starts split equally across everyone; the user can retune any item.
             removedItems = []
             let everyone = Set(store.trip(tripID)?.members.map(\.id) ?? [])
             items = scan.items.map { item in
                 var configured = item
-                configured.splitMethod = .equalAll
-                configured.participantIDs = everyone
+                if payForOthers {
+                    configured.splitMethod = .equalAll
+                    configured.participantIDs = everyone
+                } else {
+                    configured.splitMethod = .equalSelected
+                    configured.participantIDs = [store.currentUser.id]
+                }
                 return configured
             }
             if let tax = scan.tax { taxText = formatted(tax) }
@@ -1980,26 +2049,10 @@ struct AddExpenseView: View {
 
     private func payerCard(_ trip: Trip) -> some View {
         TripCard(title: "Paid by", icon: "creditcard.fill") {
-            if isCreator {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        ForEach(trip.members) { member in
-                            chip(
-                                label: member.id == store.currentUser.id ? "You" : member.name,
-                                selected: payerID == member.id,
-                                color: member.color
-                            ) { payerID = member.id }
-                        }
-                    }
-                }
-            } else {
-                HStack {
-                    avatar(store.currentUser, size: 30)
-                    Text("You").font(.subheadline.weight(.medium))
-                    Spacer()
-                    Text("Only the owner can assign payers.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
+            HStack {
+                avatar(store.currentUser, size: 30)
+                Text("You").font(.subheadline.weight(.medium))
+                Spacer()
             }
         }
     }
@@ -2009,39 +2062,43 @@ struct AddExpenseView: View {
     private func splitCard(_ trip: Trip) -> some View {
         let outcome = result(for: trip)
         return TripCard(title: "Split", icon: "divide.circle.fill") {
-            Menu {
-                ForEach(SplitMethod.allCases) { option in
-                    Button {
-                        method = option
-                        configureForMethod(trip)
-                    } label: {
-                        Label(option.rawValue, systemImage: option.icon)
-                    }
-                }
-            } label: {
-                HStack {
-                    Image(systemName: method.icon)
-                    Text(method.rawValue).font(.subheadline.weight(.semibold))
-                    Spacer()
-                    Image(systemName: "chevron.up.chevron.down").font(.caption).foregroundStyle(.secondary)
-                }
-                .foregroundStyle(.primary)
-                .padding(.horizontal, 14).padding(.vertical, 12)
-                .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
-            }
+            payForOthersButton(trip)
 
-            switch method {
-            case .equalAll:
-                Text("Split equally across all \(trip.members.count) member\(trip.members.count == 1 ? "" : "s").")
-                    .font(.caption).foregroundStyle(.secondary)
-            case .equalSelected:
-                memberToggleList(trip)
-            case .noSplit:
-                singlePayerList(trip)
-            case .percentage:
-                valueFields(trip, unit: "%", values: $percentages)
-            case .amount:
-                valueFields(trip, unit: currencySymbol(trip.currencyCode), values: $amounts)
+            if payForOthers {
+                Menu {
+                    ForEach(SplitMethod.allCases) { option in
+                        Button {
+                            method = option
+                            configureForMethod(trip)
+                        } label: {
+                            Label(option.rawValue, systemImage: option.icon)
+                        }
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: method.icon)
+                        Text(method.rawValue).font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Image(systemName: "chevron.up.chevron.down").font(.caption).foregroundStyle(.secondary)
+                    }
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 14).padding(.vertical, 12)
+                    .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+                }
+
+                switch method {
+                case .equalAll:
+                    Text("Split equally across all \(trip.members.count) member\(trip.members.count == 1 ? "" : "s").")
+                        .font(.caption).foregroundStyle(.secondary)
+                case .equalSelected:
+                    memberToggleList(trip)
+                case .noSplit:
+                    singlePayerList(trip)
+                case .percentage:
+                    valueFields(trip, unit: "%", values: $percentages)
+                case .amount:
+                    valueFields(trip, unit: currencySymbol(trip.currencyCode), values: $amounts)
+                }
             }
 
             if let message = outcome.message, !outcome.isValid {
@@ -2052,6 +2109,56 @@ struct AddExpenseView: View {
 
             sharePreview(trip, outcome)
         }
+    }
+
+    /// Toggle button that switches between "just me" and "pay for others" modes.
+    private func payForOthersButton(_ trip: Trip) -> some View {
+        Button {
+            withAnimation(.snappy) {
+                payForOthers.toggle()
+                if payForOthers {
+                    method = .equalAll
+                    configureForMethod(trip)
+                    if !items.isEmpty {
+                        let everyone = Set(trip.members.map(\.id))
+                        items = items.map {
+                            var u = $0
+                            u.splitMethod = .equalAll
+                            u.participantIDs = everyone
+                            return u
+                        }
+                        amountText = formatted(grandTotal)
+                    }
+                } else {
+                    method = .noSplit
+                    noSplitAssignee = store.currentUser.id
+                    if !items.isEmpty {
+                        items = items.map {
+                            var u = $0
+                            u.splitMethod = .equalSelected
+                            u.participantIDs = [store.currentUser.id]
+                            return u
+                        }
+                        amountText = formatted(grandTotal)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: payForOthers ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 18))
+                    .foregroundStyle(Theme.accent)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Pay for others")
+                        .font(.subheadline.weight(.semibold))
+                    Text(payForOthers ? "Covering other members' expenses" : "Only covering your own share")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
     }
 
     private func memberToggleList(_ trip: Trip) -> some View {
@@ -2208,6 +2315,8 @@ struct AddExpenseView: View {
     private func itemSplitsCard(_ trip: Trip) -> some View {
         let outcome = allocatedShares(trip)
         return TripCard(title: "Item splits", icon: "list.bullet.indent") {
+            payForOthersButton(trip)
+
             Text("Tap an item to choose how it's split.")
                 .font(.caption).foregroundStyle(.secondary)
 
@@ -2298,7 +2407,6 @@ struct AddExpenseView: View {
             expenseID = editing.id
             title = editing.title
             amountText = formatted(editing.amount)
-            payerID = editing.payerID
             date = editing.date
             items = editing.items
             receiptURL = editing.receiptURL
@@ -2310,9 +2418,16 @@ struct AddExpenseView: View {
                 method = .amount
                 amounts = editing.shares
             }
+            // Restore "pay for others" if anyone besides the current user was included.
+            let me = store.currentUser.id
+            payForOthers = editing.participantIDs.contains(where: { $0 != me })
+                || editing.shares.keys.contains(where: { $0 != me })
             return
         }
-        if payerID == nil { payerID = store.currentUser.id }
+        // Default: the user only covers their own share.
+        payForOthers = false
+        method = .noSplit
+        noSplitAssignee = store.currentUser.id
         if selected.isEmpty { selected = Set(trip.members.map(\.id)) }
     }
 

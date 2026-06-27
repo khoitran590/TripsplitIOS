@@ -411,7 +411,7 @@ struct TripRow: View {
     private var isNear: Bool { hasBudget && !isOver && percent >= 80 }
 
     private var net: Double {
-        SplitEngine.roundToTwo(trip.owed(to: currentUserID) - trip.owed(by: currentUserID))
+        SplitEngine.roundToTwo(trip.remainingOwed(to: currentUserID) - trip.remainingOwed(by: currentUserID))
     }
 
     private var accent: Color {

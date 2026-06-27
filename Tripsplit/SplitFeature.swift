@@ -709,6 +709,8 @@ struct SettleView: View {
     @Binding var history: [SettlementRecord]
     /// Currency code used to format amounts; defaults to USD for the split review.
     var currencyCode: String = "USD"
+    /// When set, only this user (the debtor) may record new payments; others can only approve/decline.
+    var currentUserID: Person.ID? = nil
 
     @State private var amountText = ""
     @State private var note = ""
@@ -741,7 +743,7 @@ struct SettleView: View {
                 ScrollView {
                     VStack(spacing: 18) {
                         overviewCard
-                        if remaining > 0.005 {
+                        if remaining > 0.005 && (currentUserID == nil || settlement.from.id == currentUserID) {
                             recordCard
                         }
                         historyCard
