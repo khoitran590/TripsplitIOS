@@ -682,7 +682,7 @@ final class TripStore {
     }
 
     /// Extracts the `sub` (subject = user id) claim from a JWT access token.
-    private static func userID(fromJWT token: String) -> UUID? {
+    nonisolated fileprivate static func userID(fromJWT token: String) -> UUID? {
         let parts = token.split(separator: ".")
         guard parts.count == 3 else { return nil }
         var payload = String(parts[1])
@@ -857,7 +857,9 @@ final class TripStore {
 actor TripsRepository {
     static let shared = TripsRepository()
 
-    private let session = URLSession.shared
+    private let session = BackendSecurity.secureSession
+    private var tripCache: (userID: UUID, timestamp: Date, trips: [Trip])?
+    private let cacheLifetime: TimeInterval = 60
 
     private let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
@@ -905,13 +907,23 @@ actor TripsRepository {
     /// single malformed trip can't drop the entire list. Throws only on network/HTTP
     /// failure, letting callers distinguish "couldn't reach the server" from "no trips".
     func fetch(accessToken: String) async throws -> [Trip] {
+        if let userID = TripStore.userID(fromJWT: accessToken),
+           let cached = tripCache,
+           cached.userID == userID,
+           Date().timeIntervalSince(cached.timestamp) < cacheLifetime {
+            return cached.trips
+        }
         let data = try await send("GET", "/rest/v1/trips?select=data&order=updated_at.desc", accessToken: accessToken)
         guard let rows = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
-        return rows.compactMap { row in
+        let trips: [Trip] = rows.compactMap { row in
             guard let dataValue = row["data"],
                   let dataData = try? JSONSerialization.data(withJSONObject: dataValue) else { return nil }
             return try? decoder.decode(Trip.self, from: dataData)
         }
+        if let userID = TripStore.userID(fromJWT: accessToken) {
+            tripCache = (userID, Date(), trips)
+        }
+        return trips
     }
 
     /// Inserts or updates a trip (keyed on its id) for any account that can access it.
@@ -929,11 +941,13 @@ actor TripsRepository {
             body: body,
             extraHeaders: ["Prefer": "resolution=merge-duplicates,return=minimal"]
         )
+        invalidateCache(accessToken: accessToken)
     }
 
     /// Deletes a trip the token's account owns.
     func delete(id: Trip.ID, accessToken: String) async throws {
         _ = try await send("DELETE", "/rest/v1/trips?id=eq.\(id.uuidString)", accessToken: accessToken)
+        invalidateCache(accessToken: accessToken)
     }
 
     func inviteMember(tripID: Trip.ID, email: String, accessToken: String) async throws -> InviteResult {
@@ -949,9 +963,12 @@ actor TripsRepository {
             extraHeaders: ["Prefer": "return=representation"]
         )
         if let rows = try? decoder.decode([InviteResult].self, from: data), let first = rows.first {
+            invalidateCache(accessToken: accessToken)
             return first
         }
-        return try decoder.decode(InviteResult.self, from: data)
+        let result = try decoder.decode(InviteResult.self, from: data)
+        invalidateCache(accessToken: accessToken)
+        return result
     }
 
     func createInvitationLink(tripID: Trip.ID, accessToken: String) async throws -> String {
@@ -979,9 +996,20 @@ actor TripsRepository {
             extraHeaders: ["Prefer": "return=representation"]
         )
         if let rows = try? decoder.decode([AcceptedInviteResult].self, from: data), let first = rows.first {
+            invalidateCache(accessToken: accessToken)
             return first.tripID
         }
-        return try decoder.decode(AcceptedInviteResult.self, from: data).tripID
+        let tripID = try decoder.decode(AcceptedInviteResult.self, from: data).tripID
+        invalidateCache(accessToken: accessToken)
+        return tripID
+    }
+
+    private func invalidateCache(accessToken: String) {
+        guard let userID = TripStore.userID(fromJWT: accessToken) else {
+            tripCache = nil
+            return
+        }
+        if tripCache?.userID == userID { tripCache = nil }
     }
 
     private func send(
@@ -1002,11 +1030,19 @@ actor TripsRepository {
         for (key, value) in extraHeaders { request.setValue(value, forHTTPHeaderField: key) }
         request.httpBody = body
 
-        let (data, response) = try await session.data(for: request)
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            BackendSecurity.log("Trip sync network failure", error: error)
+            throw AuthError(message: "Couldn't reach the server. Check your connection.")
+        }
         guard let http = response as? HTTPURLResponse else {
+            BackendSecurity.log("Trip sync returned no HTTP response")
             throw AuthError(message: "No response from the server.")
         }
         guard (200..<300).contains(http.statusCode) else {
+            BackendSecurity.log("Trip sync request rejected", statusCode: http.statusCode)
             let body = String(data: data, encoding: .utf8) ?? ""
             let detail = ReceiptStorage.messageField(from: body)
             throw AuthError(

@@ -1,6 +1,7 @@
 import SwiftUI
 import Observation
 import Security
+import os
 
 // MARK: - Supabase configuration
 
@@ -11,11 +12,11 @@ import Security
 /// set, the auth screens show a "not configured" message instead of failing silently.
 enum SupabaseConfig {
     /// The project's API URL (derived from the project ref), no trailing slash.
-    static let url = "https://ttgwzwvlochpvtxrxkoz.supabase.co"
+    nonisolated static let url = "https://ttgwzwvlochpvtxrxkoz.supabase.co"
     /// The project's anon/public API key.
-    static let anonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR0Z3d6d3Zsb2NocHZ0eHJ4a296Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIyNTUxMzksImV4cCI6MjA5NzgzMTEzOX0.IfrhBTPNEozGUHJb2J_IH2E5RABFK4PlQihZAOx79f4"
+    nonisolated static let anonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR0Z3d6d3Zsb2NocHZ0eHJ4a296Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIyNTUxMzksImV4cCI6MjA5NzgzMTEzOX0.IfrhBTPNEozGUHJb2J_IH2E5RABFK4PlQihZAOx79f4"
 
-    static var isConfigured: Bool {
+    nonisolated static var isConfigured: Bool {
         !url.contains("YOUR-PROJECT-REF") && !anonKey.contains("YOUR-SUPABASE-ANON-KEY")
     }
 }
@@ -34,6 +35,53 @@ struct AuthError: Error, LocalizedError {
     }
 }
 
+// MARK: - Backend security helpers
+
+enum BackendSecurity {
+    nonisolated static let logger = Logger(subsystem: "com.tripsplit.app", category: "backend")
+
+    nonisolated static var secureSession: URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 20
+        configuration.timeoutIntervalForResource = 60
+        configuration.waitsForConnectivity = true
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: configuration)
+    }
+
+    nonisolated static func normalizedEmail(_ email: String) -> String {
+        email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    nonisolated static func isValidEmail(_ email: String) -> Bool {
+        let trimmed = normalizedEmail(email)
+        guard trimmed.count <= 254 else { return false }
+        let pattern = #"^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$"#
+        return trimmed.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    nonisolated static func isStrongPassword(_ password: String) -> Bool {
+        password.count >= 8 && password.count <= 256
+    }
+
+    nonisolated static func isSafeStoragePath(_ path: String) -> Bool {
+        guard path.count <= 180, !path.hasPrefix("/"), !path.contains("..") else { return false }
+        return path.range(of: #"^[a-f0-9-]+/[A-Za-z0-9._-]+\.(jpg|jpeg)$"#, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    nonisolated static func log(_ message: String, statusCode: Int? = nil, error: Error? = nil) {
+        if let statusCode {
+            logger.error("\(message, privacy: .public) status=\(statusCode, privacy: .public)")
+        } else if let error {
+            logger.error("\(message, privacy: .public) error=\(String(describing: error), privacy: .private)")
+        } else {
+            logger.error("\(message, privacy: .public)")
+        }
+    }
+}
+
 /// The persisted result of a successful sign-in.
 struct AuthSession: Codable, Equatable {
     var accessToken: String
@@ -46,7 +94,7 @@ struct AuthSession: Codable, Equatable {
 /// Talks to Supabase Auth (`/auth/v1`) directly over URLSession — no SDK required.
 actor AuthService {
     static let shared = AuthService()
-    private let session = URLSession.shared
+    private let session = BackendSecurity.secureSession
 
     private struct TokenResponse: Decodable {
         let accessToken: String?
@@ -89,6 +137,7 @@ actor AuthService {
     }
 
     func signIn(email: String, password: String) async throws -> AuthSession {
+        let email = try validateCredentials(email: email, password: password)
         let data = try await post("/auth/v1/token?grant_type=password", body: ["email": email, "password": password])
         let token = try JSONDecoder().decode(TokenResponse.self, from: data)
         guard let access = token.accessToken, let refresh = token.refreshToken else {
@@ -98,6 +147,10 @@ actor AuthService {
     }
 
     func signUp(email: String, password: String) async throws -> SignUpOutcome {
+        let email = try validateCredentials(email: email, password: password)
+        guard BackendSecurity.isStrongPassword(password) else {
+            throw AuthError(message: "Use a password with at least 8 characters.")
+        }
         let data = try await post("/auth/v1/signup", body: ["email": email, "password": password])
         let token = try? JSONDecoder().decode(TokenResponse.self, from: data)
         if let access = token?.accessToken, let refresh = token?.refreshToken {
@@ -108,6 +161,7 @@ actor AuthService {
     }
 
     func resetPassword(email: String) async throws {
+        let email = try validateEmail(email)
         _ = try await send("POST", "/auth/v1/recover", body: ["email": email])
     }
 
@@ -123,7 +177,26 @@ actor AuthService {
     /// Updates the signed-in user's password. Requires the user's own access token
     /// (the anon key is not sufficient for this endpoint).
     func updatePassword(accessToken: String, newPassword: String) async throws {
+        guard BackendSecurity.isStrongPassword(newPassword) else {
+            throw AuthError(message: "Use a password with at least 8 characters.")
+        }
         _ = try await send("PUT", "/auth/v1/user", body: ["password": newPassword], accessToken: accessToken)
+    }
+
+    private func validateCredentials(email: String, password: String) throws -> String {
+        let email = try validateEmail(email)
+        guard !password.isEmpty, password.count <= 256 else {
+            throw AuthError(message: "Enter your password.")
+        }
+        return email
+    }
+
+    private func validateEmail(_ email: String) throws -> String {
+        let normalized = BackendSecurity.normalizedEmail(email)
+        guard BackendSecurity.isValidEmail(normalized) else {
+            throw AuthError(message: "Enter a valid email address.")
+        }
+        return normalized
     }
 
     // MARK: Networking
@@ -158,6 +231,7 @@ actor AuthService {
         do {
             (data, response) = try await session.data(for: request)
         } catch {
+            BackendSecurity.log("Auth network request failed", error: error)
             throw AuthError(message: "Couldn't reach the server. Check your connection.")
         }
 
@@ -165,6 +239,7 @@ actor AuthService {
             throw AuthError(message: "No response from the server.")
         }
         guard (200..<300).contains(http.statusCode) else {
+            BackendSecurity.log("Auth request rejected", statusCode: http.statusCode)
             if let decoded = try? JSONDecoder().decode(GoTrueError.self, from: data) {
                 throw AuthError(message: decoded.text, statusCode: http.statusCode)
             }

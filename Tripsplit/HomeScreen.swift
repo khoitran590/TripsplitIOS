@@ -15,19 +15,12 @@ struct HomeScreen: View {
     @State private var splitTrip: Trip?
     @State private var expenseTrip: Trip?
     @State private var tripToDelete: Trip?
+    @State private var showAllTransactions = false
 
     var body: some View {
-        ZStack {
-            // Screen background gradient — light pastel, deep "Arctic Depths" in dark mode.
-            LinearGradient(
-                colors: Theme.homeGradient,
-                startPoint: .top, endPoint: .bottom
-            )
-            .ignoresSafeArea()
-
+        NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    header
+                VStack(alignment: .leading, spacing: 24) {
                     syncBanner
                     BalanceCard()
                     CurrencyConverterCard()
@@ -35,8 +28,32 @@ struct HomeScreen: View {
                     tripsSection
                     recentTransactions
                 }
-                .padding()
-                .padding(.bottom, 90) // Clearance for the floating dock.
+                .padding(.horizontal)
+                .padding(.bottom, 90)
+            }
+            .background {
+                LinearGradient(
+                    colors: Theme.homeGradient,
+                    startPoint: .top, endPoint: .bottom
+                )
+                .ignoresSafeArea()
+            }
+            .navigationTitle("Hi, \(greetingName)")
+            .refreshable {
+                await store.loadFromCloud()
+                await store.refreshRates()
+            }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    HStack(spacing: 8) {
+                        appearanceToggle
+                        ProfileAvatar(
+                            imageData: store.profileImageData,
+                            initials: store.currentUser.initials,
+                            size: 34
+                        )
+                    }
+                }
             }
         }
         .sheet(isPresented: $showAddTrip) {
@@ -119,12 +136,19 @@ struct HomeScreen: View {
             }
 
             if store.myTrips.isEmpty {
-                Text("No trips yet. Tap Add Trip to create one.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 24)
-                    .glassEffect(.regular, in: .rect(cornerRadius: 20))
+                VStack(spacing: 12) {
+                    Image(systemName: "suitcase")
+                        .font(.system(size: 32))
+                        .foregroundStyle(.tertiary)
+                    Text("No trips yet")
+                        .font(.subheadline.weight(.medium))
+                    Text("Create a trip to start tracking expenses.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 28)
+                .glassEffect(.regular, in: .rect(cornerRadius: 20))
             } else {
                 GlassEffectContainer(spacing: 12) {
                     VStack(spacing: 12) {
@@ -199,45 +223,6 @@ struct HomeScreen: View {
         return trimmed.isEmpty ? "there" : trimmed
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-                Text("TRIP VITALS")
-                    .font(.caption.weight(.semibold))
-                    .tracking(1.5)
-            }
-            .foregroundStyle(.secondary)
-
-            HStack(alignment: .center, spacing: 14) {
-                Text("Hi, \(greetingName)")
-                    .font(.system(size: 40, weight: .regular, design: .serif))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-                Spacer(minLength: 0)
-                appearanceToggle
-                ProfileAvatar(
-                    imageData: store.profileImageData,
-                    initials: store.currentUser.initials,
-                    size: 56
-                )
-            }
-
-            HStack(spacing: 12) {
-                Image(systemName: "mappin.and.ellipse")
-                    .font(.system(size: 16, weight: .semibold))
-                    .frame(width: 40, height: 40)
-                    .glassEffect(.regular, in: .circle)
-                Text("Your itinerary is on track.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .glassEffect(.regular, in: .rect(cornerRadius: 24))
-        }
-    }
-
-    /// A glass button that switches the app between System, Light, and Dark appearance.
     private var appearanceToggle: some View {
         Menu {
             Picker("Appearance", selection: $appearance) {
@@ -247,10 +232,6 @@ struct HomeScreen: View {
             }
         } label: {
             Image(systemName: appearance.icon)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.primary)
-                .frame(width: 44, height: 44)
-                .glassEffect(.regular.interactive(), in: .circle)
         }
         .accessibilityLabel("Appearance: \(appearance.label)")
     }
@@ -301,18 +282,38 @@ struct HomeScreen: View {
 
     private var recentTransactions: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Recent Transactions")
-                .font(.headline)
-                .padding(.leading, 4)
+            HStack {
+                Text("Recent Transactions")
+                    .font(.headline)
+                    .padding(.leading, 4)
+                Spacer()
+                if allTransactions.count > 5 {
+                    Button {
+                        withAnimation(.snappy) { showAllTransactions.toggle() }
+                    } label: {
+                        Text(showAllTransactions ? "Show Less" : "See All")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.accent)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
 
-            let transactions = allTransactions
-            if transactions.isEmpty {
-                Text("No transactions yet. Add an expense to a trip to see it here.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 24)
-                    .glassEffect(.regular, in: .rect(cornerRadius: 20))
+            let transactions = showAllTransactions ? allTransactions : Array(allTransactions.prefix(5))
+            if allTransactions.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "tray")
+                        .font(.system(size: 32))
+                        .foregroundStyle(.tertiary)
+                    Text("No transactions yet")
+                        .font(.subheadline.weight(.medium))
+                    Text("Add an expense to a trip to see it here.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 28)
+                .glassEffect(.regular, in: .rect(cornerRadius: 20))
             } else {
                 GlassEffectContainer(spacing: 12) {
                     VStack(spacing: 12) {
@@ -334,13 +335,9 @@ struct BalanceCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            HStack {
-                Label("Budget Available", systemImage: "wallet.bifold.fill")
-                    .font(.subheadline.weight(.medium))
-                Spacer()
-                Image(systemName: "ellipsis")
-            }
-            .foregroundStyle(.white.opacity(0.95))
+            Label("Budget Available", systemImage: "wallet.bifold.fill")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.white.opacity(0.95))
 
             Text(money(store.budgetAvailable, "USD"))
                 .font(.system(size: 36, weight: .bold, design: .rounded))

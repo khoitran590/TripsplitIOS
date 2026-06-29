@@ -39,6 +39,7 @@ create table if not exists public.trip_invitations (
     invited_by  uuid not null references auth.users (id) on delete cascade,
     status      text not null default 'pending' check (status in ('pending', 'accepted', 'revoked')),
     created_at  timestamptz not null default now(),
+    expires_at  timestamptz not null default (now() + interval '14 days'),
     accepted_at timestamptz
 );
 
@@ -49,6 +50,11 @@ set token = encode(gen_random_bytes(18), 'hex')
 where token is null;
 alter table public.trip_invitations alter column token set not null;
 alter table public.trip_invitations alter column token set default encode(gen_random_bytes(18), 'hex');
+alter table public.trip_invitations add column if not exists expires_at timestamptz;
+update public.trip_invitations
+set expires_at = coalesce(expires_at, created_at + interval '14 days', now() + interval '14 days');
+alter table public.trip_invitations alter column expires_at set default (now() + interval '14 days');
+alter table public.trip_invitations alter column expires_at set not null;
 create unique index if not exists trip_invitations_token_idx on public.trip_invitations (token);
 
 create index if not exists trip_members_user_id_idx on public.trip_members (user_id);
@@ -126,6 +132,10 @@ security definer
 set search_path = public
 as $$
 begin
+    if auth.uid() is null then
+        raise exception 'You must be signed in.';
+    end if;
+
     insert into public.trip_members (trip_id, user_id, role)
     values (new.id, new.user_id, 'owner')
     on conflict (trip_id, user_id) do update set role = 'owner';
@@ -153,6 +163,15 @@ declare
     target_user_id uuid;
     invite_id uuid;
 begin
+    if auth.uid() is null then
+        raise exception 'You must be signed in.';
+    end if;
+    if normalized_email is null
+       or normalized_email !~* '^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$'
+       or length(normalized_email) > 254 then
+        raise exception 'Enter a valid email address.';
+    end if;
+
     if not exists (
         select 1
         from public.trips t
@@ -195,6 +214,10 @@ declare
     invite_id uuid;
     invite_token text;
 begin
+    if auth.uid() is null then
+        raise exception 'You must be signed in.';
+    end if;
+
     if not exists (
         select 1
         from public.trips t
@@ -220,10 +243,18 @@ as $$
 declare
     invite_trip_id uuid;
 begin
+    if auth.uid() is null then
+        raise exception 'You must be signed in.';
+    end if;
+    if p_token is null or p_token !~ '^[a-f0-9]{36}$' then
+        raise exception 'This invitation link is invalid or has been revoked.';
+    end if;
+
     select i.trip_id into invite_trip_id
     from public.trip_invitations i
     where i.token = p_token
-      and i.status <> 'revoked';
+      and i.status = 'pending'
+      and i.expires_at > now();
 
     if invite_trip_id is null then
         raise exception 'This invitation link is invalid or has been revoked.';
@@ -289,9 +320,6 @@ create policy "Trip members can view memberships"
     using (public.is_trip_member(trip_id));
 
 drop policy if exists "Trip members can add memberships" on public.trip_members;
-create policy "Trip members can add memberships"
-    on public.trip_members for insert
-    with check (public.is_trip_member(trip_id));
 
 drop policy if exists "Trip members can view invitations" on public.trip_invitations;
 create policy "Trip members can view invitations"

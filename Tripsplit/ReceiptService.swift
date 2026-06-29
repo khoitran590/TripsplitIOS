@@ -181,7 +181,7 @@ struct DocumentCameraView: UIViewControllerRepresentable {
 actor ReceiptStorage {
     static let shared = ReceiptStorage()
 
-    private let session = URLSession.shared
+    private let session = BackendSecurity.secureSession
     private let bucket = "receipts"
 
     /// Pulls a human-readable reason out of a Supabase error body, which is JSON like
@@ -198,6 +198,13 @@ actor ReceiptStorage {
     /// Uploads JPEG data at `path` (e.g. "<userID>/<expenseID>.jpg") and returns the
     /// public URL. The signed-in user's token authorizes the write via storage RLS.
     func upload(_ jpeg: Data, path: String, accessToken: String) async throws -> String {
+        guard jpeg.count <= 5_000_000 else {
+            throw AuthError(message: "Receipt photos must be smaller than 5 MB.")
+        }
+        guard BackendSecurity.isSafeStoragePath(path) else {
+            BackendSecurity.log("Blocked unsafe storage path")
+            throw AuthError(message: "Receipt upload path is invalid.")
+        }
         guard SupabaseConfig.isConfigured,
               let url = URL(string: "\(SupabaseConfig.url)/storage/v1/object/\(bucket)/\(path)") else {
             throw AuthError(message: "Supabase isn't configured.")
@@ -209,11 +216,19 @@ actor ReceiptStorage {
         request.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
         request.setValue("true", forHTTPHeaderField: "x-upsert")
 
-        let (data, response) = try await session.upload(for: request, from: jpeg)
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await session.upload(for: request, from: jpeg)
+        } catch {
+            BackendSecurity.log("Receipt upload network failure", error: error)
+            throw AuthError(message: "Receipt upload failed. Check your connection.")
+        }
         guard let http = response as? HTTPURLResponse else {
+            BackendSecurity.log("Receipt upload returned no HTTP response")
             throw AuthError(message: "Receipt upload failed.")
         }
         guard (200..<300).contains(http.statusCode) else {
+            BackendSecurity.log("Receipt upload rejected", statusCode: http.statusCode)
             // Surface the most common, actionable cause: the bucket hasn't been created.
             // Supabase returns 404 with `{"error":"Bucket not found"}` in that case.
             let body = String(data: data, encoding: .utf8) ?? ""

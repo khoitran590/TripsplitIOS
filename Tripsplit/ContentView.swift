@@ -16,7 +16,7 @@ import UIKit
 enum DockTab: String, CaseIterable, Identifiable {
     case home = "Home"
     case map = "Map"
-    case rec = "Rec"
+    case rec = "Explore"
     case settings = "Settings"
 
     var id: Self { self }
@@ -25,7 +25,7 @@ enum DockTab: String, CaseIterable, Identifiable {
         switch self {
         case .home: "house.fill"
         case .map: "map.fill"
-        case .rec: "record.circle.fill"
+        case .rec: "globe"
         case .settings: "gearshape.fill"
         }
     }
@@ -82,8 +82,12 @@ struct MapScreen: View {
     )
 
     var body: some View {
-        Map(position: $position)
-            .ignoresSafeArea()
+        NavigationStack {
+            Map(position: $position)
+                .ignoresSafeArea(edges: .bottom)
+                .navigationTitle("Map")
+                .navigationBarTitleDisplayMode(.inline)
+        }
     }
 }
 
@@ -100,32 +104,9 @@ struct RecScreen: View {
     }
 
     var body: some View {
-        ZStack {
-            LinearGradient(
-                colors: [Color(.systemPurple).opacity(0.22), Color(.systemBackground)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
-
+        NavigationStack {
             ScrollView {
                 LazyVStack(spacing: 20) {
-                    // Header
-                    HStack {
-                        Spacer()
-                        Text("Explore")
-                            .font(.title2.bold())
-                        Spacer()
-                    }
-                    .overlay(alignment: .trailing) {
-                        Image(systemName: "magnifyingglass")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(.primary)
-                            .frame(width: 40, height: 40)
-                            .glassEffect(.regular.interactive(), in: .circle)
-                    }
-
-                    // Filter chips
                     GlassEffectContainer(spacing: 14) {
                         HStack(spacing: 10) {
                             ForEach(ExploreFeed.allCases) { option in
@@ -142,13 +123,29 @@ struct RecScreen: View {
                         }
                     }
 
-                    // Cards
                     ForEach(destinations) { destination in
                         DestinationCard(destination: destination)
                     }
                 }
                 .padding()
-                .padding(.bottom, 80) // Clearance for the floating dock.
+                .padding(.bottom, 80)
+            }
+            .background {
+                LinearGradient(
+                    colors: [Color(.systemPurple).opacity(0.22), Color(.systemBackground)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+            }
+            .navigationTitle("Explore")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                    } label: {
+                        Image(systemName: "magnifyingglass")
+                    }
+                }
             }
         }
     }
@@ -381,19 +378,31 @@ struct SettingsScreen: View {
     @State private var showChangePassword = false
 
     var body: some View {
-        ZStack {
-            // A soft backdrop so the Liquid Glass cards have content to refract.
-            LinearGradient(
-                colors: [Color(.systemIndigo).opacity(0.25), Color(.systemBackground)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
-
+        Group {
             if auth.isAuthenticated {
-                settingsContent
+                NavigationStack {
+                    settingsContent
+                        .background {
+                            LinearGradient(
+                                colors: [Color(.systemIndigo).opacity(0.25), Color(.systemBackground)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                            .ignoresSafeArea()
+                        }
+                        .navigationTitle("Settings")
+                }
             } else {
-                AuthView()
+                ZStack {
+                    LinearGradient(
+                        colors: [Color(.systemIndigo).opacity(0.25), Color(.systemBackground)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .ignoresSafeArea()
+
+                    AuthView()
+                }
             }
         }
     }
@@ -414,9 +423,6 @@ struct SettingsScreen: View {
     private var settingsContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                Text("Settings")
-                    .font(.largeTitle.bold())
-
                 ProfileCard(name: displayName, email: auth.email ?? "", imageData: store.profileImageData)
 
                 SettingsSection("Account") {
