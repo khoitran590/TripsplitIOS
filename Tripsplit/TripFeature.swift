@@ -1,8 +1,10 @@
 import SwiftUI
 import Observation
+import Combine
 import PhotosUI
 import UIKit
 import VisionKit
+import MapKit
 
 // MARK: - Trip Models
 
@@ -135,6 +137,36 @@ struct ReceiptItem: Identifiable, Codable, Hashable {
     }
 }
 
+/// A comment on an expense, visible to all trip members.
+struct ExpenseComment: Identifiable, Codable {
+    var id = UUID()
+    var authorID: Person.ID
+    var authorName: String
+    var text: String
+    var date: Date
+
+    private enum CodingKeys: String, CodingKey {
+        case id, authorID, authorName, text, date
+    }
+
+    init(id: UUID = UUID(), authorID: Person.ID, authorName: String, text: String, date: Date = Date()) {
+        self.id = id
+        self.authorID = authorID
+        self.authorName = authorName
+        self.text = text
+        self.date = date
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        authorID = try c.decode(Person.ID.self, forKey: .authorID)
+        authorName = try c.decodeIfPresent(String.self, forKey: .authorName) ?? ""
+        text = try c.decode(String.self, forKey: .text)
+        date = try c.decode(Date.self, forKey: .date)
+    }
+}
+
 /// A shared trip. The creator owns the row, and any invited Supabase user in
 /// `trip_members` may read/update the same cloud copy. `members` are the bill-splitting
 /// participants shown in the app; authenticated participants use their Supabase user id.
@@ -152,6 +184,16 @@ struct Trip: Identifiable, Codable {
     /// syncs to the shared cloud row alongside members, budgets, and expenses.
     var settlementRecords: [String: [SettlementRecord]] = [:]
 
+    var comments: [String: [ExpenseComment]] = [:]
+
+    /// Optional trip metadata surfaced in the redesigned trip cards and hero header.
+    /// All optional so trips saved before these existed keep loading.
+    var location: String? = nil
+    var startDate: Date? = nil
+    var endDate: Date? = nil
+    /// Public URL of the uploaded cover photo (in the shared `receipts` bucket).
+    var coverImageURL: String? = nil
+
     init(
         id: UUID = UUID(),
         name: String,
@@ -160,7 +202,12 @@ struct Trip: Identifiable, Codable {
         members: [Person],
         budgets: [Person.ID: Double],
         expenses: [Expense] = [],
-        settlementRecords: [String: [SettlementRecord]] = [:]
+        settlementRecords: [String: [SettlementRecord]] = [:],
+        comments: [String: [ExpenseComment]] = [:],
+        location: String? = nil,
+        startDate: Date? = nil,
+        endDate: Date? = nil,
+        coverImageURL: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -170,10 +217,16 @@ struct Trip: Identifiable, Codable {
         self.budgets = budgets
         self.expenses = expenses
         self.settlementRecords = settlementRecords
+        self.comments = comments
+        self.location = location
+        self.startDate = startDate
+        self.endDate = endDate
+        self.coverImageURL = coverImageURL
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, currencyCode, creatorID, members, budgets, expenses, settlementRecords
+        case id, name, currencyCode, creatorID, members, budgets, expenses, settlementRecords, comments
+        case location, startDate, endDate, coverImageURL
     }
 
     // Custom decoder so trips saved before `settlementRecords` (and the new expense
@@ -188,6 +241,40 @@ struct Trip: Identifiable, Codable {
         budgets = try c.decodeIfPresent([Person.ID: Double].self, forKey: .budgets) ?? [:]
         expenses = try c.decodeIfPresent([Expense].self, forKey: .expenses) ?? []
         settlementRecords = try c.decodeIfPresent([String: [SettlementRecord]].self, forKey: .settlementRecords) ?? [:]
+        comments = try c.decodeIfPresent([String: [ExpenseComment]].self, forKey: .comments) ?? [:]
+        location = try c.decodeIfPresent(String.self, forKey: .location)
+        startDate = try c.decodeIfPresent(Date.self, forKey: .startDate)
+        endDate = try c.decodeIfPresent(Date.self, forKey: .endDate)
+        coverImageURL = try c.decodeIfPresent(String.self, forKey: .coverImageURL)
+    }
+
+    /// A human-readable date range, e.g. "Apr 1–30, 2025", "Apr 28 – May 3, 2025", or a
+    /// single date when only one is set. `nil` when no dates are present.
+    var dateRangeText: String? {
+        let cal = Calendar.current
+        switch (startDate, endDate) {
+        case let (start?, end?):
+            if cal.isDate(start, inSameDayAs: end) {
+                return start.formatted(.dateTime.month(.abbreviated).day().year())
+            }
+            // Same month & year → "Apr 1–30, 2025"
+            if cal.component(.year, from: start) == cal.component(.year, from: end),
+               cal.component(.month, from: start) == cal.component(.month, from: end) {
+                let head = start.formatted(.dateTime.month(.abbreviated).day())
+                let endDay = cal.component(.day, from: end)
+                let year = cal.component(.year, from: start)
+                return "\(head)–\(endDay), \(year)"
+            }
+            let head = start.formatted(.dateTime.month(.abbreviated).day())
+            let tail = end.formatted(.dateTime.month(.abbreviated).day().year())
+            return "\(head) – \(tail)"
+        case let (start?, nil):
+            return start.formatted(.dateTime.month(.abbreviated).day().year())
+        case let (nil, end?):
+            return end.formatted(.dateTime.month(.abbreviated).day().year())
+        case (nil, nil):
+            return nil
+        }
     }
 }
 
@@ -487,6 +574,49 @@ final class TripStore {
         }
     }
 
+    /// The multiplier to convert an amount from `from` into `to` (e.g. 1 USD → ~25,000 VND).
+    /// Returns 1 when the currencies match, or `nil` when live rates can't be fetched so
+    /// callers can avoid silently relabeling amounts without actually converting them.
+    func conversionRate(from: String, to: String) async -> Double? {
+        if from == to { return 1 }
+        guard let rates = try? await CurrencyService.shared.rates(base: from),
+              let rate = rates[to], rate > 0 else { return nil }
+        return rate
+    }
+
+    /// Returns a copy of `trip` with every monetary value multiplied by `rate`: member
+    /// budgets, each expense's amount / tax / tip / per-member shares / receipt-item prices
+    /// and exact-amount splits, and recorded settlement payments. Used when a trip's
+    /// currency changes so stored amounts reflect the real converted value instead of being
+    /// relabeled (e.g. a 100 USD expense becoming the equivalent VND amount, not "100 ₫").
+    func applyingCurrencyConversion(_ trip: Trip, rate: Double) -> Trip {
+        func conv(_ value: Double) -> Double { SplitEngine.roundToTwo(value * rate) }
+        var converted = trip
+        converted.budgets = converted.budgets.mapValues(conv)
+        converted.expenses = converted.expenses.map { expense in
+            var e = expense
+            e.amount = conv(e.amount)
+            e.tax = conv(e.tax)
+            e.tip = conv(e.tip)
+            e.shares = e.shares.mapValues(conv)
+            e.items = e.items.map { item in
+                var i = item
+                i.price = conv(i.price)
+                i.amounts = i.amounts.mapValues(conv)
+                return i
+            }
+            return e
+        }
+        converted.settlementRecords = converted.settlementRecords.mapValues { records in
+            records.map { record in
+                var r = record
+                r.amount = conv(r.amount)
+                return r
+            }
+        }
+        return converted
+    }
+
     private func aggregate(_ value: (Trip) -> Double) -> Double {
         SplitEngine.roundToTwo(myTrips.reduce(0) { $0 + toUSD(value($1), from: $1.currencyCode) })
     }
@@ -524,6 +654,7 @@ final class TripStore {
     func deleteExpense(_ expenseID: Expense.ID, from tripID: Trip.ID) {
         guard let index = trips.firstIndex(where: { $0.id == tripID }) else { return }
         trips[index].expenses.removeAll { $0.id == expenseID }
+        trips[index].comments.removeValue(forKey: expenseID.uuidString)
         persist(trips[index])
     }
 
@@ -791,6 +922,14 @@ final class TripStore {
         }
     }
 
+    /// Uploads a trip cover photo to the shared `receipts` bucket and returns its public
+    /// URL. The path is namespaced under the uploader's lowercased user id so storage RLS
+    /// (which compares the leading folder to `auth.uid()`) accepts the write.
+    func uploadTripCover(_ jpeg: Data, tripID: Trip.ID) async throws -> String {
+        let path = "\(currentUser.id.uuidString.lowercased())/cover-\(tripID.uuidString.lowercased()).jpg"
+        return try await uploadReceipt(jpeg, path: path)
+    }
+
     private func authorizedAccessToken() async throws -> String? {
         if let accessToken { return accessToken }
         guard let refreshed = try await refreshAccessToken?() else { return nil }
@@ -843,6 +982,29 @@ final class TripStore {
 
     func isFullySettled(tripID: Trip.ID, _ settlement: Settlement) -> Bool {
         remaining(tripID: tripID, for: settlement) <= 0.005
+    }
+
+    // MARK: Comments
+
+    func comments(for expenseID: Expense.ID, in tripID: Trip.ID) -> [ExpenseComment] {
+        trip(tripID)?.comments[expenseID.uuidString] ?? []
+    }
+
+    func addComment(_ text: String, to expenseID: Expense.ID, in tripID: Trip.ID) {
+        guard let index = trips.firstIndex(where: { $0.id == tripID }) else { return }
+        let comment = ExpenseComment(
+            authorID: currentUser.id,
+            authorName: currentUser.name,
+            text: text
+        )
+        trips[index].comments[expenseID.uuidString, default: []].append(comment)
+        persist(trips[index])
+    }
+
+    func deleteComment(_ commentID: ExpenseComment.ID, from expenseID: Expense.ID, in tripID: Trip.ID) {
+        guard let index = trips.firstIndex(where: { $0.id == tripID }) else { return }
+        trips[index].comments[expenseID.uuidString]?.removeAll { $0.id == commentID }
+        persist(trips[index])
     }
 }
 
@@ -1083,6 +1245,10 @@ struct AddTripView: View {
     @Environment(TripStore.self) private var store
 
     @State private var name = ""
+    @State private var location = ""
+    @State private var hasDates = false
+    @State private var startDate = Date()
+    @State private var endDate = Date()
     @State private var currency = "USD"
     @State private var budgetText = ""
     @State private var memberName = ""
@@ -1104,6 +1270,7 @@ struct AddTripView: View {
                 ScrollView {
                     VStack(spacing: 18) {
                         detailsCard
+                        datesCard
                         budgetCard
                         membersCard
                     }
@@ -1132,6 +1299,8 @@ struct AddTripView: View {
                 .padding(.vertical, 12)
                 .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
 
+            LocationField(text: $location)
+
             HStack {
                 Text("Currency").font(.subheadline).foregroundStyle(.secondary)
                 Spacer()
@@ -1148,6 +1317,19 @@ struct AddTripView: View {
                     .padding(.vertical, 8)
                     .background(.secondary.opacity(0.12), in: .capsule)
                 }
+            }
+        }
+    }
+
+    private var datesCard: some View {
+        TripCard(title: "Dates", icon: "calendar") {
+            Toggle("Add travel dates", isOn: $hasDates.animation(.snappy))
+                .font(.subheadline.weight(.medium))
+            if hasDates {
+                DatePicker("Start", selection: $startDate, displayedComponents: .date)
+                    .font(.subheadline)
+                DatePicker("End", selection: $endDate, in: startDate..., displayedComponents: .date)
+                    .font(.subheadline)
             }
         }
     }
@@ -1220,15 +1402,264 @@ struct AddTripView: View {
 
     private func create() {
         let me = store.currentUser
+        let trimmedLocation = location.trimmingCharacters(in: .whitespaces)
         let trip = Trip(
             name: name.trimmingCharacters(in: .whitespaces),
             currencyCode: currency,
             creatorID: me.id,
             members: [me] + members,
-            budgets: [me.id: Double(budgetText) ?? 0]
+            budgets: [me.id: Double(budgetText) ?? 0],
+            location: trimmedLocation.isEmpty ? nil : trimmedLocation,
+            startDate: hasDates ? startDate : nil,
+            endDate: hasDates ? endDate : nil
         )
         store.addTrip(trip)
         dismiss()
+    }
+}
+
+// MARK: - Edit Trip
+
+/// Edits a trip's name, location, dates, currency, cover photo, and the signed-in user's
+/// budget. Available to the trip owner from the detail hero header.
+struct EditTripView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(TripStore.self) private var store
+    let tripID: Trip.ID
+
+    @State private var name = ""
+    @State private var location = ""
+    @State private var hasDates = false
+    @State private var startDate = Date()
+    @State private var endDate = Date()
+    @State private var currency = "USD"
+    @State private var budgetText = ""
+    @State private var coverPick: PhotosPickerItem?
+    @State private var coverImage: UIImage?
+    @State private var isSaving = false
+    @State private var errorMessage: String?
+    @State private var loaded = false
+
+    /// The trip's currency and the user's budget at load time, so switching the currency
+    /// picker can re-derive the converted budget from a stable origin (rather than
+    /// compounding conversions) and `save()` knows whether a conversion is needed.
+    @State private var originalCurrency = "USD"
+    @State private var originalBudget: Double = 0
+
+    private var trip: Trip? { store.trip(tripID) }
+
+    private var canSave: Bool {
+        !name.trimmingCharacters(in: .whitespaces).isEmpty && !isSaving
+    }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                LinearGradient(colors: Theme.sheetGradient, startPoint: .top, endPoint: .bottom)
+                    .ignoresSafeArea()
+
+                ScrollView {
+                    VStack(spacing: 18) {
+                        coverCard
+                        detailsCard
+                        datesCard
+                        budgetCard
+                        if let errorMessage {
+                            Text(errorMessage)
+                                .font(.caption)
+                                .foregroundStyle(Theme.negative)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    .padding()
+                    .padding(.bottom, 24)
+                }
+            }
+            .navigationTitle("Edit Trip")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    if isSaving {
+                        ProgressView()
+                    } else {
+                        Button("Save") { save() }.disabled(!canSave)
+                    }
+                }
+            }
+            .task { load() }
+            .onChange(of: currency) { _, _ in currencyChanged() }
+            .onChange(of: coverPick) { _, pick in
+                guard let pick else { return }
+                Task {
+                    if let data = try? await pick.loadTransferable(type: Data.self),
+                       let image = UIImage(data: data) {
+                        coverImage = image
+                    }
+                }
+            }
+        }
+    }
+
+    private var coverCard: some View {
+        TripCard(title: "Cover Photo", icon: "photo.fill") {
+            ZStack {
+                if let coverImage {
+                    Image(uiImage: coverImage).resizable().scaledToFill()
+                } else if let trip {
+                    TripCoverView(trip: trip)
+                }
+            }
+            .frame(height: 150)
+            .frame(maxWidth: .infinity)
+            .clipped()
+            .clipShape(.rect(cornerRadius: 14))
+
+            PhotosPicker(selection: $coverPick, matching: .images) {
+                Label("Change Photo", systemImage: "photo.on.rectangle.angled")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
+            }
+            .buttonStyle(.plain)
+            .glassEffect(.regular.tint(Color(hex: 0x6366F1)).interactive(), in: .capsule)
+        }
+    }
+
+    private var detailsCard: some View {
+        TripCard(title: "Trip details", icon: "suitcase.fill") {
+            TextField("Trip name", text: $name)
+                .font(.title3.weight(.semibold))
+                .padding(.horizontal, 14).padding(.vertical, 12)
+                .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+
+            LocationField(text: $location)
+
+            HStack {
+                Text("Currency").font(.subheadline).foregroundStyle(.secondary)
+                Spacer()
+                Menu {
+                    Picker("Currency", selection: $currency) {
+                        ForEach(supportedCurrencies, id: \.self) { Text($0).tag($0) }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(currency).font(.subheadline.weight(.semibold))
+                        Image(systemName: "chevron.down").font(.caption2.weight(.bold))
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(.secondary.opacity(0.12), in: .capsule)
+                }
+            }
+
+            if currency != originalCurrency {
+                Label("Existing expenses and budgets will be converted to \(currency) at today's rate.", systemImage: "arrow.left.arrow.right")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var datesCard: some View {
+        TripCard(title: "Dates", icon: "calendar") {
+            Toggle("Add travel dates", isOn: $hasDates.animation(.snappy))
+                .font(.subheadline.weight(.medium))
+            if hasDates {
+                DatePicker("Start", selection: $startDate, displayedComponents: .date)
+                    .font(.subheadline)
+                DatePicker("End", selection: $endDate, in: startDate..., displayedComponents: .date)
+                    .font(.subheadline)
+            }
+        }
+    }
+
+    private var budgetCard: some View {
+        TripCard(title: "Your budget", icon: "wallet.bifold.fill") {
+            Text("How much you can personally spend on this trip.")
+                .font(.footnote).foregroundStyle(.secondary)
+            HStack(spacing: 2) {
+                Text(currencySymbol(currency)).foregroundStyle(.secondary)
+                TextField("0.00", text: $budgetText).keyboardType(.decimalPad)
+            }
+            .font(.title3.weight(.semibold))
+            .padding(.horizontal, 14).padding(.vertical, 12)
+            .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+        }
+    }
+
+    private func load() {
+        guard !loaded, let trip else { return }
+        name = trip.name
+        location = trip.location ?? ""
+        currency = trip.currencyCode
+        originalCurrency = trip.currencyCode
+        let budget = trip.budget(for: store.currentUser.id)
+        originalBudget = budget
+        budgetText = budget > 0 ? String(format: "%g", budget) : ""
+        if let start = trip.startDate { startDate = start; hasDates = true }
+        if let end = trip.endDate { endDate = end; hasDates = true }
+        loaded = true
+    }
+
+    /// When the currency picker changes, re-derive the displayed budget from the original
+    /// value so the field shows the converted amount the user is about to save. Re-deriving
+    /// from `originalBudget` (rather than the current text) avoids compounding conversions
+    /// when the user switches currencies several times.
+    private func currencyChanged() {
+        guard loaded else { return }
+        guard currency != originalCurrency else {
+            budgetText = originalBudget > 0 ? String(format: "%g", originalBudget) : ""
+            return
+        }
+        Task {
+            guard let rate = await store.conversionRate(from: originalCurrency, to: currency) else { return }
+            budgetText = originalBudget > 0 ? String(format: "%g", SplitEngine.roundToTwo(originalBudget * rate)) : ""
+        }
+    }
+
+    private func save() {
+        guard var updated = trip else { return }
+        isSaving = true
+        errorMessage = nil
+        Task {
+            if let coverImage, let jpeg = coverImage.jpegData(compressionQuality: 0.7) {
+                do {
+                    updated.coverImageURL = try await store.uploadTripCover(jpeg, tripID: tripID)
+                } catch {
+                    errorMessage = (error as? AuthError)?.message ?? "Couldn't upload the cover photo."
+                    isSaving = false
+                    return
+                }
+            }
+            // Currency change: convert every stored amount (expenses, shares, tax/tip,
+            // settlements, budgets) by the live rate so they reflect real converted value
+            // rather than being relabeled. Abort if rates are unavailable so we never
+            // silently mislabel amounts (e.g. a 100 USD expense as "100 ₫").
+            if currency != originalCurrency {
+                guard let rate = await store.conversionRate(from: originalCurrency, to: currency) else {
+                    errorMessage = "Couldn't fetch the exchange rate to convert amounts. Check your connection and try again."
+                    isSaving = false
+                    return
+                }
+                updated = store.applyingCurrencyConversion(updated, rate: rate)
+            }
+
+            let trimmedLocation = location.trimmingCharacters(in: .whitespaces)
+            updated.name = name.trimmingCharacters(in: .whitespaces)
+            updated.location = trimmedLocation.isEmpty ? nil : trimmedLocation
+            updated.currencyCode = currency
+            updated.startDate = hasDates ? startDate : nil
+            updated.endDate = hasDates ? endDate : nil
+            // The budget field is shown (and auto-converted) in the new currency, so save it
+            // as typed — this also honors a manual budget edit over the converted default.
+            updated.budgets[store.currentUser.id] = Double(budgetText) ?? 0
+            store.updateTrip(updated)
+            isSaving = false
+            dismiss()
+        }
     }
 }
 
@@ -1241,8 +1672,9 @@ struct TripDetailView: View {
     let tripID: Trip.ID
 
     @State private var showAddExpense = false
+    @State private var showEditTrip = false
+    @State private var scrollToSettle = false
     @State private var activeSettlement: Settlement?
-    @State private var editingExpense: Expense?
     @State private var manualMemberName = ""
     @State private var inviteEmail = ""
     @State private var inviteName = ""
@@ -1263,39 +1695,39 @@ struct TripDetailView: View {
                 .ignoresSafeArea()
 
                 if let trip {
-                    ScrollView {
-                        VStack(spacing: 18) {
-                            summaryCard(trip)
-                            settleCard(trip)
-                            membersCard(trip)
-                            expensesCard(trip)
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            VStack(spacing: 0) {
+                                heroHeader(trip)
+                                VStack(spacing: 18) {
+                                    tripDetailsCard(trip)
+                                    budgetOverviewCard(trip)
+                                    settleCard(trip).id("settle")
+                                    membersCard(trip)
+                                    expensesCard(trip)
+                                }
+                                .padding()
+                                .padding(.top, 6)
+                                .padding(.bottom, 24)
+                            }
                         }
-                        .padding()
-                        .padding(.bottom, 24)
+                        .ignoresSafeArea(edges: .top)
+                        .onChange(of: scrollToSettle) { _, shouldScroll in
+                            guard shouldScroll else { return }
+                            withAnimation(.snappy) { proxy.scrollTo("settle", anchor: .top) }
+                            scrollToSettle = false
+                        }
                     }
                 } else {
                     ContentUnavailableView("Trip not found", systemImage: "suitcase")
                 }
             }
-            .navigationTitle(trip?.name ?? "Trip")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button {
-                        showAddExpense = true
-                    } label: {
-                        Label("Add Expense", systemImage: "plus")
-                    }
-                }
-            }
+            .toolbar(.hidden, for: .navigationBar)
             .sheet(isPresented: $showAddExpense) {
                 AddExpenseView(tripID: tripID)
             }
-            .sheet(item: $editingExpense) { expense in
-                AddExpenseView(tripID: tripID, editing: expense)
+            .sheet(isPresented: $showEditTrip) {
+                EditTripView(tripID: tripID)
             }
             .sheet(item: $activeSettlement) { settlement in
                 SettleView(
@@ -1306,6 +1738,212 @@ struct TripDetailView: View {
                 )
             }
         }
+    }
+
+    // MARK: Hero header
+
+    private func heroHeader(_ trip: Trip) -> some View {
+        ZStack(alignment: .bottomLeading) {
+            TripCoverView(trip: trip)
+                .frame(height: 380)
+                .frame(maxWidth: .infinity)
+                .clipped()
+                .overlay {
+                    LinearGradient(
+                        colors: [.black.opacity(0.35), .clear, .clear, .black.opacity(0.7)],
+                        startPoint: .top, endPoint: .bottom
+                    )
+                }
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("NOW EXPLORING")
+                    .font(.caption.weight(.bold)).tracking(2)
+                    .foregroundStyle(.white.opacity(0.85))
+                Text(trip.name)
+                    .font(.system(size: 36, weight: .bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                if let location = trip.location, !location.isEmpty {
+                    Text(location)
+                        .font(.title3)
+                        .foregroundStyle(.white.opacity(0.9))
+                } else if let range = trip.dateRangeText {
+                    Text(range)
+                        .font(.title3)
+                        .foregroundStyle(.white.opacity(0.9))
+                }
+                travelersRow(trip)
+                heroActions(trip)
+            }
+            .padding(20)
+            .padding(.bottom, 14)
+        }
+        .overlay(alignment: .topTrailing) {
+            Button { dismiss() } label: {
+                Image(systemName: "xmark")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 36, height: 36)
+                    .background(.black.opacity(0.35), in: .circle)
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 60)
+            .padding(.trailing, 20)
+        }
+    }
+
+    private func travelersRow(_ trip: Trip) -> some View {
+        HStack(spacing: 10) {
+            HStack(spacing: -8) {
+                ForEach(trip.members.prefix(3)) { member in
+                    Text(member.initials)
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 30, height: 30)
+                        .background(member.color, in: .circle)
+                        .overlay(Circle().strokeBorder(.white.opacity(0.7), lineWidth: 1.5))
+                }
+            }
+            Text("\(trip.members.count) traveler\(trip.members.count == 1 ? "" : "s")")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.white)
+        }
+    }
+
+    private func heroActions(_ trip: Trip) -> some View {
+        HStack(spacing: 10) {
+            heroButton("Add Expense", icon: "plus") { showAddExpense = true }
+            if store.isCreator(of: trip) {
+                heroButton("Edit Trip", icon: "calendar") { showEditTrip = true }
+            }
+            heroButton("Settle Up", icon: "person.2.fill") { scrollToSettle = true }
+        }
+        .padding(.top, 4)
+    }
+
+    private func heroButton(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: icon).font(.caption.weight(.semibold))
+                Text(title).font(.caption.weight(.semibold)).lineLimit(1)
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14).padding(.vertical, 11)
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: .capsule)
+    }
+
+    // MARK: Detail cards
+
+    private func tripDetailsCard(_ trip: Trip) -> some View {
+        TripCard(title: "Trip Details", icon: "calendar") {
+            HStack(spacing: 12) {
+                detailTile(
+                    icon: "calendar",
+                    label: "Date",
+                    value: trip.dateRangeText ?? "Not set"
+                )
+                detailTile(
+                    icon: "mappin.and.ellipse",
+                    label: "Location",
+                    value: trip.location?.isEmpty == false ? trip.location! : "Not set"
+                )
+            }
+        }
+    }
+
+    private func detailTile(icon: String, label: String, value: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.subheadline)
+                .foregroundStyle(Color(hex: 0x6366F1))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label).font(.caption).foregroundStyle(.secondary)
+                Text(value).font(.subheadline.weight(.semibold))
+                    .lineLimit(1).minimumScaleFactor(0.7)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+    }
+
+    private func budgetOverviewCard(_ trip: Trip) -> some View {
+        let me = store.currentUser.id
+        let budget = trip.budget(for: me)
+        let spent = trip.spent(for: me)
+        let remaining = trip.remainingBudget(for: me)
+        let overBudget = budget > 0 && spent > budget
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Label("Budget Overview", systemImage: "wallet.bifold.fill").font(.headline)
+                Spacer()
+                if store.isCreator(of: trip) {
+                    Button { showEditTrip = true } label: {
+                        Text("Edit Budget")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 12).padding(.vertical, 6)
+                            .background(.secondary.opacity(0.14), in: .capsule)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Total Budget").font(.caption).foregroundStyle(.secondary)
+                Text(money(budget, trip.currencyCode))
+                    .font(.system(size: 30, weight: .bold, design: .rounded))
+            }
+
+            if budget > 0 {
+                let fraction = min(spent / budget, 1)
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Theme.fieldBackground)
+                        Capsule()
+                            .fill(overBudget ? Theme.negative : Theme.positive)
+                            .frame(width: max(0, geo.size.width * fraction))
+                    }
+                }
+                .frame(height: 8)
+            }
+
+            HStack(spacing: 12) {
+                budgetTile("Spent So Far", money(spent, trip.currencyCode), Color(hex: 0x6366F1))
+                budgetTile(
+                    overBudget ? "Over Budget" : "Remaining",
+                    money(abs(remaining), trip.currencyCode),
+                    overBudget ? Theme.negative : Theme.positive
+                )
+            }
+
+            Divider()
+
+            HStack {
+                statColumn("You owe", money(trip.remainingOwed(by: me), trip.currencyCode), Color(hex: 0xEF4444))
+                Spacer()
+                statColumn("You're owed", money(trip.remainingOwed(to: me), trip.currencyCode), Color(hex: 0x10B981))
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassEffect(.regular, in: .rect(cornerRadius: 24))
+    }
+
+    private func budgetTile(_ label: String, _ value: String, _ color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label.uppercased())
+                .font(.system(size: 10, weight: .semibold)).tracking(0.5)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.subheadline.weight(.bold)).foregroundStyle(color)
+                .lineLimit(1).minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 10).padding(.horizontal, 12)
+        .background(color.opacity(0.10), in: .rect(cornerRadius: 12))
     }
 
     private func historyBinding(for settlement: Settlement) -> Binding<[SettlementRecord]> {
@@ -1372,65 +2010,6 @@ struct TripDetailView: View {
         }
         .contentShape(.rect)
         .padding(.vertical, 4)
-    }
-
-    private func summaryCard(_ trip: Trip) -> some View {
-        let me = store.currentUser.id
-        return VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Label("Your budget", systemImage: "wallet.bifold.fill")
-                    .font(.headline)
-                Spacer()
-                if store.isCreator(of: trip) {
-                    Text("Owner")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(Color(hex: 0x6366F1))
-                        .padding(.horizontal, 10).padding(.vertical, 4)
-                        .background(Color(hex: 0x6366F1).opacity(0.15), in: .capsule)
-                } else {
-                    Text("Shared")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(Color(hex: 0x10B981))
-                        .padding(.horizontal, 10).padding(.vertical, 4)
-                        .background(Color(hex: 0x10B981).opacity(0.15), in: .capsule)
-                }
-            }
-
-            Text(money(trip.remainingBudget(for: me), trip.currencyCode))
-                .font(.system(size: 32, weight: .bold, design: .rounded))
-                .foregroundStyle(trip.remainingBudget(for: me) < 0 ? Color(hex: 0xEF4444) : .primary)
-            Text("remaining of \(money(trip.budget(for: me), trip.currencyCode)) budget")
-                .font(.footnote).foregroundStyle(.secondary)
-
-            // Budget-usage bar: fills toward the limit and turns red once exceeded.
-            let budgetTotal = trip.budget(for: me)
-            if budgetTotal > 0 {
-                let fraction = min(trip.spent(for: me) / budgetTotal, 1)
-                let overBudget = trip.spent(for: me) > budgetTotal
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(Theme.fieldBackground)
-                        Capsule()
-                            .fill(overBudget ? Theme.negative : Theme.positive)
-                            .frame(width: max(0, geo.size.width * fraction))
-                    }
-                }
-                .frame(height: 8)
-            }
-
-            Divider()
-
-            HStack {
-                statColumn("Spent", money(trip.spent(for: me), trip.currencyCode), .primary)
-                Spacer()
-                statColumn("You owe", money(trip.remainingOwed(by: me), trip.currencyCode), Color(hex: 0xEF4444))
-                Spacer()
-                statColumn("You're owed", money(trip.remainingOwed(to: me), trip.currencyCode), Color(hex: 0x10B981))
-            }
-        }
-        .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular, in: .rect(cornerRadius: 24))
     }
 
     private func membersCard(_ trip: Trip) -> some View {
@@ -1603,17 +2182,21 @@ struct TripDetailView: View {
             } else {
                 VStack(spacing: 8) {
                     ForEach(trip.expenses) { expense in
+                        let link = NavigationLink {
+                            ExpenseDetailView(tripID: tripID, expense: expense)
+                        } label: {
+                            expenseRow(trip, expense)
+                        }
+                        .buttonStyle(.plain)
+
                         if canModify(trip, expense) {
                             SwipeToDeleteRow {
                                 store.deleteExpense(expense.id, from: trip.id)
                             } content: {
-                                Button { editingExpense = expense } label: {
-                                    expenseRow(trip, expense)
-                                }
-                                .buttonStyle(.plain)
+                                link
                             }
                         } else {
-                            expenseRow(trip, expense)
+                            link
                         }
                     }
                 }
@@ -1641,19 +2224,33 @@ struct TripDetailView: View {
                 Spacer()
                 Text(money(expense.amount, trip.currencyCode))
                     .font(.subheadline.weight(.semibold))
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.tertiary)
             }
             if expense.participantIDs.contains(me) {
                 Text("Your share: \(money(yourShare, trip.currencyCode))")
                     .font(.caption)
                     .foregroundStyle(expense.payerID == me ? Theme.positive : Theme.negative)
             }
-            if expense.receiptURL != nil || !expense.items.isEmpty {
-                HStack(spacing: 4) {
-                    Image(systemName: "doc.text.viewfinder")
-                    Text(expense.items.isEmpty ? "Receipt" : "Receipt • \(expense.items.count) item\(expense.items.count == 1 ? "" : "s")")
+            HStack(spacing: 10) {
+                if expense.receiptURL != nil || !expense.items.isEmpty {
+                    HStack(spacing: 4) {
+                        Image(systemName: "doc.text.viewfinder")
+                        Text(expense.items.isEmpty ? "Receipt" : "Receipt • \(expense.items.count) item\(expense.items.count == 1 ? "" : "s")")
+                    }
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
                 }
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(.secondary)
+                let commentCount = trip.comments[expense.id.uuidString]?.count ?? 0
+                if commentCount > 0 {
+                    HStack(spacing: 4) {
+                        Image(systemName: "bubble.left.fill")
+                        Text("\(commentCount)")
+                    }
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                }
             }
         }
         .padding(12)
@@ -1667,6 +2264,212 @@ struct TripDetailView: View {
             Text(title).font(.caption).foregroundStyle(.secondary)
             Text(value).font(.subheadline.weight(.bold)).foregroundStyle(color)
         }
+    }
+}
+
+// MARK: - Expense Detail
+
+struct ExpenseDetailView: View {
+    @Environment(TripStore.self) private var store
+    let tripID: Trip.ID
+    let expense: Expense
+
+    @State private var commentText = ""
+    @State private var editingExpense: Expense?
+    @FocusState private var commentFieldFocused: Bool
+
+    private var trip: Trip? { store.trip(tripID) }
+
+    private var currentExpense: Expense? {
+        trip?.expenses.first { $0.id == expense.id }
+    }
+
+    private var comments: [ExpenseComment] {
+        trip?.comments[expense.id.uuidString] ?? []
+    }
+
+    private var canModify: Bool {
+        guard let trip else { return false }
+        return store.isCreator(of: trip) || expense.payerID == store.currentUser.id
+    }
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: Theme.sheetGradient,
+                startPoint: .top, endPoint: .bottom
+            )
+            .ignoresSafeArea()
+
+            ScrollView {
+                VStack(spacing: 18) {
+                    summaryCard
+                    if let trip { participantsCard(trip) }
+                    commentsCard
+                }
+                .padding()
+                .padding(.bottom, 24)
+            }
+        }
+        .navigationTitle(expense.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if canModify {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Edit") { editingExpense = currentExpense ?? expense }
+                }
+            }
+        }
+        .sheet(item: $editingExpense) { exp in
+            AddExpenseView(tripID: tripID, editing: exp)
+        }
+    }
+
+    private var summaryCard: some View {
+        let exp = currentExpense ?? expense
+        let payer = trip?.members.first { $0.id == exp.payerID }
+        let me = store.currentUser.id
+
+        return TripCard(title: "Details", icon: "info.circle.fill") {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(money(exp.amount, trip?.currencyCode ?? "USD"))
+                        .font(.system(size: 28, weight: .bold, design: .rounded))
+                    Text(exp.date.formatted(date: .long, time: .omitted))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+
+            Divider()
+
+            HStack(spacing: 10) {
+                if let payer {
+                    avatar(payer, size: 30)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Paid by").font(.caption).foregroundStyle(.secondary)
+                    Text(payer.map { $0.id == me ? "You" : $0.name } ?? "—")
+                        .font(.subheadline.weight(.semibold))
+                }
+                Spacer()
+            }
+
+            if exp.receiptURL != nil || !exp.items.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "doc.text.viewfinder")
+                    Text(exp.items.isEmpty ? "Receipt attached" : "Receipt • \(exp.items.count) item\(exp.items.count == 1 ? "" : "s")")
+                }
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func participantsCard(_ trip: Trip) -> some View {
+        let exp = currentExpense ?? expense
+        let me = store.currentUser.id
+
+        return TripCard(title: "Split", icon: "person.2.fill") {
+            ForEach(trip.members) { member in
+                let share = trip.share(for: member.id, in: exp)
+                if share > 0.005 {
+                    HStack(spacing: 10) {
+                        avatar(member, size: 30)
+                        Text(member.id == me ? "You" : member.name)
+                            .font(.subheadline.weight(.medium))
+                        Spacer()
+                        Text(money(share, trip.currencyCode))
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    private var commentsCard: some View {
+        TripCard(title: "Comments (\(comments.count))", icon: "bubble.left.and.bubble.right.fill") {
+            if comments.isEmpty {
+                Text("No comments yet")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 8)
+            } else {
+                ForEach(comments) { comment in
+                    commentRow(comment)
+                    if comment.id != comments.last?.id {
+                        Divider()
+                    }
+                }
+            }
+
+            Divider()
+
+            HStack(spacing: 10) {
+                TextField("Add a comment…", text: $commentText, axis: .vertical)
+                    .lineLimit(1...4)
+                    .font(.subheadline)
+                    .focused($commentFieldFocused)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+
+                Button {
+                    addComment()
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 32))
+                        .foregroundStyle(Theme.accent)
+                }
+                .buttonStyle(.plain)
+                .disabled(commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .opacity(commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.4 : 1)
+            }
+        }
+    }
+
+    private func commentRow(_ comment: ExpenseComment) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                let member = trip?.members.first { $0.id == comment.authorID }
+                if let member {
+                    avatar(member, size: 24)
+                }
+                Text(comment.authorID == store.currentUser.id ? "You" : comment.authorName)
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                Text(comment.date.formatted(date: .abbreviated, time: .shortened))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+
+                if comment.authorID == store.currentUser.id || (trip.map { store.isCreator(of: $0) } ?? false) {
+                    Button {
+                        store.deleteComment(comment.id, from: expense.id, in: tripID)
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            Text(comment.text)
+                .font(.subheadline)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func addComment() {
+        let text = commentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        store.addComment(text, to: expense.id, in: tripID)
+        commentText = ""
+        commentFieldFocused = false
     }
 }
 
@@ -2775,6 +3578,194 @@ struct TripCard<Content: View>: View {
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassEffect(.regular, in: .rect(cornerRadius: 24))
+    }
+}
+
+// MARK: - Location autocomplete
+
+/// Wraps `MKLocalSearchCompleter` — Apple's built-in places autocomplete, which needs no
+/// API key and no location permission — to publish place suggestions as the user types a
+/// trip destination.
+@MainActor
+final class PlaceSearchCompleter: NSObject, ObservableObject {
+    @Published var suggestions: [MKLocalSearchCompletion] = []
+    private let completer = MKLocalSearchCompleter()
+
+    override init() {
+        super.init()
+        completer.delegate = self
+        // Bias toward places (cities, regions, landmarks) rather than precise street
+        // addresses, which suit a trip destination.
+        completer.resultTypes = [.address, .pointOfInterest]
+    }
+
+    func update(query: String) {
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else {
+            suggestions = []
+            return
+        }
+        completer.queryFragment = trimmed
+    }
+
+    func clear() { suggestions = [] }
+}
+
+extension PlaceSearchCompleter: MKLocalSearchCompleterDelegate {
+    // Completer callbacks are delivered on the main thread, so it's safe to read results
+    // and update published state directly via `assumeIsolated`.
+    nonisolated func completerDidUpdateResults(_ completer: MKLocalSearchCompleter) {
+        MainActor.assumeIsolated { suggestions = completer.results }
+    }
+
+    nonisolated func completer(_ completer: MKLocalSearchCompleter, didFailWithError error: Error) {
+        MainActor.assumeIsolated { suggestions = [] }
+    }
+}
+
+/// A trip-location text field that shows Apple Maps autocomplete suggestions as the user
+/// types, filling the field with the chosen place. Used in Add/Edit Trip.
+struct LocationField: View {
+    @Binding var text: String
+    var placeholder = "Location (e.g. Vietnam)"
+
+    @StateObject private var completer = PlaceSearchCompleter()
+    @FocusState private var focused: Bool
+    /// True while filling the field from a tapped suggestion, so `onChange` doesn't
+    /// immediately re-query and reopen the list.
+    @State private var isSelecting = false
+
+    private var visibleSuggestions: [MKLocalSearchCompletion] {
+        Array(completer.suggestions.prefix(5))
+    }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 10) {
+                Image(systemName: "mappin.and.ellipse").foregroundStyle(.secondary)
+                TextField(placeholder, text: $text)
+                    .focused($focused)
+                    .autocorrectionDisabled()
+                    .submitLabel(.done)
+                if !text.isEmpty {
+                    Button {
+                        text = ""
+                        completer.clear()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 12)
+            .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+
+            if focused && !visibleSuggestions.isEmpty {
+                VStack(spacing: 0) {
+                    ForEach(Array(visibleSuggestions.enumerated()), id: \.offset) { index, suggestion in
+                        Button { select(suggestion) } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "mappin.circle.fill")
+                                    .foregroundStyle(Color(hex: 0x6366F1))
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(suggestion.title)
+                                        .font(.subheadline).foregroundStyle(.primary)
+                                    if !suggestion.subtitle.isEmpty {
+                                        Text(suggestion.subtitle)
+                                            .font(.caption).foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12).padding(.vertical, 10)
+                            .contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                        if index < visibleSuggestions.count - 1 { Divider() }
+                    }
+                }
+                .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+            }
+        }
+        .onChange(of: text) { _, newValue in
+            if isSelecting { isSelecting = false; return }
+            completer.update(query: newValue)
+        }
+    }
+
+    private func select(_ suggestion: MKLocalSearchCompletion) {
+        isSelecting = true
+        text = suggestion.title
+        completer.clear()
+        focused = false
+    }
+}
+
+// MARK: - Trip cover
+
+/// The hero image for a trip: the uploaded cover photo if one exists, otherwise a
+/// deterministic gradient (seeded by the trip id) topped with a travel glyph, so every
+/// trip looks distinct even before a photo is added. Used by the home cards and the
+/// trip detail hero header.
+struct TripCoverView: View {
+    let trip: Trip
+
+    /// Curated cover gradients; one is chosen deterministically per trip.
+    private static let palettes: [[UInt32]] = [
+        [0x6366F1, 0x8B5CF6, 0xA855F7],
+        [0x0EA5E9, 0x2563EB, 0x4338CA],
+        [0x10B981, 0x059669, 0x047857],
+        [0xF59E0B, 0xEA580C, 0xDC2626],
+        [0xEC4899, 0xDB2777, 0x9333EA],
+        [0x14B8A6, 0x0D9488, 0x0F766E],
+        [0xF43F5E, 0xE11D48, 0xBE123C],
+        [0x3B82F6, 0x6366F1, 0x8B5CF6],
+    ]
+
+    private var palette: [Color] {
+        let index = abs(trip.id.uuidString.hashValue) % Self.palettes.count
+        return Self.palettes[index].map { Color(hex: $0) }
+    }
+
+    private var gradient: some View {
+        LinearGradient(colors: palette, startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+
+    var body: some View {
+        // The gradient is the layout base: it has no intrinsic size, so it always fills
+        // exactly the proposed frame. The photo is drawn as an *overlay* — overlays never
+        // influence the parent's layout size, so a wide `scaledToFill` image can't make the
+        // cover (and the scroll content above it) grow beyond the screen. `.clipped()` then
+        // trims the overflow to the cover's bounds.
+        gradient
+            .overlay { photoOrGlyph }
+            .clipped()
+    }
+
+    @ViewBuilder
+    private var photoOrGlyph: some View {
+        if let urlString = trip.coverImageURL, let url = URL(string: urlString) {
+            AsyncImage(url: url) { phase in
+                switch phase {
+                case .success(let image):
+                    image.resizable().scaledToFill()
+                case .empty:
+                    ProgressView().tint(.white)
+                default:
+                    glyph
+                }
+            }
+        } else {
+            glyph
+        }
+    }
+
+    private var glyph: some View {
+        Image(systemName: "airplane.departure")
+            .font(.system(size: 44, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.28))
     }
 }
 

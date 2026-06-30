@@ -150,11 +150,12 @@ struct HomeScreen: View {
                 .padding(.vertical, 28)
                 .glassEffect(.regular, in: .rect(cornerRadius: 20))
             } else {
-                GlassEffectContainer(spacing: 12) {
-                    VStack(spacing: 12) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 14) {
                         ForEach(store.myTrips) { trip in
-                            let row = Button { selectedTrip = trip } label: {
+                            Button { selectedTrip = trip } label: {
                                 TripRow(trip: trip, currentUserID: store.currentUser.id)
+                                    .frame(width: 300)
                             }
                             .buttonStyle(.plain)
                             .contextMenu {
@@ -166,17 +167,13 @@ struct HomeScreen: View {
                                     }
                                 }
                             }
-
-                            // Synced trips are owned by this account; legacy local data may
-                            // still include a different creator id until it is re-anchored.
-                            if store.isCreator(of: trip) {
-                                SwipeToDeleteRow { tripToDelete = trip } content: { row }
-                            } else {
-                                row
-                            }
                         }
                     }
+                    .padding(.vertical, 6)
+                    .scrollTargetLayout()
                 }
+                .scrollTargetBehavior(.viewAligned)
+                .scrollClipDisabled()
             }
         }
     }
@@ -407,10 +404,6 @@ struct TripRow: View {
     private var isOver: Bool { hasBudget && spent > budget }
     private var isNear: Bool { hasBudget && !isOver && percent >= 80 }
 
-    private var net: Double {
-        SplitEngine.roundToTwo(trip.remainingOwed(to: currentUserID) - trip.remainingOwed(by: currentUserID))
-    }
-
     private var accent: Color {
         isOver ? Color(hex: 0xDC2626) : isNear ? Color(hex: 0xD97706) : Color(hex: 0x16A34A)
     }
@@ -421,35 +414,50 @@ struct TripRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            header
-            budgetBoxes
-            progress
-            footer
+        VStack(alignment: .leading, spacing: 0) {
+            cover
+            VStack(alignment: .leading, spacing: 12) {
+                titleRow
+                dateRow
+                budgetBoxes
+                progress
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.regularMaterial)
         }
-        .padding(16)
-        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+        .clipShape(.rect(cornerRadius: 24))
+        .overlay(
+            RoundedRectangle(cornerRadius: 24)
+                .strokeBorder(.white.opacity(0.12), lineWidth: 0.5)
+        )
+        .shadow(color: .black.opacity(0.18), radius: 10, y: 5)
     }
 
-    private var header: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "suitcase.fill")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 40, height: 40)
-                .background(Color(hex: 0x6366F1), in: .circle)
+    // MARK: Cover
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(trip.name).font(.subheadline.weight(.bold)).lineLimit(1)
-                Text("\(trip.expenses.count) expense\(trip.expenses.count == 1 ? "" : "s")")
-                    .font(.caption).foregroundStyle(.secondary)
+    private var cover: some View {
+        TripCoverView(trip: trip)
+            .frame(height: 130)
+            .frame(maxWidth: .infinity)
+            .clipped()
+            .overlay {
+                LinearGradient(
+                    colors: [.clear, .clear, .black.opacity(0.55)],
+                    startPoint: .top, endPoint: .bottom
+                )
             }
-
-            Spacer(minLength: 6)
-
-            if isOver || isNear { healthBadge }
-            memberBadge
-        }
+            .overlay(alignment: .bottomLeading) {
+                Label(trip.location?.isEmpty == false ? trip.location! : trip.name,
+                      systemImage: "mappin.circle.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .padding(12)
+            }
+            .overlay(alignment: .topTrailing) {
+                if isOver || isNear { healthBadge.padding(12) }
+            }
     }
 
     private var healthBadge: some View {
@@ -464,26 +472,39 @@ struct TripRow: View {
         .background(accent, in: .capsule)
     }
 
-    private var memberBadge: some View {
-        HStack(spacing: 5) {
-            Image(systemName: "person.2.fill").font(.system(size: 11))
-            Text("\(trip.members.count)").font(.caption.weight(.semibold))
+    // MARK: Body content
+
+    private var titleRow: some View {
+        HStack(spacing: 8) {
+            Text(trip.name).font(.headline.weight(.bold)).lineLimit(1)
+            Spacer(minLength: 6)
+            HStack(spacing: 4) {
+                Image(systemName: "person.2.fill").font(.system(size: 11))
+                Text("\(trip.members.count)").font(.caption.weight(.semibold))
+            }
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private var dateRow: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "calendar").font(.caption)
+            Text(trip.dateRangeText ?? "\(trip.expenses.count) expense\(trip.expenses.count == 1 ? "" : "s")")
+                .font(.caption)
         }
         .foregroundStyle(.secondary)
-        .padding(.horizontal, 10).padding(.vertical, 6)
-        .background(.primary.opacity(0.06), in: .capsule)
     }
 
     private var budgetBoxes: some View {
         HStack(spacing: 12) {
             statBox(
-                label: "SPENT (YOU)",
+                label: "SPENT",
                 value: money(spent, trip.currencyCode),
                 valueColor: Color(hex: 0x6366F1),
-                background: Theme.fieldBackground
+                background: Color(hex: 0x6366F1).opacity(0.10)
             )
             statBox(
-                label: isOver ? "OVER BY (YOU)" : "REMAINING (YOU)",
+                label: isOver ? "OVER BY" : "REMAINING",
                 value: money(abs(remaining), trip.currencyCode),
                 valueColor: accent,
                 background: (isOver ? Color(hex: 0xDC2626) : Color(hex: 0x16A34A)).opacity(0.12)
@@ -492,7 +513,7 @@ struct TripRow: View {
     }
 
     private func statBox(label: String, value: String, valueColor: Color, background: Color) -> some View {
-        VStack(spacing: 4) {
+        VStack(alignment: .leading, spacing: 4) {
             Text(label)
                 .font(.system(size: 10, weight: .semibold)).tracking(0.5)
                 .foregroundStyle(.secondary)
@@ -500,15 +521,15 @@ struct TripRow: View {
                 .font(.subheadline.weight(.bold)).foregroundStyle(valueColor)
                 .lineLimit(1).minimumScaleFactor(0.7)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 10).padding(.horizontal, 8)
-        .background(background, in: .rect(cornerRadius: 10))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 10).padding(.horizontal, 12)
+        .background(background, in: .rect(cornerRadius: 12))
     }
 
     private var progress: some View {
         VStack(spacing: 6) {
             HStack {
-                Text("Your Budget Usage").font(.caption).foregroundStyle(.secondary)
+                Text("Budget Usage").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Text(hasBudget ? "\(Int(percent.rounded()))%" : "No budget set")
                     .font(.caption.weight(.semibold))
@@ -523,26 +544,6 @@ struct TripRow: View {
                 }
             }
             .frame(height: 8)
-        }
-    }
-
-    @ViewBuilder
-    private var footer: some View {
-        HStack {
-            if net == 0 {
-                Label("Settled up", systemImage: "checkmark.circle.fill")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Color(hex: 0x16A34A))
-            } else {
-                Text("\(net > 0 ? "You're owed" : "You owe") \(money(abs(net), trip.currencyCode))")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(net > 0 ? Color(hex: 0x16A34A) : Color(hex: 0xDC2626))
-            }
-            Spacer()
-            HStack(spacing: 4) {
-                Text("View trip").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                Image(systemName: "chevron.right").font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
-            }
         }
     }
 }
