@@ -35,21 +35,28 @@ struct ContentView: View {
     @State private var selectedTab: DockTab = .home
     @State private var store = TripStore()
     @State private var auth = AuthStore()
+    /// Tabs the user has opened at least once. Screens are created lazily on first visit
+    /// and then kept alive (hidden, not destroyed) so returning to a tab is instant —
+    /// the old `switch` tore down and rebuilt the whole screen (map region, scroll
+    /// positions, resolved images) on every dock tap, which made navigation feel laggy.
+    @State private var visitedTabs: Set<DockTab> = [.home]
 
     var body: some View {
         ZStack {
-            // Swap the active screen behind the dock.
-            switch selectedTab {
-            case .home: HomeScreen()
-            case .map: MapScreen()
-            case .rec: RecScreen()
-            case .settings: SettingsScreen()
+            ForEach(DockTab.allCases) { tab in
+                if visitedTabs.contains(tab) {
+                    screen(for: tab)
+                        .opacity(tab == selectedTab ? 1 : 0)
+                        .allowsHitTesting(tab == selectedTab)
+                        .accessibilityHidden(tab != selectedTab)
+                }
             }
         }
         .safeAreaInset(edge: .bottom) {
             FloatingDock(selectedTab: $selectedTab)
                 .padding(.bottom, 8)
         }
+        .onChange(of: selectedTab) { _, tab in visitedTabs.insert(tab) }
         .environment(store)
         .environment(auth)
         .task(id: auth.session?.accessToken) {
@@ -66,6 +73,16 @@ struct ContentView: View {
             Task {
                 try? await store.acceptInvitationLink(url)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func screen(for tab: DockTab) -> some View {
+        switch tab {
+        case .home: HomeScreen()
+        case .map: MapScreen()
+        case .rec: RecScreen()
+        case .settings: SettingsScreen()
         }
     }
 }

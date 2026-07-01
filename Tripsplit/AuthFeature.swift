@@ -40,7 +40,11 @@ struct AuthError: Error, LocalizedError {
 enum BackendSecurity {
     nonisolated static let logger = Logger(subsystem: "com.tripsplit.app", category: "backend")
 
-    nonisolated static var secureSession: URLSession {
+    /// One shared session for every backend call. A `let` (not a computed property) so
+    /// TLS connections and HTTP/2 streams are reused across requests — building a fresh
+    /// URLSession per call forces a new handshake every time and makes each tap-triggered
+    /// save/upload noticeably slower.
+    nonisolated static let secureSession: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 20
         configuration.timeoutIntervalForResource = 60
@@ -49,7 +53,7 @@ enum BackendSecurity {
         configuration.httpShouldSetCookies = false
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         return URLSession(configuration: configuration)
-    }
+    }()
 
     nonisolated static func normalizedEmail(_ email: String) -> String {
         email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()

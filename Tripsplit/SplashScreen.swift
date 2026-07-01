@@ -17,8 +17,9 @@ struct RootView: View {
         }
         .preferredColorScheme(appearance.colorScheme)
         .task {
-            // Brief hold so the logo animation reads, then hand off to the app.
-            try? await Task.sleep(for: .seconds(0.9))
+            // Brief hold so the logo animation reads, then hand off to the app. Kept short —
+            // every extra tenth of a second here is pure added launch latency.
+            try? await Task.sleep(for: .seconds(0.45))
             withAnimation(.easeInOut(duration: 0.35)) {
                 isActive = true
             }

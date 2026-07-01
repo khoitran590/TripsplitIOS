@@ -55,7 +55,7 @@ Deno.serve(async (req) => {
   const text = typeof payload.text === "string" ? payload.text.trim() : "";
   if (!image && !text) return jsonResponse({ error: "Missing receipt image or text" }, 400);
   if (image?.error) return jsonResponse({ error: image.error }, image.status);
-  if (!image && new TextEncoder().encode(text).length > MAX_TEXT_BYTES) {
+  if (new TextEncoder().encode(text).length > MAX_TEXT_BYTES) {
     return jsonResponse({ error: "Receipt text too large" }, 413);
   }
 
@@ -75,14 +75,49 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: "Receipt parsing is not configured." }, 503);
   }
 
-  // 5. Call Gemini with the server-side key.
-  const prompt = buildPrompt(image ? null : text);
+  // 5. Call Gemini with the server-side key. When the client sends both the photo and
+  // on-device OCR text, both go to the model — the OCR text helps it recover faint or
+  // skewed line items it might otherwise miss in the image.
+  const prompt = buildPrompt(text || null, Boolean(image));
   const parts = image?.data
     ? [
       { text: prompt },
       { inline_data: { mime_type: image.mimeType, data: image.data } },
     ]
     : [{ text: prompt }];
+  let receipt = await callGemini(parts);
+  if (!receipt) return jsonResponse({ error: "Parsing service error" }, 502);
+
+  // The known failure mode: the model "summarizes" the receipt as a single item whose
+  // price is the grand total. Re-ask once with explicit corrective feedback — the second
+  // pass almost always itemizes properly. Only kept if it actually finds more items.
+  if (isCollapsed(receipt)) {
+    const retry = await callGemini([
+      ...parts,
+      {
+        text:
+          "IMPORTANT CORRECTION: your previous answer collapsed this receipt into a single item whose price equals the grand total. That is wrong. Look again at the item section of the receipt and list each individual line item with its own printed name and per-unit price. Do not include subtotal, tax, tip, or total rows as items.",
+      },
+    ]);
+    if (retry && (retry.items as unknown[]).length > (receipt.items as unknown[]).length) {
+      receipt = retry;
+    }
+  }
+  return jsonResponse(receipt, 200);
+});
+
+// One item whose price (alone, or plus tax/tip) matches the total = a collapsed summary.
+function isCollapsed(receipt: Record<string, unknown>): boolean {
+  const items = receipt.items as { price: number; quantity: number }[];
+  const total = receipt.total as number;
+  if (items.length !== 1 || !(total > 0)) return false;
+  const line = items[0].price * items[0].quantity;
+  const withTaxTip = line + (receipt.tax as number) + (receipt.tip as number);
+  return Math.abs(line - total) < 0.02 || Math.abs(withTaxTip - total) < 0.02;
+}
+
+// Calls Gemini once and returns the normalized receipt, or null on any failure.
+async function callGemini(parts: unknown[]): Promise<Record<string, unknown> | null> {
   let geminiResponse: Response;
   try {
     geminiResponse = await fetch(
@@ -92,34 +127,59 @@ Deno.serve(async (req) => {
         headers: JSON_HEADERS,
         body: JSON.stringify({
           contents: [{ parts }],
-          generationConfig: { responseMimeType: "application/json", temperature: 0 },
+          generationConfig: {
+            responseMimeType: "application/json",
+            temperature: 0,
+            // Constrained decoding: the model literally cannot emit anything but this
+            // shape, which stops the "one item holding the grand total" failure mode
+            // where it answered with prose or a collapsed summary object.
+            responseSchema: {
+              type: "OBJECT",
+              properties: {
+                merchant: { type: "STRING" },
+                date: { type: "STRING", nullable: true },
+                items: {
+                  type: "ARRAY",
+                  items: {
+                    type: "OBJECT",
+                    properties: {
+                      name: { type: "STRING" },
+                      price: { type: "NUMBER" },
+                      quantity: { type: "INTEGER" },
+                    },
+                    required: ["name", "price"],
+                  },
+                },
+                tax: { type: "NUMBER" },
+                tip: { type: "NUMBER" },
+                total: { type: "NUMBER" },
+              },
+              required: ["merchant", "items", "total"],
+            },
+          },
         }),
       },
     );
   } catch {
-    return jsonResponse({ error: "Upstream request failed" }, 502);
+    return null;
   }
   if (!geminiResponse.ok) {
     // Log status only — never the upstream body (avoid leaking key-adjacent detail).
     console.error("Gemini call failed:", geminiResponse.status);
-    return jsonResponse({ error: "Parsing service error" }, 502);
+    return null;
   }
 
   const geminiJson = await geminiResponse.json().catch(() => null);
   const rawText = geminiJson?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (typeof rawText !== "string") {
-    return jsonResponse({ error: "Empty parsing result" }, 502);
-  }
+  if (typeof rawText !== "string") return null;
 
-  // 6. Re-validate/normalize the model output before handing it to the client.
-  let parsed: unknown;
+  // Re-validate/normalize the model output before handing it to the client.
   try {
-    parsed = JSON.parse(stripFences(rawText));
+    return normalizeReceipt(JSON.parse(stripFences(rawText)));
   } catch {
-    return jsonResponse({ error: "Malformed parsing result" }, 502);
+    return null;
   }
-  return jsonResponse(normalizeReceipt(parsed), 200);
-});
+}
 
 async function getUser(token: string): Promise<{ id: string } | null> {
   const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
@@ -144,12 +204,18 @@ async function recordScan(token: string): Promise<boolean> {
   return (await res.json().catch(() => false)) === true;
 }
 
-function buildPrompt(text: string | null): string {
-  const source = text
-    ? `Receipt text:\n${text}`
-    : "Receipt image: scan the attached receipt image directly.";
+function buildPrompt(text: string | null, hasImage: boolean): string {
+  let source: string;
+  if (hasImage && text) {
+    source =
+      `Read the attached receipt image. OCR text extracted from the same receipt is included below — it may contain errors, so cross-check it against the image, but use it to recover any line items that are faint or hard to read in the photo.\n\nOCR text:\n${text}`;
+  } else if (hasImage) {
+    source = "Read the attached receipt image directly.";
+  } else {
+    source = `Receipt text (from OCR, may contain errors):\n${text}`;
+  }
 
-  return `Extract structured data from this receipt. Respond with ONLY valid JSON, no markdown fences, no commentary, matching exactly this schema:
+  return `You are reading a store or restaurant receipt. Extract structured data as JSON:
 
 {
   "merchant": string,
@@ -160,11 +226,18 @@ function buildPrompt(text: string | null): string {
   "total": number
 }
 
-Rules:
-- If a field is missing on the receipt, use 0 for numbers or null for date.
-- Merge duplicate line items by summing quantity.
-- "price" is the per-item price, not the line total.
-- Exclude subtotal, total, tax, tip, and payment lines from "items".
+Rules for "items" — this is the most important part:
+- List EVERY individual purchasable line item printed on the receipt, each with its own name and price. Real receipts usually have several items; go line by line down the item section and do not skip any.
+- NEVER collapse the receipt into a single item whose price is the subtotal or grand total. If you can read any distinct line items at all, list each one separately.
+- Do NOT include subtotal, total, amount due, tax, tip/gratuity, service charge, discount, change, cash, or card/payment lines as items — those are not purchases.
+- "price" is the price of ONE unit. If a line shows a quantity and a line total (e.g. "2 Latte 9.00"), set quantity to 2 and price to the per-unit price (9.00 / 2 = 4.50).
+- Use the item name as printed, cleaned up to be human-readable (drop SKU codes and register codes, keep the product name).
+- Merge only truly identical repeated lines by increasing quantity.
+
+Other fields:
+- "tax" is the total tax/VAT/GST amount, "tip" the tip or service charge; use 0 when absent.
+- "total" is the printed grand total. Sanity-check: the sum of price × quantity over all items plus tax and tip should approximately equal the total. If it doesn't, re-read the receipt for items you missed.
+- "date" is the purchase date as printed, or null.
 
 ${source}`;
 }
@@ -213,6 +286,12 @@ function toNumber(value: unknown): number {
   return 0;
 }
 
+// Names that mark a row as a total/tax/payment line rather than a purchase. The prompt
+// already forbids these, but the model occasionally emits them anyway — dropping them
+// here is what prevents a "Total $53.20" pseudo-item from reaching the client.
+const NON_ITEM_NAME =
+  /\b(sub\s*-?\s*total|total|amount\s+due|balance(\s+due)?|tax|vat|gst|hst|pst|tip|gratuity|service\s+(charge|chg|fee)|change|cash|tender(ed)?|visa|master\s*card|amex|discover|debit|credit|payment|auth(orization)?|approval)\b/i;
+
 // Coerce the model's output into the exact shape the client decodes, clamping sizes so a
 // malicious or malformed response can't produce an unbounded payload.
 function normalizeReceipt(input: unknown): Record<string, unknown> {
@@ -225,7 +304,7 @@ function normalizeReceipt(input: unknown): Record<string, unknown> {
       price: toNumber(item.price),
       quantity: Math.max(1, Math.min(50, Math.round(toNumber(item.quantity) || 1))),
     };
-  });
+  }).filter((item) => item.price > 0 && !NON_ITEM_NAME.test(item.name));
   return {
     merchant: typeof obj.merchant === "string" ? obj.merchant.slice(0, 200) : "",
     date: typeof obj.date === "string" ? obj.date : null,

@@ -35,6 +35,11 @@ struct Expense: Identifiable, Codable {
     var tax: Double = 0
     var tip: Double = 0
 
+    /// When set, the expense has been soft-deleted: it's removed from the active split
+    /// and settle-up math but retained in `Trip.deletedExpenses` so it still counts
+    /// against the budget (deleting doesn't refund budget headroom) and can be restored.
+    var deletedAt: Date? = nil
+
     init(
         id: UUID = UUID(),
         title: String,
@@ -46,7 +51,8 @@ struct Expense: Identifiable, Codable {
         receiptURL: String? = nil,
         items: [ReceiptItem] = [],
         tax: Double = 0,
-        tip: Double = 0
+        tip: Double = 0,
+        deletedAt: Date? = nil
     ) {
         self.id = id
         self.title = title
@@ -59,10 +65,11 @@ struct Expense: Identifiable, Codable {
         self.items = items
         self.tax = tax
         self.tip = tip
+        self.deletedAt = deletedAt
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, amount, payerID, participantIDs, date, shares, receiptURL, items, tax, tip
+        case id, title, amount, payerID, participantIDs, date, shares, receiptURL, items, tax, tip, deletedAt
     }
 
     // Custom decoder so expenses saved before `shares`/`receiptURL`/`items` existed still
@@ -80,6 +87,7 @@ struct Expense: Identifiable, Codable {
         items = try c.decodeIfPresent([ReceiptItem].self, forKey: .items) ?? []
         tax = try c.decodeIfPresent(Double.self, forKey: .tax) ?? 0
         tip = try c.decodeIfPresent(Double.self, forKey: .tip) ?? 0
+        deletedAt = try c.decodeIfPresent(Date.self, forKey: .deletedAt)
     }
 }
 
@@ -179,6 +187,11 @@ struct Trip: Identifiable, Codable {
     var budgets: [Person.ID: Double]
     var expenses: [Expense] = []
 
+    /// Soft-deleted expenses, most-recent first. Kept out of the active split/settle
+    /// math but still counted in `spent(for:)` so deleting doesn't refund budget, and
+    /// surfaced in the trip's "Recently Deleted" list where they can be restored.
+    var deletedExpenses: [Expense] = []
+
     /// Recorded settlement payments toward this trip's debts, keyed by
     /// `"<debtorID>-><creditorID>"`. Stored on the trip so settle-up progress
     /// syncs to the shared cloud row alongside members, budgets, and expenses.
@@ -208,6 +221,7 @@ struct Trip: Identifiable, Codable {
         members: [Person],
         budgets: [Person.ID: Double],
         expenses: [Expense] = [],
+        deletedExpenses: [Expense] = [],
         settlementRecords: [String: [SettlementRecord]] = [:],
         comments: [String: [ExpenseComment]] = [:],
         location: String? = nil,
@@ -223,6 +237,7 @@ struct Trip: Identifiable, Codable {
         self.members = members
         self.budgets = budgets
         self.expenses = expenses
+        self.deletedExpenses = deletedExpenses
         self.settlementRecords = settlementRecords
         self.comments = comments
         self.location = location
@@ -233,7 +248,7 @@ struct Trip: Identifiable, Codable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, currencyCode, creatorID, members, budgets, expenses, settlementRecords, comments
+        case id, name, currencyCode, creatorID, members, budgets, expenses, deletedExpenses, settlementRecords, comments
         case location, startDate, endDate, coverImageURL, allowMembersToPayForOthers
     }
 
@@ -248,6 +263,7 @@ struct Trip: Identifiable, Codable {
         members = try c.decode([Person].self, forKey: .members)
         budgets = try c.decodeIfPresent([Person.ID: Double].self, forKey: .budgets) ?? [:]
         expenses = try c.decodeIfPresent([Expense].self, forKey: .expenses) ?? []
+        deletedExpenses = try c.decodeIfPresent([Expense].self, forKey: .deletedExpenses) ?? []
         settlementRecords = try c.decodeIfPresent([String: [SettlementRecord]].self, forKey: .settlementRecords) ?? [:]
         comments = try c.decodeIfPresent([String: [ExpenseComment]].self, forKey: .comments) ?? [:]
         location = try c.decodeIfPresent(String.self, forKey: .location)
@@ -300,8 +316,10 @@ extension Trip {
     }
 
     /// What the user personally consumed across the trip (their share of every expense).
+    /// Deleted expenses are still counted here so removing an expense doesn't refund
+    /// budget headroom — the spend stays committed against the budget.
     func spent(for userID: Person.ID) -> Double {
-        expenses.reduce(0) { $0 + share(for: userID, in: $1) }
+        (expenses + deletedExpenses).reduce(0) { $0 + share(for: userID, in: $1) }
     }
 
     /// What the user owes others (their share of expenses paid by someone else).
@@ -403,6 +421,24 @@ extension Trip {
             }
     }
 
+    /// Both remaining-owed figures for a user in one `settlements()` pass — the settlement
+    /// computation is the expensive part, so callers that need both (e.g. the budget
+    /// overview card) shouldn't run it twice.
+    func remainingOwed(for userID: Person.ID) -> (by: Double, to: Double) {
+        var by = 0.0, to = 0.0
+        for s in settlements() {
+            guard s.from.id == userID || s.to.id == userID else { continue }
+            let key = "\(s.from.id.uuidString)->\(s.to.id.uuidString)"
+            let confirmed = (settlementRecords[key] ?? [])
+                .filter { $0.status == .confirmed }
+                .reduce(0.0) { $0 + $1.amount }
+            let remaining = max(0, SplitEngine.roundToTwo(s.amount - confirmed))
+            if s.from.id == userID { by += remaining }
+            if s.to.id == userID { to += remaining }
+        }
+        return (by, to)
+    }
+
     /// Rewrites the original creator's member id to `newID` everywhere it appears —
     /// `creatorID`, the member list, budgets, expense payers/participants, and settlement
     /// keys — so a trip loaded from the cloud lines up with the signed-in user's stable
@@ -419,12 +455,14 @@ extension Trip {
             return renamed
         }
         if let budget = copy.budgets.removeValue(forKey: oldID) { copy.budgets[newID] = budget }
-        copy.expenses = expenses.map { expense in
+        func reanchor(_ expense: Expense) -> Expense {
             var updated = expense
             if updated.payerID == oldID { updated.payerID = newID }
             if updated.participantIDs.remove(oldID) != nil { updated.participantIDs.insert(newID) }
             return updated
         }
+        copy.expenses = expenses.map(reanchor)
+        copy.deletedExpenses = deletedExpenses.map(reanchor)
         copy.settlementRecords = Dictionary(
             settlementRecords.map { key, value in
                 (key.replacingOccurrences(of: oldID.uuidString, with: newID.uuidString), value)
@@ -472,6 +510,32 @@ final class TripStore {
     /// Live cloud-sync status, surfaced in the UI so failed saves aren't silent.
     enum SyncState: Equatable { case idle, syncing, failed }
     var syncState: SyncState = .idle
+
+    /// Number of in-flight cloud saves. The "Saving to cloud…" banner is only shown when a
+    /// save is still running after a short grace period — flipping `syncState` synchronously
+    /// on every tap inserted/removed the banner (a full home-screen relayout) twice per
+    /// mutation, which is what made buttons feel laggy.
+    @ObservationIgnored private var activeSaveCount = 0
+
+    /// Marks a cloud save as started; shows the syncing banner only if it's still running
+    /// after 400 ms so quick saves never cause layout churn.
+    private func beginSyncActivity() {
+        activeSaveCount += 1
+        Task {
+            try? await Task.sleep(for: .milliseconds(400))
+            if activeSaveCount > 0 && syncState != .failed { syncState = .syncing }
+        }
+    }
+
+    /// Marks a cloud save as finished, updating the visible state once nothing is in flight.
+    private func endSyncActivity(failed: Bool) {
+        activeSaveCount = max(0, activeSaveCount - 1)
+        if failed {
+            syncState = .failed
+        } else if activeSaveCount == 0 {
+            syncState = .idle
+        }
+    }
 
     /// IDs of trips deleted locally whose cloud delete hasn't succeeded yet (e.g. the
     /// delete happened offline). Persisted so the deletion survives relaunch, retried on
@@ -603,7 +667,7 @@ final class TripStore {
         func conv(_ value: Double) -> Double { SplitEngine.roundToTwo(value * rate) }
         var converted = trip
         converted.budgets = converted.budgets.mapValues(conv)
-        converted.expenses = converted.expenses.map { expense in
+        func convertExpense(_ expense: Expense) -> Expense {
             var e = expense
             e.amount = conv(e.amount)
             e.tax = conv(e.tax)
@@ -617,6 +681,8 @@ final class TripStore {
             }
             return e
         }
+        converted.expenses = converted.expenses.map(convertExpense)
+        converted.deletedExpenses = converted.deletedExpenses.map(convertExpense)
         converted.settlementRecords = converted.settlementRecords.mapValues { records in
             records.map { record in
                 var r = record
@@ -627,15 +693,37 @@ final class TripStore {
         return converted
     }
 
-    private func aggregate(_ value: (Trip) -> Double) -> Double {
-        SplitEngine.roundToTwo(myTrips.reduce(0) { $0 + toUSD(value($1), from: $1.currencyCode) })
+    /// All four home-card figures, aggregated in USD. Computed in a single pass over the
+    /// trips so `settlements()` (the expensive part, O(members² × expenses)) runs once per
+    /// trip per render instead of once per figure.
+    struct HomeTotals {
+        var budget = 0.0, spent = 0.0, youOwe = 0.0, owedToYou = 0.0
+        var available: Double { SplitEngine.roundToTwo(budget - spent) }
     }
 
-    var totalBudget: Double { aggregate { $0.budget(for: currentUser.id) } }
-    var totalSpent: Double { aggregate { $0.spent(for: currentUser.id) } }
-    var budgetAvailable: Double { SplitEngine.roundToTwo(totalBudget - totalSpent) }
-    var totalYouOwe: Double { aggregate { $0.remainingOwed(by: currentUser.id) } }
-    var totalOwedToYou: Double { aggregate { $0.remainingOwed(to: currentUser.id) } }
+    var homeTotals: HomeTotals {
+        var totals = HomeTotals()
+        let me = currentUser.id
+        for trip in myTrips {
+            let code = trip.currencyCode
+            totals.budget += toUSD(trip.budget(for: me), from: code)
+            totals.spent += toUSD(trip.spent(for: me), from: code)
+            for s in trip.settlements() {
+                let key = "\(s.from.id.uuidString)->\(s.to.id.uuidString)"
+                let confirmed = (trip.settlementRecords[key] ?? [])
+                    .filter { $0.status == .confirmed }
+                    .reduce(0.0) { $0 + $1.amount }
+                let remaining = max(0, SplitEngine.roundToTwo(s.amount - confirmed))
+                if s.from.id == me { totals.youOwe += toUSD(remaining, from: code) }
+                if s.to.id == me { totals.owedToYou += toUSD(remaining, from: code) }
+            }
+        }
+        totals.budget = SplitEngine.roundToTwo(totals.budget)
+        totals.spent = SplitEngine.roundToTwo(totals.spent)
+        totals.youOwe = SplitEngine.roundToTwo(totals.youOwe)
+        totals.owedToYou = SplitEngine.roundToTwo(totals.owedToYou)
+        return totals
+    }
 
     func trip(_ id: Trip.ID) -> Trip? { trips.first { $0.id == id } }
 
@@ -660,11 +748,27 @@ final class TripStore {
         persist(trips[index])
     }
 
-    /// Removes an expense from a trip and syncs the change.
+    /// Soft-deletes an expense: pulls it out of the active split/settle math and into
+    /// the trip's "Recently Deleted" list. It still counts toward `spent(for:)`, so the
+    /// budget isn't refunded, and it can be restored later. Comments are kept so a
+    /// restore brings the whole thread back.
     func deleteExpense(_ expenseID: Expense.ID, from tripID: Trip.ID) {
-        guard let index = trips.firstIndex(where: { $0.id == tripID }) else { return }
-        trips[index].expenses.removeAll { $0.id == expenseID }
-        trips[index].comments.removeValue(forKey: expenseID.uuidString)
+        guard let index = trips.firstIndex(where: { $0.id == tripID }),
+              let eIndex = trips[index].expenses.firstIndex(where: { $0.id == expenseID }) else { return }
+        var removed = trips[index].expenses.remove(at: eIndex)
+        removed.deletedAt = Date()
+        trips[index].deletedExpenses.insert(removed, at: 0)
+        persist(trips[index])
+    }
+
+    /// Restores a previously soft-deleted expense back into the active list, returning it
+    /// to the split/settle math (its budget contribution was never removed).
+    func restoreExpense(_ expenseID: Expense.ID, in tripID: Trip.ID) {
+        guard let index = trips.firstIndex(where: { $0.id == tripID }),
+              let dIndex = trips[index].deletedExpenses.firstIndex(where: { $0.id == expenseID }) else { return }
+        var restored = trips[index].deletedExpenses.remove(at: dIndex)
+        restored.deletedAt = nil
+        trips[index].expenses.append(restored)
         persist(trips[index])
     }
 
@@ -762,21 +866,19 @@ final class TripStore {
         pendingDeletions.insert(tripID)
         savePendingDeletions()
 
-        syncState = .syncing
+        beginSyncActivity()
         Task {
             do {
                 guard let accessToken = try await authorizedAccessToken() else {
-                    await MainActor.run { self.syncState = .idle }
+                    self.endSyncActivity(failed: false)
                     return
                 }
                 try await TripsRepository.shared.delete(id: tripID, accessToken: accessToken)
-                await MainActor.run {
-                    self.pendingDeletions.remove(tripID)
-                    self.savePendingDeletions()
-                    self.syncState = .idle
-                }
+                self.pendingDeletions.remove(tripID)
+                self.savePendingDeletions()
+                self.endSyncActivity(failed: false)
             } catch {
-                await MainActor.run { self.syncState = .failed }
+                self.endSyncActivity(failed: true)
             }
         }
     }
@@ -884,30 +986,33 @@ final class TripStore {
     /// Pushes a single shared trip (members, budgets, and expenses) to Supabase, updating
     /// `syncState` so the UI can show progress and surface failures.
     private func persist(_ trip: Trip) {
-        syncState = .syncing
+        beginSyncActivity()
         Task {
             do {
                 guard let accessToken = try await authorizedAccessToken() else {
-                    await MainActor.run { self.syncState = .idle }
+                    self.endSyncActivity(failed: false)
                     return
                 }
                 try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
                     try await TripsRepository.shared.upsert(trip, accessToken: token)
                 }
-                await MainActor.run { self.syncState = .idle }
+                self.endSyncActivity(failed: false)
             } catch {
-                await MainActor.run { self.syncState = .failed }
+                self.endSyncActivity(failed: true)
             }
         }
     }
 
     /// Re-pushes every trip to Supabase. Used by the "Retry" action after a failed save.
     func retrySync() {
+        // Explicit retry: show progress immediately (the user asked for it), and clear the
+        // failed state so the delayed-banner logic doesn't suppress the spinner.
         syncState = .syncing
+        activeSaveCount += 1
         Task {
             do {
                 guard let accessToken = try await authorizedAccessToken() else {
-                    await MainActor.run { self.syncState = .idle }
+                    self.endSyncActivity(failed: false)
                     return
                 }
                 let deletionsCleared = await flushPendingDeletions(accessToken: accessToken)
@@ -916,9 +1021,9 @@ final class TripStore {
                         try await TripsRepository.shared.upsert(trip, accessToken: token)
                     }
                 }
-                await MainActor.run { self.syncState = deletionsCleared ? .idle : .failed }
+                self.endSyncActivity(failed: !deletionsCleared)
             } catch {
-                await MainActor.run { self.syncState = .failed }
+                self.endSyncActivity(failed: true)
             }
         }
     }
@@ -1830,6 +1935,9 @@ struct TripDetailView: View {
                                     settleCard(trip).id("settle")
                                     membersCard(trip)
                                     expensesCard(trip)
+                                    if !trip.deletedExpenses.isEmpty {
+                                        recentlyDeletedCard(trip)
+                                    }
                                 }
                                 .padding()
                                 .padding(.top, 6)
@@ -2064,10 +2172,11 @@ struct TripDetailView: View {
 
             Divider()
 
+            let owed = trip.remainingOwed(for: me)
             HStack {
-                statColumn("You owe", money(trip.remainingOwed(by: me), trip.currencyCode), Color(hex: 0xEF4444))
+                statColumn("You owe", money(owed.by, trip.currencyCode), Color(hex: 0xEF4444))
                 Spacer()
-                statColumn("You're owed", money(trip.remainingOwed(to: me), trip.currencyCode), Color(hex: 0x10B981))
+                statColumn("You're owed", money(owed.to, trip.currencyCode), Color(hex: 0x10B981))
             }
         }
         .padding(18)
@@ -2351,6 +2460,53 @@ struct TripDetailView: View {
     /// edit everything; shared members can edit expenses they personally paid.
     private func canModify(_ trip: Trip, _ expense: Expense) -> Bool {
         store.isCreator(of: trip) || expense.payerID == store.currentUser.id
+    }
+
+    private func recentlyDeletedCard(_ trip: Trip) -> some View {
+        TripCard(title: "Recently Deleted (\(trip.deletedExpenses.count))", icon: "trash") {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Deleted expenses still count toward your budget. Restore one to add it back to the split.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                ForEach(trip.deletedExpenses) { expense in
+                    deletedExpenseRow(trip, expense)
+                }
+            }
+        }
+    }
+
+    private func deletedExpenseRow(_ trip: Trip, _ expense: Expense) -> some View {
+        let payer = trip.members.first { $0.id == expense.payerID }
+        let me = store.currentUser.id
+        return HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(expense.title)
+                    .font(.subheadline.weight(.semibold))
+                    .strikethrough(color: .secondary)
+                    .foregroundStyle(.secondary)
+                let payerText = payer.map { $0.id == me ? "you" : $0.name } ?? "—"
+                let deletedText = expense.deletedAt.map { " • deleted \($0.formatted(date: .abbreviated, time: .omitted))" } ?? ""
+                Text("Paid by \(payerText)\(deletedText)")
+                    .font(.caption).foregroundStyle(.tertiary)
+            }
+            Spacer()
+            Text(money(expense.amount, trip.currencyCode))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+            if canModify(trip, expense) {
+                Button {
+                    store.restoreExpense(expense.id, in: trip.id)
+                } label: {
+                    Text("Restore")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .background(Color(hex: 0x6366F1).opacity(0.16), in: .capsule)
+                        .foregroundStyle(Color(hex: 0x6366F1))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.vertical, 4)
     }
 
     private func expenseRow(_ trip: Trip, _ expense: Expense) -> some View {
@@ -3008,6 +3164,13 @@ struct AddExpenseView: View {
     @MainActor
     private func processReceipt(_ image: UIImage, originalData: Data?) async {
         receiptImage = image
+
+        // A freshly picked/replaced photo invalidates the previous scan and upload. Clear
+        // the old upload state so the scanning process starts over AND the new image
+        // actually re-uploads — the upload guard (`receiptURL == nil`) otherwise skips the
+        // upload whenever a URL was already set, silently persisting the previous photo.
+        receiptURL = nil
+        uploadError = nil
 
         isScanning = true
         let scan = await ReceiptScanner.scan(image, accessToken: store.accessToken)

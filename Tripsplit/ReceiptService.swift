@@ -1,3 +1,4 @@
+import CoreImage
 import Foundation
 import SwiftUI
 import UIKit
@@ -86,10 +87,14 @@ struct ParsedReceipt: Decodable {
     }
 }
 
-// MARK: - Receipt LLM parser (Gemini free tier)
+// MARK: - Receipt LLM parser (Gemini free tier) — currently unused
 
 /// Turns a receipt image into a structured `ParsedReceipt` via Gemini. Network I/O only —
 /// no observable state — so it's a plain namespace with static async calls.
+///
+/// NOTE: no longer called by `ReceiptScanner.scan` — receipt scanning now runs fully
+/// on-device via Vision OCR, which proved more reliable at itemizing. Kept (with the
+/// `parse-receipt` Edge Function) in case a server-side parse is reintroduced.
 enum ReceiptParser {
     private static let maxImageBytes = 4_000_000
     private static let maxImageDimension: CGFloat = 2_200
@@ -97,14 +102,20 @@ enum ReceiptParser {
     /// Sends the receipt image to the `parse-receipt` Edge Function (authenticated as the
     /// signed-in user) and decodes the structured receipt it returns. The Gemini key and
     /// prompt live in the function, not here. `accessToken` is the user's Supabase JWT.
-    static func parse(image: UIImage, accessToken: String) async throws -> ParsedReceipt {
+    static func parse(image: UIImage, ocrText: String? = nil, accessToken: String) async throws -> ParsedReceipt {
         guard let jpeg = jpegData(for: image) else {
             throw ReceiptScanError.invalidResponse
         }
-        return try await parse(payload: [
+        var payload = [
             "imageBase64": jpeg.base64EncodedString(),
             "mimeType": "image/jpeg",
-        ], accessToken: accessToken)
+        ]
+        // Ship the on-device OCR text alongside the photo: the Edge Function passes both
+        // to Gemini so it can cross-check faint/skewed rows instead of skipping them.
+        if let ocrText, !ocrText.isEmpty {
+            payload["text"] = String(ocrText.prefix(16_000))
+        }
+        return try await parse(payload: payload, accessToken: accessToken)
     }
 
     /// Legacy text parser kept for compatibility with older callers and deployments.
@@ -183,11 +194,11 @@ struct ReceiptScanResult {
     var tip: Double? = nil
 }
 
-/// Reads line items off a receipt photo with a hybrid pipeline: the `parse-receipt` Edge
-/// Function first asks Gemini to scan the image directly into structured items + tax/tip.
-/// When Gemini is unavailable — signed out, no network, rate-limited, or an error — it
-/// falls back to Apple's on-device Vision OCR plus the heuristic parser. Either way the
-/// results are an editable list the user can correct.
+/// Reads line items off a receipt photo entirely on-device: Apple's Vision OCR extracts
+/// the text rows, and the heuristic parser pairs names with prices and pulls out tax/tip.
+/// No network, no sign-in requirement, and no LLM variability — testing showed this to be
+/// more reliable at itemizing receipts than the Gemini path (`ReceiptParser`, retained
+/// below but no longer called). The results are an editable list the user can correct.
 enum ReceiptScanner {
 
     /// Words that mark a line as a total/tax/payment row rather than a purchasable item.
@@ -202,25 +213,97 @@ enum ReceiptScanner {
     /// Keywords identifying a tip / gratuity row.
     private static let tipKeywords = ["tip", "gratuity", "service charge", "service chg"]
 
-    /// Parses a receipt image into line items plus tax/tip. Prefers the server-side Gemini
-    /// image parse (requires the signed-in user's `accessToken`) and falls back to the
-    /// on-device Vision parser when it's unavailable. Returns an empty result if nothing
-    /// usable is found.
-    static func scan(_ image: UIImage, accessToken: String?) async -> ReceiptScanResult {
-        if ReceiptAIConfig.isConfigured, let accessToken, !accessToken.isEmpty {
-            do {
-                let parsed = try await ReceiptParser.parse(image: image, accessToken: accessToken)
-                let result = mapToScanResult(parsed)
-                if !result.items.isEmpty { return result }
-            } catch {
-                BackendSecurity.log("Receipt LLM parse failed; using on-device fallback", error: error)
+    /// Parses a receipt image into line items plus tax/tip using on-device Vision OCR and
+    /// the heuristic line parser. Returns an empty result if nothing usable is found.
+    /// (`accessToken` is accepted for call-site compatibility but no longer used — the
+    /// scan runs fully on-device.)
+    static func scan(_ image: UIImage, accessToken: String? = nil) async -> ReceiptScanResult {
+        guard let cgImage = image.cgImage else { return ReceiptScanResult() }
+        // Photos picked from the library arrive un-cropped and skewed (the document
+        // camera deskews on capture, the library doesn't). Find the receipt in the frame
+        // and perspective-correct it first — OCR accuracy on picked photos improves a lot.
+        let prepared = await deskewedDocument(in: cgImage) ?? cgImage
+
+        // First pass reads the receipt as-photographed.
+        let firstRows = await recognizeRows(prepared)
+        var best = parseItems(from: firstRows)
+
+        // Faint thermal ink, wrinkles, glare, or something scrawled across the receipt leave
+        // the first pass thin. Retry on a grayscale, contrast-boosted, sharpened copy — which
+        // recovers characters the raw photo's OCR drops — and keep whichever pass read the
+        // receipt better, so we do the best we can under poor conditions instead of giving up.
+        if best.items.count < 3, let enhanced = enhancedForOCR(prepared) {
+            let altRows = await recognizeRows(enhanced)
+            let alt = parseItems(from: altRows)
+            let altIsBetter = alt.items.count > best.items.count
+                || (alt.items.count == best.items.count && altRows.count > firstRows.count)
+            if altIsBetter { best = alt }
+        }
+        return best
+    }
+
+    /// Reused across the OCR preprocessing passes — constructing a `CIContext` per call is
+    /// expensive, and it's safe to render from concurrently.
+    private static let sharedCIContext = CIContext()
+
+    /// Produces a grayscale, contrast-boosted, sharpened copy of the receipt for a second OCR
+    /// pass under poor conditions. Thermal receipts fade, wrinkle, and pick up glare or
+    /// handwriting; flattening color, stretching contrast, and firming up edges recovers
+    /// characters the raw photo loses. Returns `nil` if the filter chain can't be rendered,
+    /// in which case the caller keeps the first pass.
+    private static func enhancedForOCR(_ cgImage: CGImage) -> CGImage? {
+        let input = CIImage(cgImage: cgImage)
+        // Desaturate and stretch contrast so faint ink separates from the paper; a small
+        // brightness lift keeps thin strokes from being crushed to the page color.
+        let toned = input.applyingFilter("CIColorControls", parameters: [
+            kCIInputSaturationKey: 0,
+            kCIInputContrastKey: 1.3,
+            kCIInputBrightnessKey: 0.05,
+        ])
+        // Sharpen luminance edges to firm up characters softened by wrinkles or a slightly
+        // out-of-focus photo.
+        let sharpened = toned.applyingFilter("CISharpenLuminance", parameters: [
+            kCIInputSharpnessKey: 0.5,
+        ])
+        return sharedCIContext.createCGImage(sharpened, from: sharpened.extent)
+    }
+
+    /// Detects the dominant document (the receipt) in the image and returns it cropped and
+    /// perspective-corrected, or `nil` when detection isn't confident — callers then OCR
+    /// the original frame. Runs off the main thread; Vision + CoreImage only, on-device.
+    private static func deskewedDocument(in cgImage: CGImage) async -> CGImage? {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let request = VNDetectDocumentSegmentationRequest()
+                let handler = VNImageRequestHandler(cgImage: cgImage, orientation: .up)
+                guard (try? handler.perform([request])) != nil,
+                      let document = request.results?.first,
+                      document.confidence > 0.8 else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+
+                let ciImage = CIImage(cgImage: cgImage)
+                let size = ciImage.extent.size
+                func scaled(_ p: CGPoint) -> CGPoint { CGPoint(x: p.x * size.width, y: p.y * size.height) }
+                let corrected = ciImage.applyingFilter("CIPerspectiveCorrection", parameters: [
+                    "inputTopLeft": CIVector(cgPoint: scaled(document.topLeft)),
+                    "inputTopRight": CIVector(cgPoint: scaled(document.topRight)),
+                    "inputBottomLeft": CIVector(cgPoint: scaled(document.bottomLeft)),
+                    "inputBottomRight": CIVector(cgPoint: scaled(document.bottomRight)),
+                ])
+
+                // Reject implausibly small detections (e.g. it latched onto a logo):
+                // better to OCR the full frame than a fragment of it.
+                let area = corrected.extent.width * corrected.extent.height
+                guard area > size.width * size.height * 0.15,
+                      let output = CIContext().createCGImage(corrected, from: corrected.extent) else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                continuation.resume(returning: output)
             }
         }
-
-        guard let cgImage = image.cgImage else { return ReceiptScanResult() }
-        let lines = await recognizeRows(cgImage)
-        guard !lines.isEmpty else { return ReceiptScanResult() }
-        return parseItems(from: lines)
     }
 
     /// Runs Vision text recognition and returns the receipt's rows (name and price merged
@@ -232,7 +315,18 @@ enum ReceiptScanner {
                 continuation.resume(returning: groupIntoRows(observations))
             }
             request.recognitionLevel = .accurate
-            request.usesLanguageCorrection = true
+            // Language correction "fixes" digit strings into words (5.00 → S.OO, item
+            // codes → dictionary words), which corrupts exactly the columns we need.
+            request.usesLanguageCorrection = false
+            // Consider smaller glyphs than the default (~1/32 of image height) so item rows
+            // and prices on densely printed or far-away receipts aren't skipped as too small.
+            request.minimumTextHeight = 0.01
+            if #available(iOS 16.0, *) {
+                // Latest recognizer + language auto-detection reads faint / non-English
+                // receipts more reliably; correction stays off so digits survive.
+                request.revision = VNRecognizeTextRequestRevision3
+                request.automaticallyDetectsLanguage = true
+            }
 
             let handler = VNImageRequestHandler(cgImage: cgImage, orientation: .up)
             DispatchQueue.global(qos: .userInitiated).async {
@@ -262,6 +356,9 @@ enum ReceiptScanner {
         }
         if parsed.tax > 0 { result.tax = SplitEngine.roundToTwo(parsed.tax) }
         if parsed.tip > 0 { result.tip = SplitEngine.roundToTwo(parsed.tip) }
+        // The model occasionally lists the (unlabeled) total as one more item; the same
+        // arithmetic check used for the OCR path removes it here too.
+        dropUnlabeledTotalRow(&result)
         return result
     }
 
@@ -270,22 +367,34 @@ enum ReceiptScanner {
     /// horizontal line (similar `midY`) into one left-to-right string, so a name and its
     /// price end up on the same logical line for `parseItems` to pair.
     static func groupIntoRows(_ observations: [VNRecognizedTextObservation]) -> [String] {
-        let entries = observations.compactMap { obs -> (text: String, midY: CGFloat, minX: CGFloat)? in
+        let entries = observations.compactMap { obs -> (text: String, midY: CGFloat, minX: CGFloat, height: CGFloat)? in
             guard let text = obs.topCandidates(1).first?.string else { return nil }
-            return (text, obs.boundingBox.midY, obs.boundingBox.minX)
+            return (text, obs.boundingBox.midY, obs.boundingBox.minX, obs.boundingBox.height)
         }
+        guard !entries.isEmpty else { return [] }
         // Top-to-bottom (Vision's origin is bottom-left, so larger y is higher).
         let sorted = entries.sorted { $0.midY > $1.midY }
 
-        // Fraction of image height within which observations count as the same row.
-        let rowTolerance: CGFloat = 0.012
-        var rows: [[(text: String, midY: CGFloat, minX: CGFloat)]] = []
+        // Same-row tolerance derived from the receipt's actual text size: a fixed fraction
+        // of image height splits the name from its price on close-up photos (rows look
+        // "tall") and merges adjacent lines on far-away ones. Half the median glyph height
+        // tracks the print size whatever the framing.
+        let heights = entries.map(\.height).sorted()
+        let medianHeight = heights[heights.count / 2]
+        let rowTolerance = max(0.008, medianHeight * 0.5)
+
+        var rows: [[(text: String, midY: CGFloat, minX: CGFloat, height: CGFloat)]] = []
         for entry in sorted {
-            if let reference = rows.last?.first, abs(reference.midY - entry.midY) < rowTolerance {
-                rows[rows.count - 1].append(entry)
-            } else {
-                rows.append([entry])
+            // Compare against the running average of the row, not its first member, so a
+            // slightly tilted receipt doesn't fragment one printed line into several rows.
+            if let row = rows.last {
+                let rowMidY = row.reduce(0) { $0 + $1.midY } / CGFloat(row.count)
+                if abs(rowMidY - entry.midY) < rowTolerance {
+                    rows[rows.count - 1].append(entry)
+                    continue
+                }
             }
+            rows.append([entry])
         }
 
         return rows.map { row in
@@ -297,10 +406,19 @@ enum ReceiptScanner {
     /// become `ReceiptItem`s; tax and tip rows are pulled out so they can be allocated
     /// proportionally across the items rather than treated as purchasable lines.
     static func parseItems(from lines: [String]) -> ReceiptScanResult {
-        let priceRegex = try? NSRegularExpression(pattern: #"(\d{1,5}[.,]\d{2})\s*$"#)
+        // A trailing price, tolerating a currency symbol before it ("$12.99"), thousands
+        // separators ("1,234.56"), and the tax-flag letters many registers print after the
+        // amount ("12.99 T", "4.50 A*") — all of which the previous stricter pattern missed.
+        let priceRegex = try? NSRegularExpression(
+            pattern: #"[$€£¥]?\s*(\d{1,3}(?:[.,]\d{3})*[.,]\d{2})\s*[A-Za-z*]{0,2}\s*$"#
+        )
         guard let priceRegex else { return ReceiptScanResult() }
 
         var result = ReceiptScanResult()
+        // Once a subtotal/total row appears, the item section is over — anything priced
+        // below it is the payment block (cash, change, card auth), not a purchase.
+        var itemSectionEnded = false
+
         for raw in lines {
             let line = raw.trimmingCharacters(in: .whitespaces)
             guard !line.isEmpty else { continue }
@@ -311,8 +429,7 @@ enum ReceiptScanner {
             guard let match = priceRegex.firstMatch(in: line, range: range),
                   let priceRange = Range(match.range(at: 1), in: line) else { continue }
 
-            let priceText = line[priceRange].replacingOccurrences(of: ",", with: ".")
-            guard let price = Double(priceText), price > 0 else { continue }
+            guard let price = decimalValue(String(line[priceRange])), price > 0 else { continue }
             let rounded = SplitEngine.roundToTwo(price)
 
             // Capture tax / tip rows for allocation, taking the largest match of each
@@ -325,19 +442,70 @@ enum ReceiptScanner {
                 result.tip = max(result.tip ?? 0, rounded)
                 continue
             }
-            if nonItemKeywords.contains(where: { lower.contains($0) }) { continue }
+            if nonItemKeywords.contains(where: { lower.contains($0) }) {
+                if lower.contains("total") || lower.contains("amount") || lower.contains("balance") {
+                    itemSectionEnded = true
+                }
+                continue
+            }
+            guard !itemSectionEnded else { continue }
 
             var name = String(line[line.startIndex..<priceRange.lowerBound])
-            // Drop a leading quantity count (e.g. "1  Grande Latte" → "Grande Latte").
-            if let qtyRange = name.range(of: #"^\s*\d{1,3}\s+"#, options: .regularExpression) {
+
+            // An explicit multiplier ("2 x Beer 12.00") prices the LINE; expand it into
+            // per-unit rows so each unit can be assigned to a different person.
+            var unitCount = 1
+            if let qtyMatch = name.range(of: #"^\s*(\d{1,2})\s*[xX×@]\s+"#, options: .regularExpression) {
+                let digits = name[qtyMatch].filter(\.isNumber)
+                if let qty = Int(digits), (2...20).contains(qty), rounded >= Double(qty) * 0.01 {
+                    unitCount = qty
+                }
+                name.removeSubrange(qtyMatch)
+            }
+            // Drop a bare leading count (e.g. "1  Grande Latte" → "Grande Latte").
+            else if let qtyRange = name.range(of: #"^\s*\d{1,3}\s+"#, options: .regularExpression) {
                 name.removeSubrange(qtyRange)
             }
             name = name.trimmingCharacters(in: CharacterSet(charactersIn: " .-*x×@$€£¥"))
             if name.isEmpty { name = "Item" }
 
-            result.items.append(ReceiptItem(name: name, price: rounded))
+            let unitPrice = SplitEngine.roundToTwo(rounded / Double(unitCount))
+            for _ in 0..<unitCount {
+                result.items.append(ReceiptItem(name: name, price: unitPrice))
+            }
         }
+
+        dropUnlabeledTotalRow(&result)
         return result
+    }
+
+    /// Receipts sometimes print the total with no recognizable label (or OCR garbles it),
+    /// so it lands in `items` and doubles the bill. If the single largest "item" equals
+    /// the sum of everything else (optionally plus tax/tip), it's that total row — drop it.
+    private static func dropUnlabeledTotalRow(_ result: inout ReceiptScanResult) {
+        guard result.items.count >= 2,
+              let maxIndex = result.items.indices.max(by: { result.items[$0].price < result.items[$1].price })
+        else { return }
+        let largest = result.items[maxIndex].price
+        let restSum = result.items.enumerated()
+            .filter { $0.offset != maxIndex }
+            .reduce(0.0) { $0 + $1.element.price }
+        let withTaxTip = restSum + (result.tax ?? 0) + (result.tip ?? 0)
+        if abs(largest - restSum) <= 0.02 || abs(largest - withTaxTip) <= 0.02 {
+            result.items.remove(at: maxIndex)
+        }
+    }
+
+    /// Parses a printed amount that may use either separator convention: the LAST "." or
+    /// "," is the decimal point, anything before it is a thousands separator (so both
+    /// "1,234.56" and "1.234,56" resolve to 1234.56).
+    private static func decimalValue(_ text: String) -> Double? {
+        guard let decimalIndex = text.lastIndex(where: { $0 == "." || $0 == "," }) else {
+            return Double(text.filter(\.isNumber))
+        }
+        let whole = text[..<decimalIndex].filter(\.isNumber)
+        let fraction = text[text.index(after: decimalIndex)...].filter(\.isNumber)
+        return Double("\(whole).\(fraction)")
     }
 }
 

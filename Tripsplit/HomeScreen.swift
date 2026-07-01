@@ -33,6 +33,8 @@ struct HomeScreen: View {
                 }
                 .padding(.horizontal)
                 .padding(.bottom, 90)
+                // Animate the sync banner in/out instead of snapping the whole layout.
+                .animation(.snappy, value: store.syncState)
             }
             .background {
                 LinearGradient(
@@ -289,14 +291,14 @@ struct HomeScreen: View {
             .sorted { $0.sortDate > $1.sortDate }
     }
 
-    /// The deletable transactions among those currently visible (respects "See All").
-    private var visibleDeletableTransactions: [Transaction] {
-        let transactions = showAllTransactions ? allTransactions : Array(allTransactions.prefix(5))
-        return transactions.filter(\.canDelete)
-    }
-
     private var recentTransactions: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        // Materialized once per render: `allTransactions` walks every trip's expenses,
+        // formats dates, and sorts — referencing the computed property from each spot
+        // below would redo all of that several times per body pass.
+        let all = allTransactions
+        let transactions = showAllTransactions ? all : Array(all.prefix(5))
+        let visibleDeletableTransactions = transactions.filter(\.canDelete)
+        return VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Recent Transactions")
                     .font(.headline)
@@ -325,7 +327,7 @@ struct HomeScreen: View {
                     .buttonStyle(.plain)
                     .padding(.leading, 12)
                 } else {
-                    if allTransactions.count > 5 {
+                    if all.count > 5 {
                         Button {
                             withAnimation(.snappy) { showAllTransactions.toggle() }
                         } label: {
@@ -347,8 +349,7 @@ struct HomeScreen: View {
                 }
             }
 
-            let transactions = showAllTransactions ? allTransactions : Array(allTransactions.prefix(5))
-            if allTransactions.isEmpty {
+            if all.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "tray")
                         .font(.system(size: 32))
@@ -394,7 +395,7 @@ struct HomeScreen: View {
 
                 if isSelectingTransactions {
                     Button(role: .destructive) {
-                        transactionsPendingDelete = allTransactions.filter { selectedTransactionIDs.contains($0.id) }
+                        transactionsPendingDelete = all.filter { selectedTransactionIDs.contains($0.id) }
                     } label: {
                         Text("Delete\(selectedTransactionIDs.isEmpty ? "" : " (\(selectedTransactionIDs.count))")")
                             .font(.subheadline.weight(.semibold))
@@ -464,7 +465,9 @@ struct BalanceCard: View {
     }
 
     private var budgetFace: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        // One pass over the trips for all four figures (see `TripStore.homeTotals`).
+        let totals = store.homeTotals
+        return VStack(alignment: .leading, spacing: 18) {
             HStack {
                 Label("Budget Available", systemImage: "wallet.bifold.fill")
                     .font(.subheadline.weight(.medium))
@@ -481,14 +484,14 @@ struct BalanceCard: View {
                 .accessibilityLabel("Currency converter")
             }
 
-            Text(money(store.budgetAvailable, "USD"))
+            Text(money(totals.available, "USD"))
                 .font(.system(size: 36, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
 
             HStack {
                 Label("Total spent", systemImage: "wallet.bifold")
                     .font(.footnote.weight(.medium))
-                Text(money(store.totalSpent, "USD")).font(.footnote.weight(.semibold))
+                Text(money(totals.spent, "USD")).font(.footnote.weight(.semibold))
                 Spacer()
                 if !store.myTrips.isEmpty {
                     Text("Across \(store.myTrips.count) trip\(store.myTrips.count == 1 ? "" : "s")")
@@ -498,8 +501,8 @@ struct BalanceCard: View {
             .foregroundStyle(.white.opacity(0.85))
 
             HStack(spacing: 12) {
-                infoColumn(icon: "arrow.up.right", label: "You owe", value: money(store.totalYouOwe, "USD"))
-                infoColumn(icon: "arrow.down.left", label: "People owe", value: money(store.totalOwedToYou, "USD"))
+                infoColumn(icon: "arrow.up.right", label: "You owe", value: money(totals.youOwe, "USD"))
+                infoColumn(icon: "arrow.down.left", label: "People owe", value: money(totals.owedToYou, "USD"))
             }
         }
         .padding(20)
@@ -540,14 +543,30 @@ struct TripRow: View {
     let trip: Trip
     let currentUserID: Person.ID
 
-    // Budget health (per the signed-in user's own budget on this trip).
-    private var budget: Double { trip.budget(for: currentUserID) }
-    private var spent: Double { trip.spent(for: currentUserID) }
-    private var remaining: Double { trip.remainingBudget(for: currentUserID) }
-    private var hasBudget: Bool { budget > 0 }
-    private var percent: Double { hasBudget ? (spent / budget) * 100 : 0 }
-    private var isOver: Bool { hasBudget && spent > budget }
-    private var isNear: Bool { hasBudget && !isOver && percent >= 80 }
+    // Budget health (per the signed-in user's own budget on this trip). Computed once at
+    // init: `spent(for:)` walks every expense, and the card reads these values from half a
+    // dozen subviews, so recomputing per access made each card render O(subviews × expenses).
+    private let budget: Double
+    private let spent: Double
+    private let remaining: Double
+    private let hasBudget: Bool
+    private let percent: Double
+    private let isOver: Bool
+    private let isNear: Bool
+
+    init(trip: Trip, currentUserID: Person.ID) {
+        self.trip = trip
+        self.currentUserID = currentUserID
+        let budget = trip.budget(for: currentUserID)
+        let spent = trip.spent(for: currentUserID)
+        self.budget = budget
+        self.spent = spent
+        self.remaining = budget - spent
+        self.hasBudget = budget > 0
+        self.percent = budget > 0 ? (spent / budget) * 100 : 0
+        self.isOver = budget > 0 && spent > budget
+        self.isNear = budget > 0 && spent <= budget && percent >= 80
+    }
 
     private var accent: Color {
         isOver ? Color(hex: 0xDC2626) : isNear ? Color(hex: 0xD97706) : Color(hex: 0x16A34A)
