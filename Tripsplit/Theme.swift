@@ -88,4 +88,6 @@ enum Theme {
     /// Positive (you're owed / settled) and negative (you owe) semantic colors.
     static let positive = Color(hex: 0x10B981)
     static let negative = Color(hex: 0xEF4444)
+    /// Caution (budget nearing its limit) semantic color.
+    static let warning = Color(hex: 0xF59E0B)
 }

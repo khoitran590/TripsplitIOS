@@ -10,9 +10,9 @@ import VisionKit
 ///
 /// The Gemini API key lives SERVER-SIDE only, inside the `parse-receipt` Supabase Edge
 /// Function (`supabase/functions/parse-receipt`). The app never holds the key: it sends the
-/// OCR'd text to the function authenticated with the signed-in user's Supabase JWT, and the
-/// function calls Gemini with the key stored as a Supabase secret. This keeps the key out
-/// of the app binary and gates usage behind authentication + per-user rate limiting.
+/// receipt image to the function authenticated with the signed-in user's Supabase JWT, and
+/// the function calls Gemini with the key stored as a Supabase secret. This keeps the key
+/// out of the app binary and gates usage behind authentication + per-user rate limiting.
 enum ReceiptAIConfig {
     /// The Edge Function endpoint that proxies the LLM call.
     nonisolated static var endpoint: String {
@@ -88,13 +88,31 @@ struct ParsedReceipt: Decodable {
 
 // MARK: - Receipt LLM parser (Gemini free tier)
 
-/// Turns the OCR'd receipt text into a structured `ParsedReceipt` via Gemini. Network I/O
-/// only — no observable state — so it's a plain namespace with a static async call.
+/// Turns a receipt image into a structured `ParsedReceipt` via Gemini. Network I/O only —
+/// no observable state — so it's a plain namespace with static async calls.
 enum ReceiptParser {
-    /// Sends the OCR'd receipt text to the `parse-receipt` Edge Function (authenticated as
-    /// the signed-in user) and decodes the structured receipt it returns. The Gemini key
-    /// and prompt live in the function, not here. `accessToken` is the user's Supabase JWT.
+    private static let maxImageBytes = 4_000_000
+    private static let maxImageDimension: CGFloat = 2_200
+
+    /// Sends the receipt image to the `parse-receipt` Edge Function (authenticated as the
+    /// signed-in user) and decodes the structured receipt it returns. The Gemini key and
+    /// prompt live in the function, not here. `accessToken` is the user's Supabase JWT.
+    static func parse(image: UIImage, accessToken: String) async throws -> ParsedReceipt {
+        guard let jpeg = jpegData(for: image) else {
+            throw ReceiptScanError.invalidResponse
+        }
+        return try await parse(payload: [
+            "imageBase64": jpeg.base64EncodedString(),
+            "mimeType": "image/jpeg",
+        ], accessToken: accessToken)
+    }
+
+    /// Legacy text parser kept for compatibility with older callers and deployments.
     static func parse(rawText: String, accessToken: String) async throws -> ParsedReceipt {
+        try await parse(payload: ["text": rawText], accessToken: accessToken)
+    }
+
+    private static func parse(payload: [String: String], accessToken: String) async throws -> ParsedReceipt {
         guard ReceiptAIConfig.isConfigured, let url = URL(string: ReceiptAIConfig.endpoint) else {
             throw ReceiptScanError.notConfigured
         }
@@ -104,7 +122,7 @@ enum ReceiptParser {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(SupabaseConfig.anonKey, forHTTPHeaderField: "apikey")
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["text": rawText])
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
         let (data, response) = try await BackendSecurity.secureSession.data(for: request)
         guard let http = response as? HTTPURLResponse else {
@@ -122,9 +140,40 @@ enum ReceiptParser {
             throw ReceiptScanError.apiError(detail ?? "HTTP \(http.statusCode)")
         }
     }
+
+    /// Compresses the picked receipt enough for a JSON request while preserving enough
+    /// detail for Gemini to read item rows.
+    private static func jpegData(for image: UIImage) -> Data? {
+        let candidates = [image, resizedImageIfNeeded(image)].compactMap { $0 }
+        for candidate in candidates {
+            for quality in stride(from: 0.82, through: 0.42, by: -0.10) {
+                if let data = candidate.jpegData(compressionQuality: CGFloat(quality)), data.count <= maxImageBytes {
+                    return data
+                }
+            }
+        }
+        for candidate in candidates {
+            if let data = candidate.jpegData(compressionQuality: 0.35), data.count <= maxImageBytes {
+                return data
+            }
+        }
+        return nil
+    }
+
+    private static func resizedImageIfNeeded(_ image: UIImage) -> UIImage? {
+        let longestSide = max(image.size.width, image.size.height)
+        guard longestSide > maxImageDimension else { return nil }
+
+        let scale = maxImageDimension / longestSide
+        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: size))
+        }
+    }
 }
 
-// MARK: - Receipt scanning (hybrid: on-device OCR + LLM parsing)
+// MARK: - Receipt scanning (hybrid: Gemini image parse + on-device OCR fallback)
 
 /// The outcome of scanning a receipt: the purchasable line items plus any tax/tip rows
 /// detected separately so they can be allocated across the items.
@@ -134,12 +183,11 @@ struct ReceiptScanResult {
     var tip: Double? = nil
 }
 
-/// Reads line items off a receipt photo with a hybrid pipeline: Apple's on-device Vision
-/// OCR extracts the raw text (free, private, offline), then the `parse-receipt` Edge
-/// Function (server-side Gemini) parses that text into structured items + tax/tip. When the
-/// LLM step is unavailable — signed out, no network, rate-limited, or an error — it falls
-/// back to the on-device heuristic parser so scanning still works. Either way the results
-/// are an editable list the user can correct.
+/// Reads line items off a receipt photo with a hybrid pipeline: the `parse-receipt` Edge
+/// Function first asks Gemini to scan the image directly into structured items + tax/tip.
+/// When Gemini is unavailable — signed out, no network, rate-limited, or an error — it
+/// falls back to Apple's on-device Vision OCR plus the heuristic parser. Either way the
+/// results are an editable list the user can correct.
 enum ReceiptScanner {
 
     /// Words that mark a line as a total/tax/payment row rather than a purchasable item.
@@ -154,23 +202,14 @@ enum ReceiptScanner {
     /// Keywords identifying a tip / gratuity row.
     private static let tipKeywords = ["tip", "gratuity", "service charge", "service chg"]
 
-    /// Recognizes text and parses it into line items plus tax/tip. Prefers the server-side
-    /// LLM parse of the OCR text (requires the signed-in user's `accessToken`) and falls
-    /// back to the on-device heuristic parser when it's unavailable. Returns an empty result
-    /// if nothing usable is found.
+    /// Parses a receipt image into line items plus tax/tip. Prefers the server-side Gemini
+    /// image parse (requires the signed-in user's `accessToken`) and falls back to the
+    /// on-device Vision parser when it's unavailable. Returns an empty result if nothing
+    /// usable is found.
     static func scan(_ image: UIImage, accessToken: String?) async -> ReceiptScanResult {
-        guard let cgImage = image.cgImage else { return ReceiptScanResult() }
-
-        let lines = await recognizeRows(cgImage)
-        guard !lines.isEmpty else { return ReceiptScanResult() }
-
-        // Hybrid step: send the OCR text to the Edge Function for a structured parse. Only
-        // replace the heuristic result when it actually returns items — otherwise fall
-        // through. Requires an authenticated user; unsigned scans use on-device parsing.
         if ReceiptAIConfig.isConfigured, let accessToken, !accessToken.isEmpty {
             do {
-                let parsed = try await ReceiptParser.parse(rawText: lines.joined(separator: "\n"),
-                                                           accessToken: accessToken)
+                let parsed = try await ReceiptParser.parse(image: image, accessToken: accessToken)
                 let result = mapToScanResult(parsed)
                 if !result.items.isEmpty { return result }
             } catch {
@@ -178,6 +217,9 @@ enum ReceiptScanner {
             }
         }
 
+        guard let cgImage = image.cgImage else { return ReceiptScanResult() }
+        let lines = await recognizeRows(cgImage)
+        guard !lines.isEmpty else { return ReceiptScanResult() }
         return parseItems(from: lines)
     }
 

@@ -1,29 +1,30 @@
 // parse-receipt — server-side proxy for the receipt-parsing LLM call.
 //
-// Why this exists: the app must NOT ship the Gemini API key. The client sends only the
-// OCR'd receipt text (already extracted on-device) plus the signed-in user's Supabase JWT;
-// this function authenticates the user, rate-limits them, calls Gemini with the key held in
-// a Supabase secret, validates the model output, and returns structured JSON.
+// Why this exists: the app must NOT ship the Gemini API key. The client sends the receipt
+// image plus the signed-in user's Supabase JWT; this function authenticates the user,
+// rate-limits them, calls Gemini with the key held in a Supabase secret, validates the
+// model output, and returns structured JSON.
 //
 // Security posture:
 //  - Auth: platform `verify_jwt = true` AND an explicit `/auth/v1/user` check, so only a
 //    real signed-in user (not the anon key) is accepted.
 //  - Rate limit: per-user, enforced atomically by the `record_receipt_scan` RPC.
-//  - Input: JSON body must contain a non-empty `text` string under a byte cap.
+//  - Input: JSON body must contain either an image payload or legacy OCR `text`, under caps.
 //  - Secret: the Gemini key is read from env and never logged or returned.
 //  - Output: the model's JSON is re-validated/normalized before it reaches the client.
 //  - No dependencies: plain fetch only, to minimize supply-chain surface.
-//  - Privacy: receipt text is never logged.
+//  - Privacy: receipt images/text are never logged.
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
 const GEMINI_MODEL = Deno.env.get("GEMINI_MODEL") ?? "gemini-2.5-flash";
 
-const MAX_TEXT_BYTES = 20_000;   // OCR text is small; reject anything oversized.
-const MAX_ITEMS = 200;           // Clamp a runaway model response.
-const RATE_LIMIT = 20;           // Max scans ...
-const RATE_WINDOW_SECONDS = 60;  // ... per user per this window.
+const MAX_IMAGE_BYTES = 4_000_000;  // Keep JSON/base64 requests bounded.
+const MAX_TEXT_BYTES = 20_000;      // Legacy OCR text is small; reject oversized input.
+const MAX_ITEMS = 200;              // Clamp a runaway model response.
+const RATE_LIMIT = 20;              // Max scans ...
+const RATE_WINDOW_SECONDS = 60;     // ... per user per this window.
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
@@ -43,15 +44,18 @@ Deno.serve(async (req) => {
   if (!user) return jsonResponse({ error: "Unauthorized" }, 401);
 
   // 2. Validate input.
-  let payload: { text?: unknown };
+  let payload: { imageBase64?: unknown; mimeType?: unknown; text?: unknown };
   try {
     payload = await req.json();
   } catch {
     return jsonResponse({ error: "Invalid JSON body" }, 400);
   }
+
+  const image = parseImagePayload(payload);
   const text = typeof payload.text === "string" ? payload.text.trim() : "";
-  if (!text) return jsonResponse({ error: "Missing receipt text" }, 400);
-  if (new TextEncoder().encode(text).length > MAX_TEXT_BYTES) {
+  if (!image && !text) return jsonResponse({ error: "Missing receipt image or text" }, 400);
+  if (image?.error) return jsonResponse({ error: image.error }, image.status);
+  if (!image && new TextEncoder().encode(text).length > MAX_TEXT_BYTES) {
     return jsonResponse({ error: "Receipt text too large" }, 413);
   }
 
@@ -72,7 +76,13 @@ Deno.serve(async (req) => {
   }
 
   // 5. Call Gemini with the server-side key.
-  const prompt = buildPrompt(text);
+  const prompt = buildPrompt(image ? null : text);
+  const parts = image?.data
+    ? [
+      { text: prompt },
+      { inline_data: { mime_type: image.mimeType, data: image.data } },
+    ]
+    : [{ text: prompt }];
   let geminiResponse: Response;
   try {
     geminiResponse = await fetch(
@@ -81,7 +91,7 @@ Deno.serve(async (req) => {
         method: "POST",
         headers: JSON_HEADERS,
         body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
+          contents: [{ parts }],
           generationConfig: { responseMimeType: "application/json", temperature: 0 },
         }),
       },
@@ -134,8 +144,12 @@ async function recordScan(token: string): Promise<boolean> {
   return (await res.json().catch(() => false)) === true;
 }
 
-function buildPrompt(text: string): string {
-  return `Extract structured data from this receipt text. Respond with ONLY valid JSON, no markdown fences, no commentary, matching exactly this schema:
+function buildPrompt(text: string | null): string {
+  const source = text
+    ? `Receipt text:\n${text}`
+    : "Receipt image: scan the attached receipt image directly.";
+
+  return `Extract structured data from this receipt. Respond with ONLY valid JSON, no markdown fences, no commentary, matching exactly this schema:
 
 {
   "merchant": string,
@@ -152,8 +166,36 @@ Rules:
 - "price" is the per-item price, not the line total.
 - Exclude subtotal, total, tax, tip, and payment lines from "items".
 
-Receipt text:
-${text}`;
+${source}`;
+}
+
+type ImagePayload =
+  | { data: string; mimeType: string; status: 200 }
+  | { error: string; status: 400 | 413 | 415 };
+
+function parseImagePayload(payload: { imageBase64?: unknown; mimeType?: unknown }): ImagePayload | null {
+  if (typeof payload.imageBase64 !== "string") return null;
+
+  const data = payload.imageBase64.replace(/\s/g, "");
+  const mimeType = typeof payload.mimeType === "string" ? payload.mimeType : "image/jpeg";
+  if (!["image/jpeg", "image/png", "image/webp"].includes(mimeType)) {
+    return { error: "Unsupported receipt image type", status: 415 };
+  }
+  if (!data || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) {
+    return { error: "Invalid receipt image", status: 400 };
+  }
+
+  let byteLength = 0;
+  try {
+    byteLength = atob(data).length;
+  } catch {
+    return { error: "Invalid receipt image", status: 400 };
+  }
+  if (byteLength > MAX_IMAGE_BYTES) {
+    return { error: "Receipt image too large", status: 413 };
+  }
+
+  return { data, mimeType, status: 200 };
 }
 
 function stripFences(text: string): string {

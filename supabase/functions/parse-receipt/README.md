@@ -1,9 +1,10 @@
 # parse-receipt Edge Function
 
-Server-side proxy for the receipt-parsing LLM call. The app sends only the OCR'd receipt
-text plus the signed-in user's Supabase JWT; this function authenticates the user,
-rate-limits them, calls Gemini with a **server-side** key, and returns structured JSON. The
-Gemini API key is never in the app binary.
+Server-side proxy for the receipt-parsing LLM call. The app sends the receipt image plus
+the signed-in user's Supabase JWT; this function authenticates the user, rate-limits them,
+calls Gemini with a **server-side** key, and returns structured JSON. The Gemini API key is
+never in the app binary. A legacy OCR `text` payload is still accepted for compatibility,
+but the app now tries Gemini image parsing first and falls back to Vision only if that fails.
 
 ## One-time setup
 
@@ -37,7 +38,7 @@ Gemini API key is never in the app binary.
 # Should be 401 (no user token):
 curl -i -X POST "https://ttgwzwvlochpvtxrxkoz.supabase.co/functions/v1/parse-receipt" \
   -H "apikey: <anon-key>" -H "Content-Type: application/json" \
-  -d '{"text":"COFFEE 3.50"}'
+  -d '{"imageBase64":"<base64-jpeg>","mimeType":"image/jpeg"}'
 ```
 A signed-in request from the app returns the structured receipt JSON. If anything fails
 (401/429/5xx/network), the app silently falls back to on-device parsing.
@@ -47,5 +48,5 @@ A signed-in request from the app returns the structured receipt JSON. If anythin
   the anon key alone is rejected).
 - Per-user rate limit: `RATE_LIMIT` scans per `RATE_WINDOW_SECONDS`, enforced atomically by
   the `record_receipt_scan` Postgres function.
-- Input is size-capped; receipt text is never logged; the upstream error body is never
+- Input is size-capped; receipt images/text are never logged; the upstream error body is never
   echoed to clients.

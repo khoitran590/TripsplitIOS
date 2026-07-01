@@ -2001,6 +2001,9 @@ struct TripDetailView: View {
         let spent = trip.spent(for: me)
         let remaining = trip.remainingBudget(for: me)
         let overBudget = budget > 0 && spent > budget
+        let usedFraction = budget > 0 ? spent / budget : 0
+        let nearBudget = budget > 0 && usedFraction >= 0.8 && !overBudget
+        let barColor = overBudget ? Theme.negative : (nearBudget ? Theme.warning : Theme.positive)
         return VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Label("Budget Overview", systemImage: "wallet.bifold.fill").font(.headline)
@@ -2023,16 +2026,31 @@ struct TripDetailView: View {
             }
 
             if budget > 0 {
-                let fraction = min(spent / budget, 1)
+                let fraction = min(usedFraction, 1)
                 GeometryReader { geo in
                     ZStack(alignment: .leading) {
                         Capsule().fill(Theme.fieldBackground)
                         Capsule()
-                            .fill(overBudget ? Theme.negative : Theme.positive)
+                            .fill(barColor)
                             .frame(width: max(0, geo.size.width * fraction))
                     }
                 }
                 .frame(height: 8)
+
+                if nearBudget || overBudget {
+                    HStack(spacing: 8) {
+                        Image(systemName: overBudget ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill")
+                            .font(.subheadline.weight(.semibold))
+                        Text(overBudget
+                            ? "You've gone over budget."
+                            : "Heads up — you've used \(Int((usedFraction * 100).rounded()))% of your budget.")
+                            .font(.footnote.weight(.medium))
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundStyle(barColor)
+                    .padding(.vertical, 8).padding(.horizontal, 12)
+                    .background(barColor.opacity(0.12), in: .rect(cornerRadius: 12))
+                }
             }
 
             HStack(spacing: 12) {
@@ -2040,7 +2058,7 @@ struct TripDetailView: View {
                 budgetTile(
                     overBudget ? "Over Budget" : "Remaining",
                     money(abs(remaining), trip.currencyCode),
-                    overBudget ? Theme.negative : Theme.positive
+                    barColor
                 )
             }
 

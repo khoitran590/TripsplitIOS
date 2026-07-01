@@ -242,6 +242,8 @@ set search_path = public
 as $$
 declare
     invite_trip_id uuid;
+    invite_email text;
+    current_email text;
 begin
     if auth.uid() is null then
         raise exception 'You must be signed in.';
@@ -250,7 +252,7 @@ begin
         raise exception 'This invitation link is invalid or has been revoked.';
     end if;
 
-    select i.trip_id into invite_trip_id
+    select i.trip_id, lower(i.email) into invite_trip_id, invite_email
     from public.trip_invitations i
     where i.token = p_token
       and i.status = 'pending'
@@ -258,6 +260,14 @@ begin
 
     if invite_trip_id is null then
         raise exception 'This invitation link is invalid or has been revoked.';
+    end if;
+
+    select lower(p.email) into current_email
+    from public.profiles p
+    where p.user_id = auth.uid();
+
+    if invite_email is not null and invite_email <> current_email then
+        raise exception 'This invitation link is for a different account.';
     end if;
 
     insert into public.trip_members (trip_id, user_id, role)
@@ -322,14 +332,31 @@ create policy "Trip members can view memberships"
 drop policy if exists "Trip members can add memberships" on public.trip_members;
 
 drop policy if exists "Trip members can view invitations" on public.trip_invitations;
-create policy "Trip members can view invitations"
+drop policy if exists "Owners can view invitations" on public.trip_invitations;
+create policy "Owners can view invitations"
     on public.trip_invitations for select
-    using (public.is_trip_member(trip_id));
+    using (
+        exists (
+            select 1
+            from public.trips t
+            where t.id = trip_id
+              and t.user_id = auth.uid()
+        )
+    );
 
 drop policy if exists "Trip members can create invitations" on public.trip_invitations;
-create policy "Trip members can create invitations"
+drop policy if exists "Owners can create invitations" on public.trip_invitations;
+create policy "Owners can create invitations"
     on public.trip_invitations for insert
-    with check (public.is_trip_member(trip_id) and auth.uid() = invited_by);
+    with check (
+        auth.uid() = invited_by
+        and exists (
+            select 1
+            from public.trips t
+            where t.id = trip_id
+              and t.user_id = auth.uid()
+        )
+    );
 
 -- Receipt image storage ------------------------------------------------------
 --
@@ -385,7 +412,8 @@ create policy "Users delete their own receipts"
 -- server-side Gemini key. To bound cost/abuse, each call records an event and is rejected
 -- once a user exceeds the per-window limit. The events table has NO RLS policies, so it is
 -- inaccessible to clients directly; the only way in is the SECURITY DEFINER function below,
--- which is scoped to `auth.uid()` and granted to authenticated users only.
+-- which is scoped to `auth.uid()`, validates caller-supplied bounds, serializes each user's
+-- check/insert window, and is granted to authenticated users only.
 
 create table if not exists public.receipt_scan_events (
     id         uuid primary key default gen_random_uuid(),
@@ -414,6 +442,17 @@ begin
     if v_uid is null then
         return false;
     end if;
+
+    -- The Edge Function owns the intended limits. Since this RPC is executable by
+    -- authenticated clients, reject hostile direct calls that try to clear or bypass a
+    -- user's own event window with negative/oversized arguments.
+    if p_limit < 1 or p_limit > 100 or p_window_seconds < 10 or p_window_seconds > 3600 then
+        return false;
+    end if;
+
+    -- Serialize per-user checks so concurrent requests cannot all count the same old
+    -- window and then insert past the limit.
+    perform pg_advisory_xact_lock(hashtextextended(v_uid::text, 0));
 
     -- Opportunistic cleanup so the table stays small (rows well outside the window are
     -- no longer relevant to the limit).
