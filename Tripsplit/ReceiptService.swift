@@ -6,32 +6,28 @@ import VisionKit
 
 // MARK: - Receipt AI parsing config
 
-/// Configuration for the LLM step of receipt scanning (Google Gemini's free tier).
+/// Configuration for the LLM step of receipt scanning.
 ///
-/// SECURITY: this key ships inside the app bundle, which is fine for a prototype but not
-/// for a released build — anyone can extract it from the IPA and run up your quota. For
-/// production, proxy this call through a Supabase Edge Function (you already have the
-/// backend) and keep the key server-side, then point `endpoint` at that function instead.
+/// The Gemini API key lives SERVER-SIDE only, inside the `parse-receipt` Supabase Edge
+/// Function (`supabase/functions/parse-receipt`). The app never holds the key: it sends the
+/// OCR'd text to the function authenticated with the signed-in user's Supabase JWT, and the
+/// function calls Gemini with the key stored as a Supabase secret. This keeps the key out
+/// of the app binary and gates usage behind authentication + per-user rate limiting.
 enum ReceiptAIConfig {
-    /// Loaded from `Secrets.swift`, which is gitignored so the key never lands in version
-    /// control. Recreate that file after a fresh clone (see `Secrets.swift` for the shape).
-    /// Empty when unset — `isConfigured` then drives scanning to the on-device fallback.
-    nonisolated static let apiKey = Secrets.geminiAPIKey
-    nonisolated static let model = "gemini-2.5-flash"
-
+    /// The Edge Function endpoint that proxies the LLM call.
     nonisolated static var endpoint: String {
-        "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent"
+        "\(SupabaseConfig.url)/functions/v1/parse-receipt"
     }
 
-    /// True when a real key is present, so scanning can decide whether to attempt the LLM
-    /// step or go straight to the on-device heuristic parser.
-    nonisolated static var isConfigured: Bool {
-        !apiKey.isEmpty && !apiKey.hasPrefix("YOUR_")
-    }
+    /// True when the backend is configured; scanning still requires a signed-in user's
+    /// token (passed to `ReceiptScanner.scan`) before it will attempt the LLM step.
+    nonisolated static var isConfigured: Bool { SupabaseConfig.isConfigured }
 }
 
 enum ReceiptScanError: Error {
     case notConfigured
+    case unauthorized
+    case rateLimited
     case invalidResponse
     case apiError(String)
 }
@@ -95,83 +91,36 @@ struct ParsedReceipt: Decodable {
 /// Turns the OCR'd receipt text into a structured `ParsedReceipt` via Gemini. Network I/O
 /// only — no observable state — so it's a plain namespace with a static async call.
 enum ReceiptParser {
-    private struct GeminiResponse: Decodable {
-        struct Candidate: Decodable {
-            struct Content: Decodable {
-                struct Part: Decodable { let text: String }
-                let parts: [Part]
-            }
-            let content: Content
-        }
-        let candidates: [Candidate]
-    }
-
-    static func parse(rawText: String) async throws -> ParsedReceipt {
-        guard ReceiptAIConfig.isConfigured,
-              let url = URL(string: "\(ReceiptAIConfig.endpoint)?key=\(ReceiptAIConfig.apiKey)") else {
+    /// Sends the OCR'd receipt text to the `parse-receipt` Edge Function (authenticated as
+    /// the signed-in user) and decodes the structured receipt it returns. The Gemini key
+    /// and prompt live in the function, not here. `accessToken` is the user's Supabase JWT.
+    static func parse(rawText: String, accessToken: String) async throws -> ParsedReceipt {
+        guard ReceiptAIConfig.isConfigured, let url = URL(string: ReceiptAIConfig.endpoint) else {
             throw ReceiptScanError.notConfigured
         }
-
-        let prompt = """
-        Extract structured data from this receipt text. Respond with ONLY valid JSON, no markdown fences, no commentary, matching exactly this schema:
-
-        {
-          "merchant": string,
-          "date": string or null,
-          "items": [{"name": string, "price": number, "quantity": integer}],
-          "tax": number,
-          "tip": number,
-          "total": number
-        }
-
-        Rules:
-        - If a field is missing on the receipt, use 0 for numbers or null for date.
-        - Merge duplicate line items by summing quantity.
-        - "price" is the per-item price, not the line total.
-        - Exclude subtotal, total, tax, tip, and payment lines from "items".
-
-        Receipt text:
-        \(rawText)
-        """
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body: [String: Any] = [
-            "contents": [["parts": [["text": prompt]]]],
-            "generationConfig": ["responseMimeType": "application/json", "temperature": 0]
-        ]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        request.setValue(SupabaseConfig.anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["text": rawText])
 
         let (data, response) = try await BackendSecurity.secureSession.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw ReceiptScanError.invalidResponse
         }
-        guard http.statusCode == 200 else {
+        switch http.statusCode {
+        case 200:
+            return try JSONDecoder().decode(ParsedReceipt.self, from: data)
+        case 401, 403:
+            throw ReceiptScanError.unauthorized
+        case 429:
+            throw ReceiptScanError.rateLimited
+        default:
             let detail = ReceiptStorage.messageField(from: String(data: data, encoding: .utf8) ?? "")
             throw ReceiptScanError.apiError(detail ?? "HTTP \(http.statusCode)")
         }
-
-        let decoded = try JSONDecoder().decode(GeminiResponse.self, from: data)
-        guard let jsonText = decoded.candidates.first?.content.parts.first?.text,
-              let jsonData = stripFences(jsonText).data(using: .utf8) else {
-            throw ReceiptScanError.invalidResponse
-        }
-        return try JSONDecoder().decode(ParsedReceipt.self, from: jsonData)
-    }
-
-    /// Strips a ```json … ``` markdown fence if the model wrapped its JSON in one despite
-    /// being asked not to, so decoding doesn't fail on the backticks.
-    private static func stripFences(_ text: String) -> String {
-        var trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.hasPrefix("```") else { return trimmed }
-        if let firstNewline = trimmed.firstIndex(of: "\n") {
-            trimmed = String(trimmed[trimmed.index(after: firstNewline)...])
-        }
-        if let fenceRange = trimmed.range(of: "```", options: .backwards) {
-            trimmed = String(trimmed[..<fenceRange.lowerBound])
-        }
-        return trimmed.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
@@ -186,10 +135,11 @@ struct ReceiptScanResult {
 }
 
 /// Reads line items off a receipt photo with a hybrid pipeline: Apple's on-device Vision
-/// OCR extracts the raw text (free, private, offline), then Gemini's free tier parses that
-/// text into structured items + tax/tip. When the LLM step is unavailable — no key, no
-/// network, or an API error — it falls back to the on-device heuristic parser so scanning
-/// still works. Either way the results are an editable list the user can correct.
+/// OCR extracts the raw text (free, private, offline), then the `parse-receipt` Edge
+/// Function (server-side Gemini) parses that text into structured items + tax/tip. When the
+/// LLM step is unavailable — signed out, no network, rate-limited, or an error — it falls
+/// back to the on-device heuristic parser so scanning still works. Either way the results
+/// are an editable list the user can correct.
 enum ReceiptScanner {
 
     /// Words that mark a line as a total/tax/payment row rather than a purchasable item.
@@ -204,20 +154,23 @@ enum ReceiptScanner {
     /// Keywords identifying a tip / gratuity row.
     private static let tipKeywords = ["tip", "gratuity", "service charge", "service chg"]
 
-    /// Recognizes text and parses it into line items plus tax/tip. Prefers the LLM's
-    /// structured parse of the OCR text and falls back to the on-device heuristic parser
-    /// when it's unavailable. Returns an empty result if nothing usable is found.
-    static func scan(_ image: UIImage) async -> ReceiptScanResult {
+    /// Recognizes text and parses it into line items plus tax/tip. Prefers the server-side
+    /// LLM parse of the OCR text (requires the signed-in user's `accessToken`) and falls
+    /// back to the on-device heuristic parser when it's unavailable. Returns an empty result
+    /// if nothing usable is found.
+    static func scan(_ image: UIImage, accessToken: String?) async -> ReceiptScanResult {
         guard let cgImage = image.cgImage else { return ReceiptScanResult() }
 
         let lines = await recognizeRows(cgImage)
         guard !lines.isEmpty else { return ReceiptScanResult() }
 
-        // Hybrid step: send the OCR text to the LLM for a structured parse. Only replace
-        // the heuristic result when the LLM actually returns items — otherwise fall through.
-        if ReceiptAIConfig.isConfigured {
+        // Hybrid step: send the OCR text to the Edge Function for a structured parse. Only
+        // replace the heuristic result when it actually returns items — otherwise fall
+        // through. Requires an authenticated user; unsigned scans use on-device parsing.
+        if ReceiptAIConfig.isConfigured, let accessToken, !accessToken.isEmpty {
             do {
-                let parsed = try await ReceiptParser.parse(rawText: lines.joined(separator: "\n"))
+                let parsed = try await ReceiptParser.parse(rawText: lines.joined(separator: "\n"),
+                                                           accessToken: accessToken)
                 let result = mapToScanResult(parsed)
                 if !result.items.isEmpty { return result }
             } catch {

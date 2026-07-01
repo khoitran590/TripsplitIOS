@@ -1,0 +1,6 @@
+# Supabase local config. `supabase link` will fill/merge the rest; the key setting here is
+# that the parse-receipt function REQUIRES a valid JWT (never expose it unauthenticated).
+project_id = "tripsplit"
+
+[functions.parse-receipt]
+verify_jwt = true

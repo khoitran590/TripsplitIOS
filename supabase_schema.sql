@@ -378,3 +378,62 @@ create policy "Users delete their own receipts"
         bucket_id = 'receipts'
         and auth.uid()::text = (storage.foldername(name))[1]
     );
+
+-- Receipt-scan rate limiting -------------------------------------------------
+--
+-- The `parse-receipt` Edge Function proxies the receipt-parsing LLM call with a
+-- server-side Gemini key. To bound cost/abuse, each call records an event and is rejected
+-- once a user exceeds the per-window limit. The events table has NO RLS policies, so it is
+-- inaccessible to clients directly; the only way in is the SECURITY DEFINER function below,
+-- which is scoped to `auth.uid()` and granted to authenticated users only.
+
+create table if not exists public.receipt_scan_events (
+    id         uuid primary key default gen_random_uuid(),
+    user_id    uuid not null references auth.users (id) on delete cascade,
+    created_at timestamptz not null default now()
+);
+
+create index if not exists receipt_scan_events_user_time_idx
+    on public.receipt_scan_events (user_id, created_at desc);
+
+alter table public.receipt_scan_events enable row level security;
+-- Intentionally no policies: RLS denies all direct client access. Only
+-- record_receipt_scan() (security definer) reads/writes this table.
+
+create or replace function public.record_receipt_scan(p_limit int, p_window_seconds int)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_uid   uuid := auth.uid();
+    v_count int;
+begin
+    -- Only a signed-in user has a uid; anonymous/anon-key callers are denied.
+    if v_uid is null then
+        return false;
+    end if;
+
+    -- Opportunistic cleanup so the table stays small (rows well outside the window are
+    -- no longer relevant to the limit).
+    delete from public.receipt_scan_events
+    where user_id = v_uid
+      and created_at < now() - make_interval(secs => p_window_seconds * 4);
+
+    select count(*) into v_count
+    from public.receipt_scan_events
+    where user_id = v_uid
+      and created_at > now() - make_interval(secs => p_window_seconds);
+
+    if v_count >= p_limit then
+        return false;
+    end if;
+
+    insert into public.receipt_scan_events (user_id) values (v_uid);
+    return true;
+end;
+$$;
+
+revoke all on function public.record_receipt_scan(int, int) from public, anon;
+grant execute on function public.record_receipt_scan(int, int) to authenticated;

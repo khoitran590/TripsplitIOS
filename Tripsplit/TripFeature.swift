@@ -2992,7 +2992,7 @@ struct AddExpenseView: View {
         receiptImage = image
 
         isScanning = true
-        let scan = await ReceiptScanner.scan(image)
+        let scan = await ReceiptScanner.scan(image, accessToken: store.accessToken)
         isScanning = false
         if !scan.items.isEmpty {
             removedItems = []
