@@ -192,6 +192,10 @@ struct ReceiptScanResult {
     var items: [ReceiptItem] = []
     var tax: Double? = nil
     var tip: Double? = nil
+
+    /// Whether the scan produced anything worth showing. Used by the scan orchestrator to
+    /// decide if the Vision main path succeeded or the Gemini fallback should run.
+    var isUsable: Bool { !items.isEmpty }
 }
 
 /// Reads line items off a receipt photo entirely on-device: Apple's Vision OCR extracts
@@ -213,11 +217,33 @@ enum ReceiptScanner {
     /// Keywords identifying a tip / gratuity row.
     private static let tipKeywords = ["tip", "gratuity", "service charge", "service chg"]
 
-    /// Parses a receipt image into line items plus tax/tip using on-device Vision OCR and
-    /// the heuristic line parser. Returns an empty result if nothing usable is found.
-    /// (`accessToken` is accepted for call-site compatibility but no longer used — the
-    /// scan runs fully on-device.)
+    /// Scans a receipt image into line items plus tax/tip. Two engines, tried in order:
+    ///
+    /// 1. **Apple Vision (main)** — on-device OCR, no network or sign-in required, and the
+    ///    most reliable at itemizing receipts. Its result is used whenever it finds anything.
+    /// 2. **Gemini (fallback)** — only when Vision comes back empty and a signed-in user's
+    ///    token is available: the image is sent to the `parse-receipt` Edge Function (which
+    ///    holds the Gemini key server-side) and its structured receipt is used instead.
+    ///
+    /// `accessToken` is the signed-in user's Supabase JWT; without it the Gemini fallback is
+    /// skipped and the (empty) Vision result is returned.
     static func scan(_ image: UIImage, accessToken: String? = nil) async -> ReceiptScanResult {
+        let vision = await visionScan(image)
+        if vision.isUsable { return vision }
+
+        // Vision found nothing usable — try the server-side Gemini parse as a fallback.
+        if let accessToken, ReceiptAIConfig.isConfigured,
+           let parsed = try? await ReceiptParser.parse(image: image, accessToken: accessToken) {
+            let mapped = mapToScanResult(parsed)
+            if mapped.isUsable { return mapped }
+        }
+        return vision
+    }
+
+    /// The on-device Apple Vision OCR pipeline — the main scan engine. Extracts text rows with
+    /// Vision, then pairs names to prices with the heuristic parser, retrying on an enhanced
+    /// copy when the first pass is thin.
+    static func visionScan(_ image: UIImage) async -> ReceiptScanResult {
         guard let cgImage = image.cgImage else { return ReceiptScanResult() }
         // Photos picked from the library arrive un-cropped and skewed (the document
         // camera deskews on capture, the library doesn't). Find the receipt in the frame
