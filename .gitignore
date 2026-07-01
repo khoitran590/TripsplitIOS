@@ -62,3 +62,6 @@ fastlane/screenshots/**/*.png
 fastlane/test_output
 CLAUDE.md
 .agent/
+
+## App secrets (local only, never commit)
+Tripsplit/Secrets.swift

@@ -333,18 +333,26 @@ create policy "Trip members can create invitations"
 
 -- Receipt image storage ------------------------------------------------------
 --
--- Scanned receipt photos are uploaded to a public `receipts` bucket; each file is
--- namespaced under the uploader's user id ("<auth.uid()>/<expenseId>.jpg"). Reads are
--- public (so the URL stored on the expense renders anywhere); writes/updates/deletes
--- are restricted to the owner via the leading-folder convention.
+-- Receipt photos, trip covers, and avatars are uploaded to a PRIVATE `receipts` bucket;
+-- each file is namespaced under the uploader's user id ("<auth.uid()>/<file>.jpg"). The
+-- bucket is not public, so nothing is world-readable: the client stores the object path
+-- and mints a short-lived signed URL on demand to display an image. Reads are limited to
+-- authenticated users (so any trip member can sign another member's cover/avatar/receipt),
+-- while writes/updates/deletes remain restricted to the owner via the leading-folder
+-- convention.
 
 insert into storage.buckets (id, name, public)
-values ('receipts', 'receipts', true)
-on conflict (id) do update set public = true;
+values ('receipts', 'receipts', false)
+on conflict (id) do update set public = false;
 
+-- Older deployments created this bucket as public with an "Anyone can view" policy; drop
+-- it so anonymous, permanent access is revoked.
 drop policy if exists "Anyone can view receipts" on storage.objects;
-create policy "Anyone can view receipts"
+
+drop policy if exists "Authenticated users can view receipts" on storage.objects;
+create policy "Authenticated users can view receipts"
     on storage.objects for select
+    to authenticated
     using (bucket_id = 'receipts');
 
 drop policy if exists "Users upload their own receipts" on storage.objects;

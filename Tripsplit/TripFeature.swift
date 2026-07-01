@@ -526,9 +526,10 @@ final class TripStore {
         }
     }
 
-    /// Uploads the given JPEG to Supabase Storage as the user's avatar, stores the public
-    /// URL on `currentUser.avatarURL`, and pushes the updated Person into every trip so
-    /// other members see the new photo on their next sync.
+    /// Uploads the given JPEG to Supabase Storage as the user's avatar, stores the storage
+    /// path on `currentUser.avatarURL`, and pushes the updated Person into every trip so
+    /// other members see the new photo on their next sync. (The field name is historical;
+    /// it now holds a path that `signedImageURL` resolves at display time.)
     func uploadAndSetAvatar(_ jpeg: Data) async {
         guard let accessToken = try? await authorizedAccessToken() else { return }
         let path = "\(currentUser.id.uuidString.lowercased())/profile.jpg"
@@ -931,12 +932,39 @@ final class TripStore {
         }
     }
 
-    /// Uploads a trip cover photo to the shared `receipts` bucket and returns its public
-    /// URL. The path is namespaced under the uploader's lowercased user id so storage RLS
-    /// (which compares the leading folder to `auth.uid()`) accepts the write.
+    /// Uploads a trip cover photo to the shared private `receipts` bucket and returns its
+    /// storage path. The path is namespaced under the uploader's lowercased user id so
+    /// storage RLS (which compares the leading folder to `auth.uid()`) accepts the write.
     func uploadTripCover(_ jpeg: Data, tripID: Trip.ID) async throws -> String {
         let path = "\(currentUser.id.uuidString.lowercased())/cover-\(tripID.uuidString.lowercased()).jpg"
         return try await uploadReceipt(jpeg, path: path)
+    }
+
+    /// Signed image URLs keyed by storage path, with the time they should be refreshed
+    /// (kept under the server-side expiry so a cached URL never hands back an expired link).
+    @ObservationIgnored private var signedURLCache: [String: (url: URL, refreshAfter: Date)] = [:]
+
+    /// Resolves a stored image reference (a storage path, or a legacy public/signed URL)
+    /// into a currently-valid signed URL for display. Cached in-memory so repeated views of
+    /// the same avatar/cover don't re-sign every render. Returns `nil` if signing fails
+    /// (offline, signed out) so callers fall back to a placeholder.
+    func signedImageURL(for stored: String) async -> URL? {
+        let path = ReceiptStorage.storagePath(from: stored)
+        guard !path.isEmpty else { return nil }
+        if let cached = signedURLCache[path], cached.refreshAfter > Date() {
+            return cached.url
+        }
+        guard let accessToken = try? await authorizedAccessToken() else { return nil }
+        do {
+            let url = try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
+                try await ReceiptStorage.shared.signedURL(path: path, expiresIn: 3600, accessToken: token)
+            }
+            // Refresh a little before the 1-hour expiry so an in-flight load never 400s.
+            signedURLCache[path] = (url, Date().addingTimeInterval(50 * 60))
+            return url
+        } catch {
+            return nil
+        }
     }
 
     private func authorizedAccessToken() async throws -> String? {
@@ -2401,6 +2429,7 @@ struct ExpenseDetailView: View {
             ScrollView {
                 VStack(spacing: 18) {
                     summaryCard
+                    receiptItemsCard
                     if let trip { participantsCard(trip) }
                     commentsCard
                 }
@@ -2461,6 +2490,52 @@ struct ExpenseDetailView: View {
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    /// The scanned/entered line items with their prices, plus tax/tip and a total, so the
+    /// breakdown behind an itemized expense is visible instead of just an item count.
+    @ViewBuilder
+    private var receiptItemsCard: some View {
+        let exp = currentExpense ?? expense
+        let currency = trip?.currencyCode ?? "USD"
+        if !exp.items.isEmpty {
+            TripCard(title: "Receipt Items", icon: "list.bullet.rectangle.fill") {
+                ForEach(exp.items) { item in
+                    HStack(spacing: 10) {
+                        Text(item.name)
+                            .font(.subheadline)
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        Text(money(item.price, currency))
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                }
+
+                if exp.tax > 0 || exp.tip > 0 {
+                    Divider()
+                    if exp.tax > 0 { receiptTotalRow(label: "Tax", value: money(exp.tax, currency)) }
+                    if exp.tip > 0 { receiptTotalRow(label: "Tip", value: money(exp.tip, currency)) }
+                }
+
+                Divider()
+                receiptTotalRow(label: "Total", value: money(exp.amount, currency), emphasized: true)
+            }
+        }
+    }
+
+    private func receiptTotalRow(label: String, value: String, emphasized: Bool = false) -> some View {
+        HStack {
+            Text(label)
+                .font(emphasized ? .subheadline.weight(.semibold) : .subheadline)
+                .foregroundStyle(emphasized ? .primary : .secondary)
+            Spacer()
+            Text(value)
+                .font(emphasized ? .subheadline.weight(.bold) : .subheadline.weight(.medium))
+                .foregroundStyle(emphasized ? .primary : .secondary)
+                .monospacedDigit()
         }
     }
 
@@ -3848,7 +3923,10 @@ struct LocationField: View {
 /// trip looks distinct even before a photo is added. Used by the home cards and the
 /// trip detail hero header.
 struct TripCoverView: View {
+    @Environment(TripStore.self) private var store
     let trip: Trip
+
+    @State private var resolvedURL: URL?
 
     /// Curated cover gradients; one is chosen deterministically per trip.
     private static let palettes: [[UInt32]] = [
@@ -3884,8 +3962,8 @@ struct TripCoverView: View {
 
     @ViewBuilder
     private var photoOrGlyph: some View {
-        if let urlString = trip.coverImageURL, let url = URL(string: urlString) {
-            AsyncImage(url: url) { phase in
+        if let stored = trip.coverImageURL, !stored.isEmpty {
+            AsyncImage(url: resolvedURL) { phase in
                 switch phase {
                 case .success(let image):
                     image.resizable().scaledToFill()
@@ -3895,6 +3973,7 @@ struct TripCoverView: View {
                     glyph
                 }
             }
+            .task(id: stored) { resolvedURL = await store.signedImageURL(for: stored) }
         } else {
             glyph
         }
@@ -3919,9 +3998,12 @@ private func avatar(_ person: Person, size: CGFloat) -> some View {
 /// Avatar that shows a real photo when available.
 /// Priority: local `imageData` (current user) → remote `person.avatarURL` → colored initials.
 struct AvatarView: View {
+    @Environment(TripStore.self) private var store
     let person: Person
     var imageData: Data? = nil
     let size: CGFloat
+
+    @State private var resolvedURL: URL?
 
     var body: some View {
         Group {
@@ -3931,8 +4013,8 @@ struct AvatarView: View {
                     .scaledToFill()
                     .frame(width: size, height: size)
                     .clipShape(.circle)
-            } else if let urlString = person.avatarURL, let url = URL(string: urlString) {
-                AsyncImage(url: url) { phase in
+            } else if let stored = person.avatarURL, !stored.isEmpty {
+                AsyncImage(url: resolvedURL) { phase in
                     switch phase {
                     case .success(let image):
                         image.resizable().scaledToFill()
@@ -3942,6 +4024,7 @@ struct AvatarView: View {
                         initialsCircle
                     }
                 }
+                .task(id: stored) { resolvedURL = await store.signedImageURL(for: stored) }
             } else {
                 initialsCircle
             }
