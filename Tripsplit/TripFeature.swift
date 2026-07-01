@@ -194,6 +194,12 @@ struct Trip: Identifiable, Codable {
     /// Public URL of the uploaded cover photo (in the shared `receipts` bucket).
     var coverImageURL: String? = nil
 
+    /// When true, any invited member (not just the creator) may record an expense paid by
+    /// someone other than themselves. The creator can always do this; this flag only
+    /// extends the ability to other signed-in members. Manually-added members aren't app
+    /// users, so the permission doesn't apply to them.
+    var allowMembersToPayForOthers: Bool = false
+
     init(
         id: UUID = UUID(),
         name: String,
@@ -207,7 +213,8 @@ struct Trip: Identifiable, Codable {
         location: String? = nil,
         startDate: Date? = nil,
         endDate: Date? = nil,
-        coverImageURL: String? = nil
+        coverImageURL: String? = nil,
+        allowMembersToPayForOthers: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -222,11 +229,12 @@ struct Trip: Identifiable, Codable {
         self.startDate = startDate
         self.endDate = endDate
         self.coverImageURL = coverImageURL
+        self.allowMembersToPayForOthers = allowMembersToPayForOthers
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, currencyCode, creatorID, members, budgets, expenses, settlementRecords, comments
-        case location, startDate, endDate, coverImageURL
+        case location, startDate, endDate, coverImageURL, allowMembersToPayForOthers
     }
 
     // Custom decoder so trips saved before `settlementRecords` (and the new expense
@@ -246,6 +254,7 @@ struct Trip: Identifiable, Codable {
         startDate = try c.decodeIfPresent(Date.self, forKey: .startDate)
         endDate = try c.decodeIfPresent(Date.self, forKey: .endDate)
         coverImageURL = try c.decodeIfPresent(String.self, forKey: .coverImageURL)
+        allowMembersToPayForOthers = try c.decodeIfPresent(Bool.self, forKey: .allowMembersToPayForOthers) ?? false
     }
 
     /// A human-readable date range, e.g. "Apr 1–30, 2025", "Apr 28 – May 3, 2025", or a
@@ -1253,9 +1262,13 @@ struct AddTripView: View {
     @State private var budgetText = ""
     @State private var memberName = ""
     @State private var members: [Person] = []
+    @State private var coverPick: PhotosPickerItem?
+    @State private var coverImage: UIImage?
+    @State private var isSaving = false
+    @State private var errorMessage: String?
 
     private var canCreate: Bool {
-        !name.trimmingCharacters(in: .whitespaces).isEmpty
+        !name.trimmingCharacters(in: .whitespaces).isEmpty && !isSaving
     }
 
     var body: some View {
@@ -1269,10 +1282,17 @@ struct AddTripView: View {
 
                 ScrollView {
                     VStack(spacing: 18) {
+                        coverCard
                         detailsCard
                         datesCard
                         budgetCard
                         membersCard
+                        if let errorMessage {
+                            Text(errorMessage)
+                                .font(.caption)
+                                .foregroundStyle(Theme.negative)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     }
                     .padding()
                     .padding(.bottom, 24)
@@ -1285,9 +1305,54 @@ struct AddTripView: View {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Create") { create() }.disabled(!canCreate)
+                    if isSaving {
+                        ProgressView()
+                    } else {
+                        Button("Create") { create() }.disabled(!canCreate)
+                    }
                 }
             }
+            .onChange(of: coverPick) { _, pick in
+                guard let pick else { return }
+                Task {
+                    if let data = try? await pick.loadTransferable(type: Data.self),
+                       let image = UIImage(data: data) {
+                        coverImage = image
+                    }
+                }
+            }
+        }
+    }
+
+    private var coverCard: some View {
+        TripCard(title: "Cover Photo", icon: "photo.fill") {
+            ZStack {
+                if let coverImage {
+                    Image(uiImage: coverImage).resizable().scaledToFill()
+                } else {
+                    LinearGradient(
+                        colors: [Color(hex: 0x6366F1), Color(hex: 0x8B5CF6)],
+                        startPoint: .topLeading, endPoint: .bottomTrailing
+                    )
+                    Image(systemName: "photo")
+                        .font(.largeTitle)
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+            }
+            .frame(height: 150)
+            .frame(maxWidth: .infinity)
+            .clipped()
+            .clipShape(.rect(cornerRadius: 14))
+
+            PhotosPicker(selection: $coverPick, matching: .images) {
+                Label(coverImage == nil ? "Add Photo" : "Change Photo", systemImage: "photo.on.rectangle.angled")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
+            }
+            .buttonStyle(.plain)
+            .glassEffect(.regular.tint(Color(hex: 0x6366F1)).interactive(), in: .capsule)
         }
     }
 
@@ -1403,7 +1468,7 @@ struct AddTripView: View {
     private func create() {
         let me = store.currentUser
         let trimmedLocation = location.trimmingCharacters(in: .whitespaces)
-        let trip = Trip(
+        var trip = Trip(
             name: name.trimmingCharacters(in: .whitespaces),
             currencyCode: currency,
             creatorID: me.id,
@@ -1413,8 +1478,22 @@ struct AddTripView: View {
             startDate: hasDates ? startDate : nil,
             endDate: hasDates ? endDate : nil
         )
-        store.addTrip(trip)
-        dismiss()
+        isSaving = true
+        errorMessage = nil
+        Task {
+            if let coverImage, let jpeg = coverImage.jpegData(compressionQuality: 0.7) {
+                do {
+                    trip.coverImageURL = try await store.uploadTripCover(jpeg, tripID: trip.id)
+                } catch {
+                    errorMessage = (error as? AuthError)?.message ?? "Couldn't upload the cover photo."
+                    isSaving = false
+                    return
+                }
+            }
+            store.addTrip(trip)
+            isSaving = false
+            dismiss()
+        }
     }
 }
 
@@ -1436,6 +1515,7 @@ struct EditTripView: View {
     @State private var budgetText = ""
     @State private var coverPick: PhotosPickerItem?
     @State private var coverImage: UIImage?
+    @State private var allowMembersToPayForOthers = false
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var loaded = false
@@ -1464,6 +1544,7 @@ struct EditTripView: View {
                         detailsCard
                         datesCard
                         budgetCard
+                        permissionsCard
                         if let errorMessage {
                             Text(errorMessage)
                                 .font(.caption)
@@ -1590,6 +1671,20 @@ struct EditTripView: View {
         }
     }
 
+    private var permissionsCard: some View {
+        TripCard(title: "Permissions", icon: "person.badge.key.fill") {
+            Toggle(isOn: $allowMembersToPayForOthers) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Members can pay for others")
+                        .font(.subheadline.weight(.medium))
+                    Text("Let invited members record an expense paid by someone else. You can always do this.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
     private func load() {
         guard !loaded, let trip else { return }
         name = trip.name
@@ -1601,6 +1696,7 @@ struct EditTripView: View {
         budgetText = budget > 0 ? String(format: "%g", budget) : ""
         if let start = trip.startDate { startDate = start; hasDates = true }
         if let end = trip.endDate { endDate = end; hasDates = true }
+        allowMembersToPayForOthers = trip.allowMembersToPayForOthers
         loaded = true
     }
 
@@ -1653,6 +1749,7 @@ struct EditTripView: View {
             updated.currencyCode = currency
             updated.startDate = hasDates ? startDate : nil
             updated.endDate = hasDates ? endDate : nil
+            updated.allowMembersToPayForOthers = allowMembersToPayForOthers
             // The budget field is shown (and auto-converted) in the new currency, so save it
             // as typed — this also honors a manual budget edit over the converted default.
             updated.budgets[store.currentUser.id] = Double(budgetText) ?? 0
@@ -2513,6 +2610,9 @@ struct AddExpenseView: View {
     /// When false (default) the expense only covers the current user's share.
     /// Toggling true unlocks the full split-method picker and per-item configuration.
     @State private var payForOthers = false
+    /// Who fronted the expense. `nil` falls back to the current user; the creator (or any
+    /// invited member when the trip allows it) can switch this to another member.
+    @State private var selectedPayerID: Person.ID?
     /// Removed items kept so a deletion can be undone (most-recent first).
     @State private var removedItems: [(item: ReceiptItem, index: Int)] = []
 
@@ -2521,7 +2621,13 @@ struct AddExpenseView: View {
     private var isCreator: Bool { trip.map { store.isCreator(of: $0) } ?? false }
 
     private var total: Double { Double(amountText) ?? 0 }
-    private var resolvedPayer: Person.ID { store.currentUser.id }
+    private var resolvedPayer: Person.ID { selectedPayerID ?? store.currentUser.id }
+
+    /// The creator can always record an expense paid by another member; other (invited)
+    /// members can only when the trip's `allowMembersToPayForOthers` permission is on.
+    private var canChoosePayer: Bool {
+        isCreator || (trip?.allowMembersToPayForOthers ?? false)
+    }
 
     /// Live split computation, reused for validation, the per-person preview, and save.
     private func result(for trip: Trip) -> SplitResult {
@@ -2887,11 +2993,41 @@ struct AddExpenseView: View {
     }
 
     private func payerCard(_ trip: Trip) -> some View {
-        TripCard(title: "Paid by", icon: "creditcard.fill") {
-            HStack {
-                avatar(store.currentUser, size: 30)
-                Text("You").font(.subheadline.weight(.medium))
-                Spacer()
+        let payer = trip.members.first { $0.id == resolvedPayer } ?? store.currentUser
+        let isMe = payer.id == store.currentUser.id
+        return TripCard(title: "Paid by", icon: "creditcard.fill") {
+            if canChoosePayer {
+                Menu {
+                    ForEach(trip.members) { member in
+                        Button {
+                            selectedPayerID = member.id
+                        } label: {
+                            let label = member.id == store.currentUser.id ? "You" : member.name
+                            if member.id == resolvedPayer {
+                                Label(label, systemImage: "checkmark")
+                            } else {
+                                Text(label)
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 10) {
+                        avatar(payer, size: 30)
+                        Text(isMe ? "You" : payer.name).font(.subheadline.weight(.medium))
+                        Spacer()
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+                }
+            } else {
+                HStack {
+                    avatar(payer, size: 30)
+                    Text(isMe ? "You" : payer.name).font(.subheadline.weight(.medium))
+                    Spacer()
+                }
             }
         }
     }
@@ -3244,6 +3380,7 @@ struct AddExpenseView: View {
         guard let trip else { return }
         if let editing {
             expenseID = editing.id
+            selectedPayerID = editing.payerID
             title = editing.title
             amountText = formatted(editing.amount)
             date = editing.date
@@ -3263,7 +3400,8 @@ struct AddExpenseView: View {
                 || editing.shares.keys.contains(where: { $0 != me })
             return
         }
-        // Default: the user only covers their own share.
+        // Default: the user only covers their own share, paid by themselves.
+        selectedPayerID = store.currentUser.id
         payForOthers = false
         method = .noSplit
         noSplitAssignee = store.currentUser.id

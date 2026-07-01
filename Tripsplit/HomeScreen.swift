@@ -12,10 +12,14 @@ struct HomeScreen: View {
     private enum QuickAction { case split, addExpense }
     @State private var pendingAction: QuickAction?
     @State private var showTripPicker = false
+    @State private var pendingTrip: Trip?
     @State private var splitTrip: Trip?
     @State private var expenseTrip: Trip?
     @State private var tripToDelete: Trip?
     @State private var showAllTransactions = false
+    @State private var isSelectingTransactions = false
+    @State private var selectedTransactionIDs: Set<Transaction.ID> = []
+    @State private var transactionsPendingDelete: [Transaction]?
 
     var body: some View {
         NavigationStack {
@@ -23,7 +27,6 @@ struct HomeScreen: View {
                 VStack(alignment: .leading, spacing: 24) {
                     syncBanner
                     BalanceCard()
-                    CurrencyConverterCard()
                     quickActions
                     tripsSection
                     recentTransactions
@@ -68,13 +71,16 @@ struct HomeScreen: View {
         .sheet(item: $expenseTrip) { trip in
             AddExpenseView(tripID: trip.id)
         }
-        .confirmationDialog("Choose a trip", isPresented: $showTripPicker, titleVisibility: .visible) {
-            ForEach(store.myTrips) { trip in
-                Button(trip.name) { choose(trip) }
+        .sheet(isPresented: $showTripPicker, onDismiss: routePendingAction) {
+            TripPickerSheet(
+                trips: store.myTrips,
+                prompt: pendingAction == .split ? "Split a bill within which trip?" : "Add an expense to which trip?"
+            ) { trip in
+                pendingTrip = trip
+                showTripPicker = false
             }
-            Button("Cancel", role: .cancel) { pendingAction = nil }
-        } message: {
-            Text(pendingAction == .split ? "Split a bill within which trip?" : "Add an expense to which trip?")
+            .presentationDetents([.medium, .large])
+            .presentationBackground(.regularMaterial)
         }
         .confirmationDialog(
             "Delete this trip?",
@@ -105,14 +111,17 @@ struct HomeScreen: View {
         showTripPicker = true
     }
 
-    /// Routes the pending quick action to the chosen trip.
-    private func choose(_ trip: Trip) {
+    /// After the trip-picker sheet dismisses, opens the chosen trip's split or add-expense
+    /// sheet. Routing here (rather than while the picker is still up) avoids presenting two
+    /// sheets at once, which SwiftUI drops.
+    private func routePendingAction() {
+        defer { pendingAction = nil; pendingTrip = nil }
+        guard let trip = pendingTrip else { return }
         switch pendingAction {
         case .split: splitTrip = trip
         case .addExpense: expenseTrip = trip
         case nil: break
         }
-        pendingAction = nil
     }
 
     private var tripsSection: some View {
@@ -241,13 +250,13 @@ struct HomeScreen: View {
 
             HStack(spacing: 12) {
                 QuickActionButton(
-                    title: "Split", subtitle: "Divide a bill",
+                    title: "Split",
                     icon: "divide.circle.fill",
                     colors: [Color(hex: 0x818CF8), Color(hex: 0x4F46E5)]
                 ) { startQuickAction(.split) }
 
                 QuickActionButton(
-                    title: "Add Expense", subtitle: "Log spending",
+                    title: "Add Expense",
                     icon: "plus.circle.fill",
                     colors: [Color(hex: 0x34D399), Color(hex: 0x059669)]
                 ) { startQuickAction(.addExpense) }
@@ -264,17 +273,26 @@ struct HomeScreen: View {
                     let payer = trip.members.first { $0.id == expense.payerID }
                     let payerLabel = payer.map { $0.id == store.currentUser.id ? "You" : $0.name } ?? "—"
                     return Transaction(
+                        tripID: trip.id,
+                        expenseID: expense.id,
                         name: expense.title,
                         category: "\(trip.name) • Paid by \(payerLabel)",
                         date: expense.date.formatted(date: .abbreviated, time: .omitted),
                         amount: expense.amount,
                         currencyCode: trip.currencyCode,
                         color: payer?.color ?? Theme.accent,
-                        sortDate: expense.date
+                        sortDate: expense.date,
+                        canDelete: store.isCreator(of: trip) || expense.payerID == store.currentUser.id
                     )
                 }
             }
             .sorted { $0.sortDate > $1.sortDate }
+    }
+
+    /// The deletable transactions among those currently visible (respects "See All").
+    private var visibleDeletableTransactions: [Transaction] {
+        let transactions = showAllTransactions ? allTransactions : Array(allTransactions.prefix(5))
+        return transactions.filter(\.canDelete)
     }
 
     private var recentTransactions: some View {
@@ -284,15 +302,48 @@ struct HomeScreen: View {
                     .font(.headline)
                     .padding(.leading, 4)
                 Spacer()
-                if allTransactions.count > 5 {
-                    Button {
-                        withAnimation(.snappy) { showAllTransactions.toggle() }
-                    } label: {
-                        Text(showAllTransactions ? "Show Less" : "See All")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(Theme.accent)
+                if isSelectingTransactions {
+                    Button(selectedTransactionIDs.count == visibleDeletableTransactions.count ? "Deselect All" : "Select All") {
+                        if selectedTransactionIDs.count == visibleDeletableTransactions.count {
+                            selectedTransactionIDs.removeAll()
+                        } else {
+                            selectedTransactionIDs = Set(visibleDeletableTransactions.map(\.id))
+                        }
                     }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.accent)
                     .buttonStyle(.plain)
+
+                    Button("Cancel") {
+                        withAnimation(.snappy) {
+                            isSelectingTransactions = false
+                            selectedTransactionIDs.removeAll()
+                        }
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .buttonStyle(.plain)
+                    .padding(.leading, 12)
+                } else {
+                    if allTransactions.count > 5 {
+                        Button {
+                            withAnimation(.snappy) { showAllTransactions.toggle() }
+                        } label: {
+                            Text(showAllTransactions ? "Show Less" : "See All")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Theme.accent)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    if !visibleDeletableTransactions.isEmpty {
+                        Button("Select") {
+                            withAnimation(.snappy) { isSelectingTransactions = true }
+                        }
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.accent)
+                        .buttonStyle(.plain)
+                        .padding(.leading, 12)
+                    }
                 }
             }
 
@@ -315,26 +366,120 @@ struct HomeScreen: View {
                 GlassEffectContainer(spacing: 12) {
                     VStack(spacing: 12) {
                         ForEach(transactions) { transaction in
-                            TransactionRow(transaction: transaction)
+                            if isSelectingTransactions {
+                                TransactionRow(
+                                    transaction: transaction,
+                                    isSelected: transaction.canDelete ? selectedTransactionIDs.contains(transaction.id) : nil
+                                ) {
+                                    guard transaction.canDelete else { return }
+                                    if selectedTransactionIDs.contains(transaction.id) {
+                                        selectedTransactionIDs.remove(transaction.id)
+                                    } else {
+                                        selectedTransactionIDs.insert(transaction.id)
+                                    }
+                                }
+                                .opacity(transaction.canDelete ? 1 : 0.5)
+                            } else if transaction.canDelete {
+                                SwipeToDeleteRow {
+                                    transactionsPendingDelete = [transaction]
+                                } content: {
+                                    TransactionRow(transaction: transaction)
+                                }
+                            } else {
+                                TransactionRow(transaction: transaction)
+                            }
                         }
                     }
                 }
+
+                if isSelectingTransactions {
+                    Button(role: .destructive) {
+                        transactionsPendingDelete = allTransactions.filter { selectedTransactionIDs.contains($0.id) }
+                    } label: {
+                        Text("Delete\(selectedTransactionIDs.isEmpty ? "" : " (\(selectedTransactionIDs.count))")")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Theme.negative)
+                    .disabled(selectedTransactionIDs.isEmpty)
+                    .padding(.top, 4)
+                }
             }
         }
+        .confirmationDialog(
+            "Delete transaction\(transactionsPendingDelete.map { $0.count == 1 ? "" : "s" } ?? "")?",
+            isPresented: Binding(
+                get: { transactionsPendingDelete != nil },
+                set: { if !$0 { transactionsPendingDelete = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button(transactionsPendingDelete.map { "Delete \($0.count) Transaction\($0.count == 1 ? "" : "s")" } ?? "Delete", role: .destructive) {
+                if let pending = transactionsPendingDelete { deleteTransactions(pending) }
+                transactionsPendingDelete = nil
+            }
+            Button("Cancel", role: .cancel) { transactionsPendingDelete = nil }
+        } message: {
+            Text("This removes the expense from its trip for everyone it's shared with.")
+        }
+    }
+
+    /// Deletes the underlying expense for each transaction and exits selection mode.
+    private func deleteTransactions(_ transactions: [Transaction]) {
+        for transaction in transactions {
+            store.deleteExpense(transaction.expenseID, from: transaction.tripID)
+        }
+        selectedTransactionIDs.removeAll()
+        withAnimation(.snappy) { isSelectingTransactions = false }
     }
 }
 
 // MARK: - Balance Card
 
 /// The gradient budget card. Totals are aggregated across every trip the user is part of.
+/// Tapping the convert button flips the card to reveal a live currency converter on the back.
 struct BalanceCard: View {
     @Environment(TripStore.self) private var store
+    @State private var showConverter = false
 
     var body: some View {
+        ZStack {
+            budgetFace
+                .opacity(showConverter ? 0 : 1)
+                .allowsHitTesting(!showConverter)
+
+            CurrencyConverterCard(onClose: flip)
+                .opacity(showConverter ? 1 : 0)
+                .allowsHitTesting(showConverter)
+        }
+        .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+    }
+
+    private func flip() {
+        withAnimation(.easeInOut(duration: 0.28)) {
+            showConverter.toggle()
+        }
+    }
+
+    private var budgetFace: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Label("Budget Available", systemImage: "wallet.bifold.fill")
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(.white.opacity(0.95))
+            HStack {
+                Label("Budget Available", systemImage: "wallet.bifold.fill")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.95))
+                Spacer()
+                Button(action: flip) {
+                    Image(systemName: "arrow.left.arrow.right")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 34, height: 34)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: .circle)
+                .accessibilityLabel("Currency converter")
+            }
 
             Text(money(store.budgetAvailable, "USD"))
                 .font(.system(size: 36, weight: .bold, design: .rounded))
@@ -358,6 +503,7 @@ struct BalanceCard: View {
             }
         }
         .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             LinearGradient(
                 colors: [Color(hex: 0xB8E6F5), Color(hex: 0x5B9BD5), Color(hex: 0x2E4A8B)],
@@ -365,7 +511,6 @@ struct BalanceCard: View {
             )
         )
         .clipShape(.rect(cornerRadius: 34))
-        .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
     }
 
     private func infoColumn(icon: String, label: String, value: String) -> some View {
@@ -550,8 +695,11 @@ struct TripRow: View {
 
 // MARK: - Currency Converter
 
-/// A live currency converter backed by the Exchange Rates API.
+/// A live currency converter backed by the Exchange Rates API. Rendered as the back face
+/// of `BalanceCard`; `onClose` flips the card back to the budget summary.
 struct CurrencyConverterCard: View {
+    var onClose: (() -> Void)? = nil
+
     private let currencies = ["USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CNY", "KRW", "THB", "SGD", "VND", "INR"]
 
     @State private var amountText = "100"
@@ -576,6 +724,17 @@ struct CurrencyConverterCard: View {
                 Spacer()
                 if isLoading {
                     ProgressView().controlSize(.small)
+                }
+                if let onClose {
+                    Button(action: onClose) {
+                        Image(systemName: "arrow.uturn.backward")
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(.primary)
+                            .frame(width: 34, height: 34)
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.interactive(), in: .circle)
+                    .accessibilityLabel("Back to budget")
                 }
             }
 
@@ -619,9 +778,9 @@ struct CurrencyConverterCard: View {
                 }
             }
         }
-        .padding(18)
+        .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular, in: .rect(cornerRadius: 24))
+        .glassEffect(.regular, in: .rect(cornerRadius: 34))
         .task { await loadRates() }
     }
 
@@ -655,42 +814,111 @@ struct CurrencyConverterCard: View {
 
 // MARK: - Quick Action Button
 
+/// A compact pill action: a small gradient icon and a single label, on liquid glass.
 struct QuickActionButton: View {
     let title: String
-    let subtitle: String
     let icon: String
     let colors: [Color]
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
                 Image(systemName: icon)
-                    .font(.system(size: 22, weight: .semibold))
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(.white)
-                    .frame(width: 48, height: 48)
+                    .frame(width: 34, height: 34)
                     .background(
                         LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing),
                         in: .circle
                     )
-                Text(title).font(.headline)
-                HStack(spacing: 4) {
-                    Text(subtitle).font(.caption).foregroundStyle(.secondary)
-                    Image(systemName: "arrow.right").font(.caption2).foregroundStyle(.secondary)
-                }
+                Text(title).font(.subheadline.weight(.semibold))
+                Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(16)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
         }
         .buttonStyle(.plain)
-        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 28))
+        .glassEffect(.regular.interactive(), in: .capsule)
+    }
+}
+
+// MARK: - Trip Picker
+
+/// A glass sheet for choosing which trip a quick action (split / add expense) applies to,
+/// replacing the stock confirmation dialog with legible, tappable trip rows.
+struct TripPickerSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let trips: [Trip]
+    let prompt: String
+    let onSelect: (Trip) -> Void
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(prompt)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 4)
+                        .padding(.bottom, 2)
+
+                    ForEach(trips) { trip in
+                        Button { onSelect(trip) } label: { row(trip) }
+                            .buttonStyle(.plain)
+                    }
+                }
+                .padding()
+            }
+            .background {
+                LinearGradient(colors: Theme.homeGradient, startPoint: .top, endPoint: .bottom)
+                    .ignoresSafeArea()
+            }
+            .navigationTitle("Choose a Trip")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func row(_ trip: Trip) -> some View {
+        HStack(spacing: 12) {
+            TripCoverView(trip: trip)
+                .frame(width: 52, height: 52)
+                .clipShape(.rect(cornerRadius: 14))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(trip.name)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Text(trip.dateRangeText ?? "\(trip.expenses.count) expense\(trip.expenses.count == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
     }
 }
 
 // MARK: - Recent Transactions
 
 struct Transaction: Identifiable {
-    let id = UUID()
+    /// Stable identity tied to the underlying expense so selection survives re-renders.
+    /// (A fresh `UUID()` here would change on every recompute of `allTransactions`,
+    /// breaking multi-select.)
+    var id: Expense.ID { expenseID }
+    let tripID: Trip.ID
+    let expenseID: Expense.ID
     let name: String
     let category: String
     let date: String
@@ -699,6 +927,9 @@ struct Transaction: Identifiable {
     let color: Color
     /// The underlying date, used to sort newest-first.
     let sortDate: Date
+    /// Whether the signed-in account may delete the underlying expense (trip owner,
+    /// or whoever paid it), mirroring `TripDetailView.canModify`.
+    let canDelete: Bool
 
     var initials: String {
         let parts = name.split(separator: " ")
@@ -708,9 +939,18 @@ struct Transaction: Identifiable {
 
 struct TransactionRow: View {
     let transaction: Transaction
+    /// Non-nil while the list is in multi-select mode; toggled on tap instead of swiping.
+    var isSelected: Bool? = nil
+    var onTap: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 12) {
+            if let isSelected {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(isSelected ? Theme.accent : .secondary)
+            }
+
             Text(transaction.initials)
                 .font(.caption.weight(.bold))
                 .foregroundStyle(.white)
@@ -730,6 +970,8 @@ struct TransactionRow: View {
         }
         .padding(14)
         .glassEffect(.regular, in: .rect(cornerRadius: 20))
+        .contentShape(.rect)
+        .onTapGesture { onTap?() }
     }
 }
 
