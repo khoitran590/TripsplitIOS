@@ -1,6 +1,7 @@
 import SwiftUI
 import Observation
 import Combine
+import ImageIO
 import PhotosUI
 import UIKit
 import VisionKit
@@ -761,6 +762,24 @@ final class TripStore {
         persist(trips[index])
     }
 
+    /// Soft-deletes multiple expenses from one trip with a single cloud write. Used by the
+    /// home screen's multi-select delete so a batch action doesn't fan out into N upserts.
+    func deleteExpenses(_ expenseIDs: Set<Expense.ID>, from tripID: Trip.ID) {
+        guard !expenseIDs.isEmpty,
+              let index = trips.firstIndex(where: { $0.id == tripID }) else { return }
+        var removed: [Expense] = []
+        trips[index].expenses.removeAll { expense in
+            guard expenseIDs.contains(expense.id) else { return false }
+            var deleted = expense
+            deleted.deletedAt = Date()
+            removed.append(deleted)
+            return true
+        }
+        guard !removed.isEmpty else { return }
+        trips[index].deletedExpenses.insert(contentsOf: removed, at: 0)
+        persist(trips[index])
+    }
+
     /// Restores a previously soft-deleted expense back into the active list, returning it
     /// to the split/settle math (its budget contribution was never removed).
     func restoreExpense(_ expenseID: Expense.ID, in tripID: Trip.ID) {
@@ -1379,6 +1398,66 @@ let supportedCurrencies = ["USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CNY", "KRW
 /// Colors assigned to newly added trip members, in rotation.
 let memberPalette: [UInt32] = [0x10B981, 0xF59E0B, 0xEC4899, 0x3B82F6, 0x8B5CF6, 0xEF4444, 0x14B8A6, 0xF97316]
 
+/// Prepares user-picked images for upload/display without keeping full-resolution originals
+/// around in SwiftUI state. ImageIO thumbnails avoid a large decode for camera-roll photos.
+private enum UploadImagePreparation {
+    static func preparedImage(
+        from data: Data,
+        maxPixelSize: Int,
+        compressionQuality: CGFloat
+    ) async -> (image: UIImage, jpeg: Data)? {
+        await Task.detached(priority: .userInitiated) {
+            autoreleasepool {
+                guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+                let options: [CFString: Any] = [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceShouldCacheImmediately: true,
+                ]
+                guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+                    return nil
+                }
+                let image = UIImage(cgImage: cgImage)
+                guard let jpeg = image.jpegData(compressionQuality: compressionQuality) else { return nil }
+                return (image, jpeg)
+            }
+        }.value
+    }
+
+    static func jpegData(
+        from data: Data,
+        maxPixelSize: Int,
+        compressionQuality: CGFloat
+    ) async -> Data? {
+        (await preparedImage(from: data, maxPixelSize: maxPixelSize, compressionQuality: compressionQuality))?.jpeg
+    }
+
+    static func jpegData(
+        from image: UIImage,
+        maxPixelSize: CGFloat,
+        compressionQuality: CGFloat
+    ) async -> Data? {
+        await Task.detached(priority: .userInitiated) {
+            autoreleasepool {
+                let longestSide = max(image.size.width, image.size.height)
+                let output: UIImage
+                if longestSide > maxPixelSize {
+                    let scale = maxPixelSize / longestSide
+                    let newSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+                    let renderer = UIGraphicsImageRenderer(size: newSize)
+                    output = renderer.image { _ in
+                        image.draw(in: CGRect(origin: .zero, size: newSize))
+                    }
+                } else {
+                    output = image
+                }
+                return output.jpegData(compressionQuality: compressionQuality)
+            }
+        }.value
+    }
+}
+
 // MARK: - Add Trip
 
 /// A sheet for creating a trip: name, currency, the owner's personal budget, and local participants.
@@ -1397,6 +1476,7 @@ struct AddTripView: View {
     @State private var members: [Person] = []
     @State private var coverPick: PhotosPickerItem?
     @State private var coverImage: UIImage?
+    @State private var coverJPEG: Data?
     @State private var isSaving = false
     @State private var errorMessage: String?
 
@@ -1448,9 +1528,17 @@ struct AddTripView: View {
             .onChange(of: coverPick) { _, pick in
                 guard let pick else { return }
                 Task {
-                    if let data = try? await pick.loadTransferable(type: Data.self),
-                       let image = UIImage(data: data) {
+                    guard let data = try? await pick.loadTransferable(type: Data.self) else { return }
+                    if let prepared = await UploadImagePreparation.preparedImage(
+                        from: data,
+                        maxPixelSize: 1_600,
+                        compressionQuality: 0.72
+                    ) {
+                        coverImage = prepared.image
+                        coverJPEG = prepared.jpeg
+                    } else if let image = UIImage(data: data) {
                         coverImage = image
+                        coverJPEG = nil
                     }
                 }
             }
@@ -1614,7 +1702,22 @@ struct AddTripView: View {
         isSaving = true
         errorMessage = nil
         Task {
-            if let coverImage, let jpeg = coverImage.jpegData(compressionQuality: 0.7) {
+            if let coverImage {
+                let jpeg: Data?
+                if let coverJPEG {
+                    jpeg = coverJPEG
+                } else {
+                    jpeg = await UploadImagePreparation.jpegData(
+                        from: coverImage,
+                        maxPixelSize: 1_600,
+                        compressionQuality: 0.72
+                    )
+                }
+                guard let jpeg else {
+                    errorMessage = "Couldn't prepare the cover photo."
+                    isSaving = false
+                    return
+                }
                 do {
                     trip.coverImageURL = try await store.uploadTripCover(jpeg, tripID: trip.id)
                 } catch {
@@ -1648,6 +1751,7 @@ struct EditTripView: View {
     @State private var budgetText = ""
     @State private var coverPick: PhotosPickerItem?
     @State private var coverImage: UIImage?
+    @State private var coverJPEG: Data?
     @State private var allowMembersToPayForOthers = false
     @State private var isSaving = false
     @State private var errorMessage: String?
@@ -1708,9 +1812,17 @@ struct EditTripView: View {
             .onChange(of: coverPick) { _, pick in
                 guard let pick else { return }
                 Task {
-                    if let data = try? await pick.loadTransferable(type: Data.self),
-                       let image = UIImage(data: data) {
+                    guard let data = try? await pick.loadTransferable(type: Data.self) else { return }
+                    if let prepared = await UploadImagePreparation.preparedImage(
+                        from: data,
+                        maxPixelSize: 1_600,
+                        compressionQuality: 0.72
+                    ) {
+                        coverImage = prepared.image
+                        coverJPEG = prepared.jpeg
+                    } else if let image = UIImage(data: data) {
                         coverImage = image
+                        coverJPEG = nil
                     }
                 }
             }
@@ -1854,7 +1966,22 @@ struct EditTripView: View {
         isSaving = true
         errorMessage = nil
         Task {
-            if let coverImage, let jpeg = coverImage.jpegData(compressionQuality: 0.7) {
+            if let coverImage {
+                let jpeg: Data?
+                if let coverJPEG {
+                    jpeg = coverJPEG
+                } else {
+                    jpeg = await UploadImagePreparation.jpegData(
+                        from: coverImage,
+                        maxPixelSize: 1_600,
+                        compressionQuality: 0.72
+                    )
+                }
+                guard let jpeg else {
+                    errorMessage = "Couldn't prepare the cover photo."
+                    isSaving = false
+                    return
+                }
                 do {
                     updated.coverImageURL = try await store.uploadTripCover(jpeg, tripID: tripID)
                 } catch {
@@ -3208,7 +3335,21 @@ struct AddExpenseView: View {
             uploadError = "Sign in to upload the receipt photo."
             return
         }
-        let jpeg = image.jpegData(compressionQuality: 0.7) ?? originalData ?? Data()
+        let preparedJPEG: Data?
+        if let originalData {
+            preparedJPEG = await UploadImagePreparation.jpegData(
+                from: originalData,
+                maxPixelSize: 2_200,
+                compressionQuality: 0.72
+            )
+        } else {
+            preparedJPEG = await UploadImagePreparation.jpegData(
+                from: image,
+                maxPixelSize: 2_200,
+                compressionQuality: 0.72
+            )
+        }
+        let jpeg = preparedJPEG ?? originalData ?? Data()
         guard !jpeg.isEmpty else { uploadError = "Couldn't read the receipt image."; return }
 
         // Lowercase the id: the storage RLS policy compares the leading folder against

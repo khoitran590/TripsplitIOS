@@ -429,8 +429,9 @@ struct HomeScreen: View {
 
     /// Deletes the underlying expense for each transaction and exits selection mode.
     private func deleteTransactions(_ transactions: [Transaction]) {
-        for transaction in transactions {
-            store.deleteExpense(transaction.expenseID, from: transaction.tripID)
+        let groupedByTrip = Dictionary(grouping: transactions, by: \.tripID)
+        for (tripID, tripTransactions) in groupedByTrip {
+            store.deleteExpenses(Set(tripTransactions.map(\.expenseID)), from: tripID)
         }
         selectedTransactionIDs.removeAll()
         withAnimation(.snappy) { isSelectingTransactions = false }
