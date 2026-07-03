@@ -116,6 +116,9 @@ struct MapFocus {
     /// The resolved point of interest, populated after the async search; `nil` while
     /// the search is in flight or if nothing matched (the city center is used instead).
     var mapItem: MKMapItem?
+    /// `true` while the MapKit POI search is still in flight, so the detail card can
+    /// show a "finding exact location" state instead of half-empty details.
+    var isResolving = true
 
     var title: String { mapItem?.name ?? item.name }
 
@@ -136,6 +139,19 @@ struct MapFocus {
     /// The formatted street address MapKit resolved, if any.
     var addressText: String? {
         mapItem?.address?.fullAddress
+    }
+
+    /// A `tel:` URL for the resolved place's phone number, if it has one.
+    var phoneURL: URL? {
+        guard let phone = mapItem?.phoneNumber else { return nil }
+        let digits = phone.filter { $0.isNumber || $0 == "+" }
+        guard !digits.isEmpty else { return nil }
+        return URL(string: "tel:\(digits)")
+    }
+
+    /// The resolved place's website, if MapKit knows one.
+    var websiteURL: URL? {
+        mapItem?.url
     }
 
     /// An `MKMapItem` suitable for "Open in Maps" — the resolved POI when available,
@@ -190,11 +206,13 @@ final class ExploreMapModel {
             latitudinalMeters: 40_000,
             longitudinalMeters: 40_000
         )
-        guard let response = try? await MKLocalSearch(request: request).start(),
-              let match = response.mapItems.first else { return }
+        let match = (try? await MKLocalSearch(request: request).start())?.mapItems.first
         guard token == navigateRequest else { return }
-        self.focus?.coordinate = match.location.coordinate
-        self.focus?.mapItem = match
+        self.focus?.isResolving = false
+        if let match {
+            self.focus?.coordinate = match.location.coordinate
+            self.focus?.mapItem = match
+        }
     }
 
     /// Remove the focus, returning the Map tab to its default state.
@@ -281,38 +299,34 @@ struct MapScreen: View {
     }
 }
 
-/// An Apple Maps–style place card shown over the map: the resolved place name,
-/// category, address, and phone, plus the curated trip's own note and a shortcut
-/// to open turn-by-turn directions in Apple Maps.
+/// An Apple Maps–style place card shown over the map: a Look Around street-level
+/// preview (falling back to the curated trip's photo), the resolved place name,
+/// category, address, and phone, the trip's own note, and quick call / website /
+/// directions actions.
 struct LocationDetailCard: View {
+    @Environment(\.openURL) private var openURL
+
     let focus: MapFocus
     let onOpenInMaps: () -> Void
     let onClose: () -> Void
 
+    /// Street-level imagery of the resolved place; `nil` while loading or when
+    /// Look Around has no coverage there (the destination photo is shown instead).
+    @State private var lookAroundScene: MKLookAroundScene?
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(focus.title)
-                        .font(.title3.bold())
-                        .foregroundStyle(.primary)
-                    HStack(spacing: 6) {
-                        if let category = focus.categoryText {
-                            Text(category)
-                        }
-                        Text("· \(focus.destination.city), \(focus.destination.country)")
-                    }
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 0)
-                Button(action: onClose) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.title2)
+            header
+
+            titleRow
+
+            if focus.isResolving {
+                HStack(spacing: 10) {
+                    ProgressView()
+                    Text("Finding exact location…")
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
-                        .symbolRenderingMode(.hierarchical)
                 }
-                .buttonStyle(.plain)
             }
 
             // Curated context from the trip itself.
@@ -337,10 +351,61 @@ struct LocationDetailCard: View {
             if let address = focus.addressText {
                 detailRow(icon: "mappin.and.ellipse", text: address)
             }
-            if let phone = focus.mapItem?.phoneNumber {
-                detailRow(icon: "phone.fill", text: phone)
-            }
 
+            actions
+        }
+        .padding(16)
+        .glassEffect(.regular, in: .rect(cornerRadius: 24))
+        .task(id: focus.mapItem) {
+            lookAroundScene = nil
+            guard let mapItem = focus.mapItem else { return }
+            lookAroundScene = try? await MKLookAroundSceneRequest(mapItem: mapItem).scene
+        }
+    }
+
+    /// The visual header: Look Around when available, otherwise the trip photo.
+    private var header: some View {
+        Group {
+            if let lookAroundScene {
+                LookAroundPreview(initialScene: lookAroundScene)
+            } else {
+                DestinationPhoto(destination: focus.destination, symbolSize: 44)
+            }
+        }
+        .frame(height: 150)
+        .frame(maxWidth: .infinity)
+        .clipShape(.rect(cornerRadius: 16))
+        .overlay(alignment: .topTrailing) {
+            Button(action: onClose) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(.white, .black.opacity(0.35))
+            }
+            .buttonStyle(.plain)
+            .padding(8)
+        }
+    }
+
+    private var titleRow: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(focus.title)
+                .font(.title3.bold())
+                .foregroundStyle(.primary)
+            HStack(spacing: 6) {
+                if let category = focus.categoryText {
+                    Text(category)
+                }
+                Text("· \(focus.destination.city), \(focus.destination.country)")
+            }
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Directions is always available; Call and Website appear once the POI
+    /// search resolves a place that has them.
+    private var actions: some View {
+        HStack(spacing: 10) {
             Button(action: onOpenInMaps) {
                 Label("Directions", systemImage: "arrow.triangle.turn.up.right.diamond.fill")
                     .font(.headline)
@@ -350,9 +415,30 @@ struct LocationDetailCard: View {
             }
             .buttonStyle(.plain)
             .glassEffect(.regular.tint(.accentColor).interactive(), in: .capsule)
+
+            if let phoneURL = focus.phoneURL {
+                actionCircle(icon: "phone.fill", label: "Call") {
+                    openURL(phoneURL)
+                }
+            }
+            if let websiteURL = focus.websiteURL {
+                actionCircle(icon: "safari.fill", label: "Website") {
+                    openURL(websiteURL)
+                }
+            }
         }
-        .padding(16)
-        .glassEffect(.regular, in: .rect(cornerRadius: 24))
+    }
+
+    private func actionCircle(icon: String, label: LocalizedStringKey, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.tint)
+                .frame(width: 46, height: 46)
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: .circle)
+        .accessibilityLabel(Text(label))
     }
 
     private func detailRow(icon: String, text: String) -> some View {
@@ -810,6 +896,38 @@ extension Destination {
     }
 }
 
+extension Destination {
+    /// Asset-catalog name of the bundled photo for this curated trip.
+    var imageName: String { "explore-\(id)" }
+}
+
+/// The destination's bundled photo, cropped to fill whatever frame it's given.
+/// Falls back to the old gradient + symbol placeholder if a (future) destination
+/// id has no matching asset, so new entries degrade gracefully instead of breaking.
+struct DestinationPhoto: View {
+    let destination: Destination
+    var symbolSize: CGFloat = 54
+
+    var body: some View {
+        Color.clear
+            .overlay {
+                if let image = UIImage(named: destination.imageName) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    ZStack {
+                        LinearGradient(colors: destination.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+                        Image(systemName: destination.symbol)
+                            .font(.system(size: symbolSize))
+                            .foregroundStyle(.white.opacity(0.3))
+                    }
+                }
+            }
+            .clipped()
+    }
+}
+
 /// A tall photo-style carousel card, TripAdvisor's "Plan your next adventure" look:
 /// tag chips and a heart floating over the image, city name anchored at the bottom.
 struct AdventureCard: View {
@@ -819,11 +937,7 @@ struct AdventureCard: View {
 
     var body: some View {
         ZStack {
-            LinearGradient(colors: destination.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
-
-            Image(systemName: destination.symbol)
-                .font(.system(size: 110))
-                .foregroundStyle(.white.opacity(0.25))
+            DestinationPhoto(destination: destination, symbolSize: 110)
 
             LinearGradient(
                 colors: [.clear, .black.opacity(0.6)],
@@ -872,14 +986,8 @@ struct TrendingCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ZStack {
-                LinearGradient(colors: destination.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
-
-                Image(systemName: destination.symbol)
-                    .font(.system(size: 54))
-                    .foregroundStyle(.white.opacity(0.3))
-            }
-            .frame(width: 170, height: 130)
+            DestinationPhoto(destination: destination)
+                .frame(width: 170, height: 130)
             .overlay(alignment: .topTrailing) {
                 HeartButton(isSaved: isSaved, action: onToggleSave)
                     .padding(8)
@@ -906,14 +1014,9 @@ struct DestinationRow: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            ZStack {
-                LinearGradient(colors: destination.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
-                Image(systemName: destination.symbol)
-                    .font(.system(size: 22))
-                    .foregroundStyle(.white.opacity(0.6))
-            }
-            .frame(width: 56, height: 56)
-            .clipShape(.rect(cornerRadius: 12))
+            DestinationPhoto(destination: destination, symbolSize: 22)
+                .frame(width: 56, height: 56)
+                .clipShape(.rect(cornerRadius: 12))
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(destination.city), \(destination.country)")
@@ -1038,11 +1141,13 @@ struct DestinationDetailView: View {
 
     private var hero: some View {
         ZStack {
-            LinearGradient(colors: destination.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+            DestinationPhoto(destination: destination, symbolSize: 100)
 
-            Image(systemName: destination.symbol)
-                .font(.system(size: 100))
-                .foregroundStyle(.white.opacity(0.3))
+            LinearGradient(
+                colors: [.clear, .black.opacity(0.35)],
+                startPoint: .center,
+                endPoint: .bottom
+            )
         }
         .frame(height: 240)
         .frame(maxWidth: .infinity)
