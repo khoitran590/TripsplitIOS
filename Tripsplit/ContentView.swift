@@ -507,7 +507,7 @@ struct RecScreen: View {
         }
     }
 
-    private func sectionHeader(_ title: String) -> some View {
+    private func sectionHeader(_ title: LocalizedStringKey) -> some View {
         Text(title)
             .font(.title2.bold())
     }
@@ -1019,7 +1019,7 @@ struct DestinationDetailView: View {
                         withAnimation(.snappy(duration: 0.2)) { tab = option }
                     } label: {
                         VStack(spacing: 8) {
-                            Text(option.rawValue)
+                            Text(LocalizedStringKey(option.rawValue))
                                 .font(.headline)
                                 .foregroundStyle(tab == option ? .primary : .secondary)
                             Capsule()
@@ -1090,7 +1090,7 @@ struct DestinationDetailView: View {
         }
     }
 
-    private func statTile(value: String, label: String) -> some View {
+    private func statTile(value: String, label: LocalizedStringKey) -> some View {
         VStack(spacing: 4) {
             Text(value)
                 .font(.subheadline.weight(.bold))

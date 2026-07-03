@@ -400,7 +400,7 @@ struct SplitView: View {
                         } label: {
                             HStack(spacing: 6) {
                                 Image(systemName: option.icon)
-                                Text(option.shortLabel)
+                                Text(LocalizedStringKey(option.shortLabel))
                             }
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(method == option ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
@@ -415,7 +415,7 @@ struct SplitView: View {
                     }
                 }
             }
-            Text(method.rawValue)
+            Text(LocalizedStringKey(method.rawValue))
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
@@ -497,7 +497,7 @@ struct SplitView: View {
             ForEach(people) { person in
                 HStack {
                     avatar(person)
-                    Text(person.name + (person.id == payer ? " (Payer)" : ""))
+                    Text(person.id == payer ? LocalizedStringKey("\(person.name) (Payer)") : LocalizedStringKey(person.name))
                         .font(.subheadline.weight(.medium))
                     Spacer()
                     Text(currency(result.owed[person.id] ?? 0))
@@ -555,7 +555,7 @@ struct SplitView: View {
     // MARK: Reusable pieces
 
     private func cardSection<Content: View>(
-        title: String, icon: String, @ViewBuilder content: () -> Content
+        title: LocalizedStringKey, icon: String, @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Label(title, systemImage: icon)
@@ -617,7 +617,7 @@ struct SplitView: View {
         }
     }
 
-    private func summaryLine(label: String, value: String, target: String) -> some View {
+    private func summaryLine(label: LocalizedStringKey, value: String, target: String) -> some View {
         HStack {
             Text(label).font(.subheadline.weight(.semibold))
             Spacer()
@@ -821,7 +821,7 @@ struct SettleView: View {
                         } label: {
                             HStack(spacing: 6) {
                                 Image(systemName: option.icon)
-                                Text(option.rawValue)
+                                Text(LocalizedStringKey(option.rawValue))
                             }
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(method == option ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
@@ -880,7 +880,7 @@ struct SettleView: View {
 
     // MARK: Reusable pieces
 
-    private func detailRow(icon: String, label: String, person: Person) -> some View {
+    private func detailRow(icon: String, label: LocalizedStringKey, person: Person) -> some View {
         HStack(spacing: 10) {
             Image(systemName: icon)
                 .font(.system(size: 14, weight: .semibold))
@@ -894,7 +894,7 @@ struct SettleView: View {
         }
     }
 
-    private func amountColumn(title: String, value: Double, color: Color) -> some View {
+    private func amountColumn(title: LocalizedStringKey, value: Double, color: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.caption).foregroundStyle(.secondary)
             Text(currency(value)).font(.title3.weight(.bold)).foregroundStyle(color)
@@ -902,7 +902,7 @@ struct SettleView: View {
     }
 
     private func settleButton(
-        title: String, icon: String, tint: Color, enabled: Bool, action: @escaping () -> Void
+        title: LocalizedStringKey, icon: String, tint: Color, enabled: Bool, action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             Label(title, systemImage: icon)
@@ -948,7 +948,7 @@ struct SettleView: View {
         .padding(.vertical, 4)
     }
 
-    private func actionPill(title: String, icon: String, tint: Color, action: @escaping () -> Void) -> some View {
+    private func actionPill(title: LocalizedStringKey, icon: String, tint: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Label(title, systemImage: icon)
                 .font(.caption.weight(.semibold))
@@ -966,7 +966,7 @@ struct SettleView: View {
         case .confirmed: ("Confirmed", Color(hex: 0x10B981))
         case .rejected: ("Declined", Color(hex: 0xEF4444))
         }
-        return Text(text)
+        return Text(LocalizedStringKey(text))
             .font(.caption2.weight(.bold))
             .foregroundStyle(color)
             .padding(.horizontal, 10)

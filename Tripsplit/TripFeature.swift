@@ -2283,7 +2283,7 @@ struct TripDetailView: View {
         .padding(.top, 4)
     }
 
-    private func heroButton(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
+    private func heroButton(_ title: LocalizedStringKey, icon: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 6) {
                 Image(systemName: icon).font(.caption.weight(.semibold))
@@ -2315,7 +2315,7 @@ struct TripDetailView: View {
         }
     }
 
-    private func detailTile(icon: String, label: String, value: String) -> some View {
+    private func detailTile(icon: String, label: LocalizedStringKey, value: String) -> some View {
         HStack(spacing: 10) {
             Image(systemName: icon)
                 .font(.subheadline)
@@ -2413,10 +2413,11 @@ struct TripDetailView: View {
         .glassEffect(.regular, in: .rect(cornerRadius: 24))
     }
 
-    private func budgetTile(_ label: String, _ value: String, _ color: Color) -> some View {
+    private func budgetTile(_ label: LocalizedStringKey, _ value: String, _ color: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(label.uppercased())
+            Text(label)
                 .font(.system(size: 10, weight: .semibold)).tracking(0.5)
+                .textCase(.uppercase)
                 .foregroundStyle(.secondary)
             Text(value)
                 .font(.subheadline.weight(.bold)).foregroundStyle(color)
@@ -2468,10 +2469,10 @@ struct TripDetailView: View {
             avatar(settlement.from, size: 30)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
-                    Text(fromLabel).fontWeight(.semibold)
+                    Text(LocalizedStringKey(fromLabel)).fontWeight(.semibold)
                     Image(systemName: "arrow.right")
                         .font(.caption2.weight(.bold)).foregroundStyle(.secondary)
-                    Text(toLabel).fontWeight(.semibold)
+                    Text(LocalizedStringKey(toLabel)).fontWeight(.semibold)
                 }
                 .font(.subheadline)
                 if store.isFullySettled(tripID: tripID, settlement) {
@@ -2504,7 +2505,7 @@ struct TripDetailView: View {
                                 imageData: member.id == store.currentUser.id ? store.profileImageData : nil,
                                 size: 40
                             )
-                            Text(member.id == store.currentUser.id ? "You" : member.name)
+                            Text(LocalizedStringKey(member.id == store.currentUser.id ? "You" : member.name))
                                 .font(.caption)
                                 .lineLimit(1)
                         }
@@ -2595,7 +2596,7 @@ struct TripDetailView: View {
                                 .truncationMode(.middle)
                             Button {
                                 UIPasteboard.general.string = inviteLink.absoluteString
-                                inviteMessage = "Invitation link copied."
+                                inviteMessage = String(localized: "Invitation link copied.")
                             } label: {
                                 Image(systemName: "doc.on.doc")
                                     .font(.caption.weight(.bold))
@@ -2630,7 +2631,7 @@ struct TripDetailView: View {
                 try await store.inviteMember(email: email, displayName: name, to: trip.id)
                 inviteEmail = ""
                 inviteName = ""
-                inviteMessage = "Member invited and added to this trip."
+                inviteMessage = String(localized: "Member invited and added to this trip.")
             } catch {
                 inviteMessage = (error as? AuthError)?.message ?? error.localizedDescription
             }
@@ -2644,7 +2645,7 @@ struct TripDetailView: View {
         Task {
             do {
                 inviteLink = try await store.createInvitationLink(for: trip.id)
-                inviteMessage = "Invitation link ready to share."
+                inviteMessage = String(localized: "Invitation link ready to share.")
             } catch {
                 inviteMessage = (error as? AuthError)?.message ?? error.localizedDescription
             }
@@ -2787,7 +2788,7 @@ struct TripDetailView: View {
         .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
     }
 
-    private func statColumn(_ title: String, _ value: String, _ color: Color) -> some View {
+    private func statColumn(_ title: LocalizedStringKey, _ value: String, _ color: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.caption).foregroundStyle(.secondary)
             Text(value).font(.subheadline.weight(.bold)).foregroundStyle(color)
@@ -2879,7 +2880,7 @@ struct ExpenseDetailView: View {
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Paid by").font(.caption).foregroundStyle(.secondary)
-                    Text(payer.map { $0.id == me ? "You" : $0.name } ?? "—")
+                    Text(LocalizedStringKey(payer.map { $0.id == me ? "You" : $0.name } ?? "—"))
                         .font(.subheadline.weight(.semibold))
                 }
                 Spacer()
@@ -2929,7 +2930,7 @@ struct ExpenseDetailView: View {
         }
     }
 
-    private func receiptTotalRow(label: String, value: String, emphasized: Bool = false) -> some View {
+    private func receiptTotalRow(label: LocalizedStringKey, value: String, emphasized: Bool = false) -> some View {
         HStack {
             Text(label)
                 .font(emphasized ? .subheadline.weight(.semibold) : .subheadline)
@@ -2952,7 +2953,7 @@ struct ExpenseDetailView: View {
                 if share > 0.005 {
                     HStack(spacing: 10) {
                         avatar(member, size: 30)
-                        Text(member.id == me ? "You" : member.name)
+                        Text(LocalizedStringKey(member.id == me ? "You" : member.name))
                             .font(.subheadline.weight(.medium))
                         Spacer()
                         Text(money(share, trip.currencyCode))
@@ -3013,7 +3014,7 @@ struct ExpenseDetailView: View {
                 if let member {
                     avatar(member, size: 24)
                 }
-                Text(comment.authorID == store.currentUser.id ? "You" : comment.authorName)
+                Text(LocalizedStringKey(comment.authorID == store.currentUser.id ? "You" : comment.authorName))
                     .font(.caption.weight(.semibold))
                 Spacer()
                 Text(comment.date.formatted(date: .abbreviated, time: .shortened))
@@ -3267,7 +3268,7 @@ struct AddExpenseView: View {
         }
     }
 
-    private func receiptActionLabel(icon: String, title: String) -> some View {
+    private func receiptActionLabel(icon: String, title: LocalizedStringKey) -> some View {
         HStack(spacing: 8) {
             Image(systemName: icon)
             Text(title).font(.subheadline.weight(.semibold))
@@ -3501,7 +3502,7 @@ struct AddExpenseView: View {
                         Button {
                             selectedPayerID = member.id
                         } label: {
-                            let label = member.id == store.currentUser.id ? "You" : member.name
+                            let label = LocalizedStringKey(member.id == store.currentUser.id ? "You" : member.name)
                             if member.id == resolvedPayer {
                                 Label(label, systemImage: "checkmark")
                             } else {
@@ -3512,7 +3513,7 @@ struct AddExpenseView: View {
                 } label: {
                     HStack(spacing: 10) {
                         avatar(payer, size: 30)
-                        Text(isMe ? "You" : payer.name).font(.subheadline.weight(.medium))
+                        Text(LocalizedStringKey(isMe ? "You" : payer.name)).font(.subheadline.weight(.medium))
                         Spacer()
                         Image(systemName: "chevron.up.chevron.down")
                             .font(.caption).foregroundStyle(.secondary)
@@ -3524,7 +3525,7 @@ struct AddExpenseView: View {
             } else {
                 HStack {
                     avatar(payer, size: 30)
-                    Text(isMe ? "You" : payer.name).font(.subheadline.weight(.medium))
+                    Text(LocalizedStringKey(isMe ? "You" : payer.name)).font(.subheadline.weight(.medium))
                     Spacer()
                 }
             }
@@ -3545,13 +3546,13 @@ struct AddExpenseView: View {
                             method = option
                             configureForMethod(trip)
                         } label: {
-                            Label(option.rawValue, systemImage: option.icon)
+                            Label(LocalizedStringKey(option.rawValue), systemImage: option.icon)
                         }
                     }
                 } label: {
                     HStack {
                         Image(systemName: method.icon)
-                        Text(method.rawValue).font(.subheadline.weight(.semibold))
+                        Text(LocalizedStringKey(method.rawValue)).font(.subheadline.weight(.semibold))
                         Spacer()
                         Image(systemName: "chevron.up.chevron.down").font(.caption).foregroundStyle(.secondary)
                     }
@@ -3645,7 +3646,7 @@ struct AddExpenseView: View {
                     Image(systemName: selected.contains(member.id) ? "checkmark.square.fill" : "square")
                         .foregroundStyle(Theme.accent)
                     avatar(member, size: 30)
-                    Text(member.id == store.currentUser.id ? "You" : member.name)
+                    Text(LocalizedStringKey(member.id == store.currentUser.id ? "You" : member.name))
                         .font(.subheadline.weight(.medium))
                     Spacer()
                 }
@@ -3664,7 +3665,7 @@ struct AddExpenseView: View {
                     Image(systemName: (noSplitAssignee ?? resolvedPayer) == member.id ? "largecircle.fill.circle" : "circle")
                         .foregroundStyle(Theme.accent)
                     avatar(member, size: 30)
-                    Text(member.id == store.currentUser.id ? "You" : member.name)
+                    Text(LocalizedStringKey(member.id == store.currentUser.id ? "You" : member.name))
                         .font(.subheadline.weight(.medium))
                     Spacer()
                 }
@@ -3678,7 +3679,7 @@ struct AddExpenseView: View {
         ForEach(trip.members) { member in
             HStack(spacing: 10) {
                 avatar(member, size: 30)
-                Text(member.id == store.currentUser.id ? "You" : member.name)
+                Text(LocalizedStringKey(member.id == store.currentUser.id ? "You" : member.name))
                     .font(.subheadline.weight(.medium))
                 Spacer()
                 TextField("0", value: Binding(
@@ -3701,7 +3702,7 @@ struct AddExpenseView: View {
                 let owed = outcome.owed[member.id] ?? 0
                 if owed > 0.005 {
                     HStack {
-                        Text(member.id == store.currentUser.id ? "You" : member.name)
+                        Text(LocalizedStringKey(member.id == store.currentUser.id ? "You" : member.name))
                             .font(.caption).foregroundStyle(.secondary)
                         Spacer()
                         Text(money(owed, trip.currencyCode)).font(.caption.weight(.semibold))
@@ -3772,7 +3773,7 @@ struct AddExpenseView: View {
         }
     }
 
-    private func extraField(_ trip: Trip, title: String, text: Binding<String>) -> some View {
+    private func extraField(_ trip: Trip, title: LocalizedStringKey, text: Binding<String>) -> some View {
         HStack(spacing: 10) {
             Text(title).font(.subheadline.weight(.medium))
             Spacer()
@@ -3805,7 +3806,7 @@ struct AddExpenseView: View {
                     HStack(spacing: 10) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.name).font(.subheadline.weight(.semibold)).lineLimit(1)
-                            Label(item.splitMethod.rawValue, systemImage: item.splitMethod.icon)
+                            Label(LocalizedStringKey(item.splitMethod.rawValue), systemImage: item.splitMethod.icon)
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer(minLength: 6)
@@ -3836,7 +3837,7 @@ struct AddExpenseView: View {
                 let owed = outcome.shares[member.id] ?? 0
                 if owed > 0.005 {
                     HStack {
-                        Text(member.id == store.currentUser.id ? "You" : member.name)
+                        Text(LocalizedStringKey(member.id == store.currentUser.id ? "You" : member.name))
                             .font(.caption).foregroundStyle(.secondary)
                         Spacer()
                         Text(money(owed, trip.currencyCode)).font(.caption.weight(.semibold))
@@ -3846,7 +3847,7 @@ struct AddExpenseView: View {
         }
     }
 
-    private func totalRow(_ label: String, _ value: Double, _ trip: Trip, bold: Bool = false) -> some View {
+    private func totalRow(_ label: LocalizedStringKey, _ value: Double, _ trip: Trip, bold: Bool = false) -> some View {
         HStack {
             Text(label)
                 .font(bold ? .caption.weight(.bold) : .caption)
@@ -4010,7 +4011,7 @@ struct ItemSplitConfigView: View {
                     .ignoresSafeArea()
                 ScrollView {
                     VStack(spacing: 18) {
-                        TripCard(title: item.name, icon: "tag.fill") {
+                        TripCard(title: LocalizedStringKey(item.name), icon: "tag.fill") {
                             HStack {
                                 Text("Item total").font(.subheadline).foregroundStyle(.secondary)
                                 Spacer()
@@ -4046,13 +4047,13 @@ struct ItemSplitConfigView: View {
                             item.soloPayerID = payer
                         }
                     } label: {
-                        Label(option.rawValue, systemImage: option.icon)
+                        Label(LocalizedStringKey(option.rawValue), systemImage: option.icon)
                     }
                 }
             } label: {
                 HStack {
                     Image(systemName: item.splitMethod.icon)
-                    Text(item.splitMethod.rawValue).font(.subheadline.weight(.semibold))
+                    Text(LocalizedStringKey(item.splitMethod.rawValue)).font(.subheadline.weight(.semibold))
                     Spacer()
                     Image(systemName: "chevron.up.chevron.down").font(.caption).foregroundStyle(.secondary)
                 }
@@ -4075,7 +4076,7 @@ struct ItemSplitConfigView: View {
                             Image(systemName: item.participantIDs.contains(member.id) ? "checkmark.square.fill" : "square")
                                 .foregroundStyle(Theme.accent)
                             avatar(member, size: 30)
-                            Text(name(member)).font(.subheadline.weight(.medium))
+                            Text(LocalizedStringKey(name(member))).font(.subheadline.weight(.medium))
                             Spacer()
                         }
                         .contentShape(.rect)
@@ -4089,7 +4090,7 @@ struct ItemSplitConfigView: View {
                             Image(systemName: (item.soloPayerID ?? payer) == member.id ? "largecircle.fill.circle" : "circle")
                                 .foregroundStyle(Theme.accent)
                             avatar(member, size: 30)
-                            Text(name(member)).font(.subheadline.weight(.medium))
+                            Text(LocalizedStringKey(name(member))).font(.subheadline.weight(.medium))
                             Spacer()
                         }
                         .contentShape(.rect)
@@ -4111,7 +4112,7 @@ struct ItemSplitConfigView: View {
                 let owed = outcome.owed[member.id] ?? 0
                 if owed > 0.005 {
                     HStack {
-                        Text(name(member)).font(.caption).foregroundStyle(.secondary)
+                        Text(LocalizedStringKey(name(member))).font(.caption).foregroundStyle(.secondary)
                         Spacer()
                         Text(money(owed, currencyCode)).font(.caption.weight(.semibold))
                     }
@@ -4124,7 +4125,7 @@ struct ItemSplitConfigView: View {
         ForEach(members) { member in
             HStack(spacing: 10) {
                 avatar(member, size: 30)
-                Text(name(member)).font(.subheadline.weight(.medium))
+                Text(LocalizedStringKey(name(member))).font(.subheadline.weight(.medium))
                 Spacer()
                 TextField("0", value: Binding(
                     get: { values.wrappedValue[member.id] ?? 0 },
@@ -4197,11 +4198,11 @@ struct SwipeToDeleteRow<Content: View>: View {
 
 /// A standard Liquid Glass card with a labeled header, used across the trip screens.
 struct TripCard<Content: View>: View {
-    let title: String
+    let title: LocalizedStringKey
     let icon: String
     @ViewBuilder let content: Content
 
-    init(title: String, icon: String, @ViewBuilder content: () -> Content) {
+    init(title: LocalizedStringKey, icon: String, @ViewBuilder content: () -> Content) {
         self.title = title
         self.icon = icon
         self.content = content()
