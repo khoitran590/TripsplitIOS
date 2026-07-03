@@ -3,6 +3,7 @@ import SwiftUI
 /// Shows the TripSplit splash screen on launch, then transitions into the app.
 struct RootView: View {
     @State private var isActive = false
+    @State private var localization = LocalizationManager.shared
     @AppStorage("appearancePreference") private var appearance: AppearancePreference = .system
 
     var body: some View {
@@ -15,6 +16,11 @@ struct RootView: View {
                     .transition(.opacity)
             }
         }
+        // In-app language selection: expose the manager and drive SwiftUI's locale so
+        // every `Text` re-renders in the chosen language without an app restart. Reading
+        // `localization.locale` here re-runs this body when the user picks a new language.
+        .environment(localization)
+        .environment(\.locale, localization.locale)
         .preferredColorScheme(appearance.colorScheme)
         .task {
             // Brief hold so the logo animation reads, then hand off to the app. Kept short —

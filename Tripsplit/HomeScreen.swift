@@ -543,7 +543,8 @@ struct BalanceCard: View {
                 .foregroundStyle(tint)
                 .frame(width: 24)
             VStack(alignment: .leading, spacing: 1) {
-                Text(label)
+                // Wrap so the literal label localizes; `value` stays verbatim (money/counts).
+                Text(LocalizedStringKey(label))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Text(value)
@@ -565,7 +566,7 @@ struct BalanceCard: View {
                 .frame(width: 30, height: 30)
                 .background(tint.opacity(0.15), in: .circle)
             VStack(alignment: .leading, spacing: 1) {
-                Text(label)
+                Text(LocalizedStringKey(label))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Text(value)
@@ -606,7 +607,7 @@ struct BudgetRing: View {
                     .foregroundStyle(emphasizeCenter ? color : .primary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
-                Text(centerLabel)
+                Text(LocalizedStringKey(centerLabel))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -762,7 +763,7 @@ struct TripRow: View {
 
     private func statBox(label: String, value: String, valueColor: Color, background: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(label)
+            Text(LocalizedStringKey(label))
                 .font(.system(size: 10, weight: .semibold)).tracking(0.5)
                 .foregroundStyle(.secondary)
             Text(value)
@@ -919,7 +920,7 @@ struct CurrencyConverterCard: View {
 
 /// A compact pill action: a small gradient icon and a single label, on liquid glass.
 struct QuickActionButton: View {
-    let title: String
+    let title: LocalizedStringKey
     let icon: String
     let colors: [Color]
     let action: () -> Void

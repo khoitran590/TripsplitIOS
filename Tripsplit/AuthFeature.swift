@@ -531,8 +531,8 @@ struct AuthView: View {
                                    startPoint: .topLeading, endPoint: .bottomTrailing),
                     in: .circle
                 )
-            Text(mode.title).font(.title2.bold())
-            Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
+            Text(LocalizedStringKey(mode.title)).font(.title2.bold())
+            Text(LocalizedStringKey(subtitle)).font(.subheadline).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
@@ -565,7 +565,7 @@ struct AuthView: View {
         .glassEffect(.regular, in: .rect(cornerRadius: 24))
     }
 
-    private func field(icon: String, placeholder: String, text: Binding<String>, isSecure: Bool) -> some View {
+    private func field(icon: String, placeholder: LocalizedStringKey, text: Binding<String>, isSecure: Bool) -> some View {
         HStack(spacing: 12) {
             Image(systemName: icon)
                 .foregroundStyle(Color(hex: 0x6366F1))
@@ -588,7 +588,7 @@ struct AuthView: View {
         Button(action: submit) {
             HStack(spacing: 8) {
                 if isWorking { ProgressView().tint(.white) }
-                Text(isWorking ? "Please wait…" : mode.action)
+                Text(LocalizedStringKey(isWorking ? "Please wait…" : mode.action))
                     .font(.headline)
                     .foregroundStyle(.white)
             }

@@ -1165,9 +1165,11 @@ struct DestinationDetailView: View {
 struct SettingsScreen: View {
     @Environment(AuthStore.self) private var auth
     @Environment(TripStore.self) private var store
+    @Environment(LocalizationManager.self) private var localization
 
     @State private var showPersonalInfo = false
     @State private var showChangePassword = false
+    @State private var showLanguagePicker = false
 
     var body: some View {
         Group {
@@ -1230,7 +1232,9 @@ struct SettingsScreen: View {
 
                 SettingsSection("Preferences") {
                     SettingsRow(icon: "bell.fill", tint: .indigo, title: "Notifications")
-                    SettingsRow(icon: "globe", tint: .orange, title: "Language", value: "English")
+                    SettingsRow(icon: "globe", tint: .orange, title: "Language", value: localization.language.endonym) {
+                        showLanguagePicker = true
+                    }
                 }
 
                 Button(role: .destructive) {
@@ -1254,6 +1258,9 @@ struct SettingsScreen: View {
         }
         .sheet(isPresented: $showChangePassword) {
             ChangePasswordView()
+        }
+        .sheet(isPresented: $showLanguagePicker) {
+            LanguagePickerView()
         }
     }
 }
@@ -1434,10 +1441,10 @@ struct ProfileCard: View {
 
 /// A titled group of settings rows rendered inside a Liquid Glass container.
 struct SettingsSection<Content: View>: View {
-    let title: String
+    let title: LocalizedStringKey
     @ViewBuilder let content: Content
 
-    init(_ title: String, @ViewBuilder content: () -> Content) {
+    init(_ title: LocalizedStringKey, @ViewBuilder content: () -> Content) {
         self.title = title
         self.content = content()
     }
@@ -1462,7 +1469,9 @@ struct SettingsSection<Content: View>: View {
 struct SettingsRow: View {
     let icon: String
     let tint: Color
-    let title: String
+    // LocalizedStringKey (not String): `Text(someString)` renders verbatim and skips
+    // localization, so row titles must come through as keys to pick up translations.
+    let title: LocalizedStringKey
     var value: String? = nil
     var action: (() -> Void)? = nil
 
@@ -1535,7 +1544,8 @@ struct FloatingDock: View {
                             Image(systemName: tab.systemImage)
                                 .font(.system(size: 19, weight: .semibold))
                             if isActive {
-                                Text(tab.rawValue)
+                                // rawValue is the English key; wrap so it localizes.
+                                Text(LocalizedStringKey(tab.rawValue))
                                     .font(.subheadline.weight(.semibold))
                                     .fixedSize()
                                     .transition(.opacity.combined(with: .scale))
