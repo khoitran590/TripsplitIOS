@@ -512,6 +512,10 @@ final class TripStore {
     enum SyncState: Equatable { case idle, syncing, failed }
     var syncState: SyncState = .idle
 
+    /// A user-facing reason for the most recent sync failure (e.g. an expired session),
+    /// shown in the failure banner. Nil for generic server/HTTP failures.
+    var syncErrorMessage: String?
+
     /// Number of in-flight cloud saves. The "Saving to cloud…" banner is only shown when a
     /// save is still running after a short grace period — flipping `syncState` synchronously
     /// on every tap inserted/removed the banner (a full home-screen relayout) twice per
@@ -529,13 +533,31 @@ final class TripStore {
     }
 
     /// Marks a cloud save as finished, updating the visible state once nothing is in flight.
-    private func endSyncActivity(failed: Bool) {
+    private func endSyncActivity(failed: Bool, message: String? = nil) {
         activeSaveCount = max(0, activeSaveCount - 1)
         if failed {
             syncState = .failed
+            syncErrorMessage = message
         } else if activeSaveCount == 0 {
             syncState = .idle
+            syncErrorMessage = nil
         }
+    }
+
+    /// Builds the failure-banner subtitle. Client-side problems (session/network, which
+    /// carry no HTTP status) already have a meaningful message. For a server rejection
+    /// (401/403 — where an unauthenticated write surfaces), it probes whether the session
+    /// is actually accepted, so we can tell "your session isn't reaching the server"
+    /// (sign in again) from a transient/genuine-permission error.
+    private func syncFailureMessage(_ error: Error) async -> String? {
+        guard let authError = error as? AuthError else { return nil }
+        if authError.statusCode == nil { return authError.message }
+        guard authError.statusCode == 401 || authError.statusCode == 403 else { return nil }
+        guard let token = try? await authorizedAccessToken(),
+              await AuthService.shared.isSessionAccepted(accessToken: token) else {
+            return "Your session isn't reaching the server. Please sign out and sign in again."
+        }
+        return nil
     }
 
     /// IDs of trips deleted locally whose cloud delete hasn't succeeded yet (e.g. the
@@ -888,7 +910,7 @@ final class TripStore {
         beginSyncActivity()
         Task {
             do {
-                guard let accessToken = try await authorizedAccessToken() else {
+                guard let accessToken = try await authorizedAccessToken(requireServerAccepted: true) else {
                     self.endSyncActivity(failed: false)
                     return
                 }
@@ -943,18 +965,39 @@ final class TripStore {
         currentUser.avatarURL = stored?.avatarURL
     }
 
-    /// Extracts the `sub` (subject = user id) claim from a JWT access token.
-    nonisolated fileprivate static func userID(fromJWT token: String) -> UUID? {
+    /// Decodes a JWT's payload (its middle segment) into a claims dictionary.
+    nonisolated fileprivate static func jwtPayload(_ token: String) -> [String: Any]? {
         let parts = token.split(separator: ".")
         guard parts.count == 3 else { return nil }
         var payload = String(parts[1])
             .replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")
         while payload.count % 4 != 0 { payload += "=" }
-        guard let data = Data(base64Encoded: payload),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let sub = json["sub"] as? String else { return nil }
+        guard let data = Data(base64Encoded: payload) else { return nil }
+        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    }
+
+    /// Extracts the `sub` (subject = user id) claim from a JWT access token.
+    nonisolated fileprivate static func userID(fromJWT token: String) -> UUID? {
+        guard let sub = jwtPayload(token)?["sub"] as? String else { return nil }
         return UUID(uuidString: sub)
+    }
+
+    /// The token's expiry (`exp`), if present.
+    nonisolated fileprivate static func expiration(fromJWT token: String) -> Date? {
+        guard let exp = jwtPayload(token)?["exp"] as? Double else { return nil }
+        return Date(timeIntervalSince1970: exp)
+    }
+
+    /// Whether `token` is a well-formed Supabase *user* JWT (carries a `sub`) that isn't
+    /// already expired or about to expire. A write sent with a token that fails this check
+    /// would reach Postgres as the anonymous role (`auth.uid()` null → RLS 403), so callers
+    /// refresh instead of sending it.
+    nonisolated fileprivate static func isUsableUserToken(_ token: String, now: Date = Date()) -> Bool {
+        guard userID(fromJWT: token) != nil else { return false }
+        guard jwtPayload(token)?["role"] as? String == "authenticated" else { return false }
+        guard let exp = expiration(fromJWT: token) else { return true }
+        return exp.timeIntervalSince(now) > 30
     }
 
     /// Loads the signed-in user's trips from Supabase, replacing the in-memory list.
@@ -1008,16 +1051,18 @@ final class TripStore {
         beginSyncActivity()
         Task {
             do {
-                guard let accessToken = try await authorizedAccessToken() else {
+                guard let accessToken = try await authorizedAccessToken(requireServerAccepted: true) else {
                     self.endSyncActivity(failed: false)
                     return
                 }
                 try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
-                    try await TripsRepository.shared.upsert(trip, accessToken: token)
+                    let cloudTrip = self.tripForCloudSave(trip, accessToken: token)
+                    try await TripsRepository.shared.upsert(cloudTrip, accessToken: token)
                 }
                 self.endSyncActivity(failed: false)
             } catch {
-                self.endSyncActivity(failed: true)
+                let message = await self.syncFailureMessage(error)
+                self.endSyncActivity(failed: true, message: message)
             }
         }
     }
@@ -1030,19 +1075,21 @@ final class TripStore {
         activeSaveCount += 1
         Task {
             do {
-                guard let accessToken = try await authorizedAccessToken() else {
+                guard let accessToken = try await authorizedAccessToken(requireServerAccepted: true) else {
                     self.endSyncActivity(failed: false)
                     return
                 }
                 let deletionsCleared = await flushPendingDeletions(accessToken: accessToken)
                 for trip in trips {
                     try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
-                        try await TripsRepository.shared.upsert(trip, accessToken: token)
+                        let cloudTrip = self.tripForCloudSave(trip, accessToken: token)
+                        try await TripsRepository.shared.upsert(cloudTrip, accessToken: token)
                     }
                 }
                 self.endSyncActivity(failed: !deletionsCleared)
             } catch {
-                self.endSyncActivity(failed: true)
+                let message = await self.syncFailureMessage(error)
+                self.endSyncActivity(failed: true, message: message)
             }
         }
     }
@@ -1091,12 +1138,46 @@ final class TripStore {
         }
     }
 
-    private func authorizedAccessToken() async throws -> String? {
-        if let accessToken { return accessToken }
-        guard let refreshed = try await refreshAccessToken?() else { return nil }
+    private func authorizedAccessToken(requireServerAccepted: Bool = false) async throws -> String? {
+        // Reuse the stored token only while it's a real, non-expired user JWT. Sending an
+        // expired/malformed one lets the request reach Postgres as the anonymous role,
+        // where RLS rejects the write with a 403 (auth.uid() is null) — the failure mode
+        // that produced silent "couldn't save to cloud" errors on device.
+        if let accessToken, Self.isUsableUserToken(accessToken) {
+            if !requireServerAccepted {
+                return accessToken
+            }
+            if await AuthService.shared.isSessionAccepted(accessToken: accessToken) {
+                return accessToken
+            }
+        }
+        // No usable token: try to mint a fresh one from the refresh token.
+        let hadToken = accessToken != nil
+        let refreshed: String?
+        do {
+            refreshed = try await refreshAccessToken?()
+        } catch {
+            // Couldn't refresh. With no prior token this is just a signed-out, local-only
+            // session (stay silent); with one, the session is genuinely broken (surface it).
+            if hadToken {
+                throw AuthError(message: "Your session expired. Please sign in again to sync.")
+            }
+            return nil
+        }
+        // Nil means there's no session to authenticate with — callers treat that as local-only.
+        guard let refreshed else { return nil }
         await MainActor.run {
             self.accessToken = refreshed
             self.bindIdentity(accessToken: refreshed)
+        }
+        // A refresh that still doesn't yield a usable user token means the session is broken.
+        guard Self.isUsableUserToken(refreshed) else {
+            throw AuthError(message: "Your session expired. Please sign in again to sync.")
+        }
+        if requireServerAccepted {
+            guard await AuthService.shared.isSessionAccepted(accessToken: refreshed) else {
+                throw AuthError(message: "Your session isn't reaching the server. Please sign out and sign in again.")
+            }
         }
         return refreshed
     }
@@ -1107,14 +1188,35 @@ final class TripStore {
     ) async throws -> T {
         do {
             return try await operation(initialToken)
-        } catch let error as AuthError where error.statusCode == 401 {
-            guard let refreshed = try await refreshAccessToken?() else { throw error }
+        } catch let error as AuthError where error.statusCode == 401 || error.statusCode == 403 {
+            // 401 = the token was expired/rejected. A 403 with our RLS setup can mean the
+            // write reached Postgres unauthenticated (auth.uid() null). Both are worth one
+            // retry with a freshly minted token — but only when the refresh actually yields
+            // a different one, so a genuine permission 403 (e.g. editing a trip you're not a
+            // member of) isn't retried in vain.
+            guard let refreshed = try await refreshAccessToken?(), refreshed != initialToken else { throw error }
             await MainActor.run {
                 self.accessToken = refreshed
                 self.bindIdentity(accessToken: refreshed)
             }
             return try await operation(refreshed)
         }
+    }
+
+    /// Ensures a local-only trip created under a pre-auth random UUID can be inserted under
+    /// the signed-in account. Existing shared trips that already include the authenticated
+    /// user keep their original creator/owner id.
+    private func tripForCloudSave(_ trip: Trip, accessToken: String) -> Trip {
+        guard let userID = Self.userID(fromJWT: accessToken),
+              trip.creatorID != userID,
+              !trip.members.contains(where: { $0.id == userID }) else {
+            return trip
+        }
+        let reanchored = trip.reanchoringCreator(to: userID)
+        if let index = trips.firstIndex(where: { $0.id == trip.id }) {
+            trips[index] = reanchored
+        }
+        return reanchored
     }
 
     // MARK: Settlements
@@ -1251,18 +1353,18 @@ actor TripsRepository {
 
     /// Inserts or updates a trip (keyed on its id) for any account that can access it.
     func upsert(_ trip: Trip, accessToken: String) async throws {
-        // Wrap the encoded trip as the `data` jsonb value alongside its primary key.
         let tripJSON = try JSONSerialization.jsonObject(with: encoder.encode(trip))
         let body = try JSONSerialization.data(withJSONObject: [
-            "id": trip.id.uuidString,
-            "data": tripJSON,
+            "p_id": trip.id.uuidString,
+            "p_user_id": trip.creatorID.uuidString,
+            "p_data": tripJSON,
         ])
         _ = try await send(
             "POST",
-            "/rest/v1/trips?on_conflict=id",
+            "/rest/v1/rpc/upsert_trip",
             accessToken: accessToken,
             body: body,
-            extraHeaders: ["Prefer": "resolution=merge-duplicates,return=minimal"]
+            extraHeaders: ["Prefer": "return=minimal"]
         )
         invalidateCache(accessToken: accessToken)
     }

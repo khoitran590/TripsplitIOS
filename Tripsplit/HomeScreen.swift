@@ -32,7 +32,7 @@ struct HomeScreen: View {
                     recentTransactions
                 }
                 .padding(.horizontal)
-                .padding(.bottom, 90)
+                .padding(.bottom, 110)
                 // Animate the sync banner in/out instead of snapping the whole layout.
                 .animation(.snappy, value: store.syncState)
             }
@@ -209,7 +209,8 @@ struct HomeScreen: View {
                 Image(systemName: "exclamationmark.icloud.fill").foregroundStyle(.white)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Couldn't save to cloud").font(.caption.weight(.bold)).foregroundStyle(.white)
-                    Text("Changes are saved on this device only.").font(.caption2).foregroundStyle(.white.opacity(0.85))
+                    Text(store.syncErrorMessage ?? "Changes are saved on this device only.")
+                        .font(.caption2).foregroundStyle(.white.opacity(0.85))
                 }
                 Spacer()
                 Button { store.retrySync() } label: {
@@ -468,68 +469,150 @@ struct BalanceCard: View {
     private var budgetFace: some View {
         // One pass over the trips for all four figures (see `TripStore.homeTotals`).
         let totals = store.homeTotals
-        return VStack(alignment: .leading, spacing: 18) {
-            HStack {
-                Label("Budget Available", systemImage: "wallet.bifold.fill")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.white.opacity(0.95))
+        let hasBudget = totals.budget > 0
+        let fraction = hasBudget ? totals.spent / totals.budget : 0
+        let isOver = hasBudget && totals.spent > totals.budget
+        let isNear = hasBudget && !isOver && fraction >= 0.8
+        // Ring + accents mirror the trip cards: indigo healthy, amber near, red over.
+        let ringColor = isOver ? Color(hex: 0xDC2626)
+            : isNear ? Color(hex: 0xD97706)
+            : Color(hex: 0x6366F1)
+        let centerValue = hasBudget
+            ? (isOver ? money(totals.spent - totals.budget, "USD") : money(totals.available, "USD"))
+            : money(totals.spent, "USD")
+        let centerLabel = !hasBudget ? "Spent" : (isOver ? "Over budget" : "Remaining")
+
+        return VStack(alignment: .leading, spacing: 20) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Budget")
+                        .font(.title3.weight(.bold))
+                    Text("Remaining = Budget − Spent")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
                 Button(action: flip) {
                     Image(systemName: "arrow.left.arrow.right")
                         .font(.subheadline.weight(.bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 34, height: 34)
+                        .foregroundStyle(.primary)
+                        .frame(width: 36, height: 36)
                 }
                 .buttonStyle(.plain)
                 .glassEffect(.regular.interactive(), in: .circle)
                 .accessibilityLabel("Currency converter")
             }
 
-            Text(money(totals.available, "USD"))
-                .font(.system(size: 36, weight: .bold, design: .rounded))
-                .foregroundStyle(.white)
+            HStack(spacing: 20) {
+                BudgetRing(
+                    fraction: fraction,
+                    centerValue: centerValue,
+                    centerLabel: centerLabel,
+                    color: ringColor,
+                    emphasizeCenter: isOver
+                )
 
-            HStack {
-                Label("Total spent", systemImage: "wallet.bifold")
-                    .font(.footnote.weight(.medium))
-                Text(money(totals.spent, "USD")).font(.footnote.weight(.semibold))
-                Spacer()
-                if !store.myTrips.isEmpty {
-                    Text("Across \(store.myTrips.count) trip\(store.myTrips.count == 1 ? "" : "s")")
-                        .font(.footnote)
+                VStack(spacing: 16) {
+                    statRow(icon: "flag.fill", tint: Color(hex: 0x6366F1),
+                            label: "Budget", value: money(totals.budget, "USD"))
+                    statRow(icon: "creditcard.fill", tint: Color(hex: 0x0EA5E9),
+                            label: "Spent", value: money(totals.spent, "USD"))
+                    statRow(icon: "suitcase.fill", tint: Color(hex: 0x8B5CF6),
+                            label: "Trips", value: "\(store.myTrips.count)")
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .foregroundStyle(.white.opacity(0.85))
 
             HStack(spacing: 12) {
-                infoColumn(icon: "arrow.up.right", label: "You owe", value: money(totals.youOwe, "USD"))
-                infoColumn(icon: "arrow.down.left", label: "People owe", value: money(totals.owedToYou, "USD"))
+                oweTile(icon: "arrow.up.right", label: "You owe",
+                        value: money(totals.youOwe, "USD"), tint: Color(hex: 0xDC2626))
+                oweTile(icon: "arrow.down.left", label: "People owe",
+                        value: money(totals.owedToYou, "USD"), tint: Color(hex: 0x16A34A))
             }
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            LinearGradient(
-                colors: [Color(hex: 0xB8E6F5), Color(hex: 0x5B9BD5), Color(hex: 0x2E4A8B)],
-                startPoint: .topLeading, endPoint: .bottomTrailing
-            )
-        )
-        .clipShape(.rect(cornerRadius: 34))
+        .glassEffect(.regular, in: .rect(cornerRadius: 34))
     }
 
-    private func infoColumn(icon: String, label: String, value: String) -> some View {
+    /// A labeled figure in the ring's side column (MyFitnessPal's Base Goal / Food style).
+    private func statRow(icon: String, tint: Color, label: String, value: String) -> some View {
         HStack(spacing: 10) {
             Image(systemName: icon)
                 .font(.system(size: 15, weight: .semibold))
-                .frame(width: 32, height: 32)
-                .background(.white.opacity(0.15), in: .circle)
+                .foregroundStyle(tint)
+                .frame(width: 24)
             VStack(alignment: .leading, spacing: 1) {
-                Text(label).font(.caption)
-                Text(value).font(.subheadline.weight(.semibold))
+                Text(label)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(value)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
             }
+            Spacer(minLength: 0)
         }
-        .foregroundStyle(.white)
+    }
+
+    /// A simple, Cash App–style tile for the owe / owed figures under the ring.
+    private func oweTile(icon: String, label: String, value: String, tint: Color) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(tint)
+                .frame(width: 30, height: 30)
+                .background(tint.opacity(0.15), in: .circle)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(label)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(value)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(tint.opacity(0.08), in: .rect(cornerRadius: 16))
+    }
+}
+
+/// A MyFitnessPal-style progress ring: a faint full track, a colored arc for the
+/// fraction of the budget used, and the headline figure centered inside.
+struct BudgetRing: View {
+    let fraction: Double
+    let centerValue: String
+    let centerLabel: String
+    let color: Color
+    var emphasizeCenter: Bool = false
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.primary.opacity(0.08), lineWidth: 14)
+            Circle()
+                .trim(from: 0, to: min(1, max(0, fraction)))
+                .stroke(color, style: StrokeStyle(lineWidth: 14, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+                .animation(.easeInOut(duration: 0.4), value: fraction)
+            VStack(spacing: 2) {
+                Text(centerValue)
+                    .font(.system(size: 24, weight: .bold, design: .rounded))
+                    .foregroundStyle(emphasizeCenter ? color : .primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                Text(centerLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10)
+        }
+        .frame(width: 150, height: 150)
     }
 }
 

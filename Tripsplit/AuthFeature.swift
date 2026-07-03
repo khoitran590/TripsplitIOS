@@ -52,7 +52,8 @@ enum BackendSecurity {
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        return URLSession(configuration: configuration)
+        // A delegate that re-attaches auth headers across redirects — see the type below.
+        return URLSession(configuration: configuration, delegate: RedirectAuthPreserver(), delegateQueue: nil)
     }()
 
     nonisolated static func normalizedEmail(_ email: String) -> String {
@@ -83,6 +84,32 @@ enum BackendSecurity {
         } else {
             logger.error("\(message, privacy: .public)")
         }
+    }
+}
+
+/// Re-attaches `Authorization`/`apikey` when `URLSession` follows an HTTP redirect.
+/// iOS strips these sensitive headers on redirects (always cross-origin, sometimes even
+/// same-origin), which would make a redirected Supabase write arrive unauthenticated —
+/// Postgres then runs it as the anon role and RLS rejects it with "new row violates
+/// row-level security policy" (the observed 403 on trip saves where `auth_user` is null
+/// even though reads authenticate fine). The redirect is also logged so we can confirm
+/// whether one is actually happening.
+final class RedirectAuthPreserver: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        var updated = request
+        if let original = task.originalRequest {
+            for header in ["Authorization", "apikey"] where updated.value(forHTTPHeaderField: header) == nil {
+                updated.setValue(original.value(forHTTPHeaderField: header), forHTTPHeaderField: header)
+            }
+        }
+        BackendSecurity.log("Followed HTTP redirect (\(response.statusCode)) to \(response.value(forHTTPHeaderField: "Location") ?? "?"); re-attached auth headers")
+        completionHandler(updated)
     }
 }
 
@@ -167,6 +194,23 @@ actor AuthService {
     func resetPassword(email: String) async throws {
         let email = try validateEmail(email)
         _ = try await send("POST", "/auth/v1/recover", body: ["email": email])
+    }
+
+    /// Whether `accessToken` is currently accepted as a signed-in user by Supabase Auth.
+    /// Used to diagnose sync failures: a false result means the session isn't reaching the
+    /// backend as an authenticated user (expired, or the `Authorization` header stripped in
+    /// transit), which is the real cause behind an RLS "row violates policy" (anon) rejection.
+    func isSessionAccepted(accessToken: String) async -> Bool {
+        guard SupabaseConfig.isConfigured, let url = URL(string: SupabaseConfig.url + "/auth/v1/user") else {
+            return false
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue(SupabaseConfig.anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        guard let (_, response) = try? await session.data(for: request),
+              let http = response as? HTTPURLResponse else { return false }
+        return http.statusCode == 200
     }
 
     func refreshSession(refreshToken: String, email: String?) async throws -> AuthSession {
@@ -314,6 +358,12 @@ final class AuthStore {
 
     var session: AuthSession?
 
+    /// The in-flight token refresh, if any. Concurrent callers (e.g. the several saves a
+    /// single trip creation fires) share one refresh instead of each hitting Supabase —
+    /// its refresh-token rotation invalidates the old token, so parallel refreshes would
+    /// collide and fail, leaving some writes unauthenticated.
+    @ObservationIgnored private var refreshTask: Task<AuthSession, Error>?
+
     var isAuthenticated: Bool { session != nil }
     var email: String? { session?.email }
 
@@ -349,15 +399,24 @@ final class AuthStore {
     }
 
     func refreshSession() async throws -> AuthSession {
+        // Coalesce concurrent refreshes onto a single request (see `refreshTask`).
+        if let refreshTask {
+            return try await refreshTask.value
+        }
         guard let session else {
             throw AuthError(message: "You need to be signed in.")
         }
-        let refreshed = try await AuthService.shared.refreshSession(
-            refreshToken: session.refreshToken,
-            email: session.email
-        )
-        persist(refreshed)
-        return refreshed
+        let task = Task { () throws -> AuthSession in
+            defer { self.refreshTask = nil }
+            let refreshed = try await AuthService.shared.refreshSession(
+                refreshToken: session.refreshToken,
+                email: session.email
+            )
+            self.persist(refreshed)
+            return refreshed
+        }
+        refreshTask = task
+        return try await task.value
     }
 
     /// Changes the signed-in user's password. The current password is verified by

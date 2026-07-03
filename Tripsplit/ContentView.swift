@@ -35,6 +35,7 @@ struct ContentView: View {
     @State private var selectedTab: DockTab = .home
     @State private var store = TripStore()
     @State private var auth = AuthStore()
+    @State private var mapModel = ExploreMapModel()
     /// Tabs the user has opened at least once. Screens are created lazily on first visit
     /// and then kept alive (hidden, not destroyed) so returning to a tab is instant —
     /// the old `switch` tore down and rebuilt the whole screen (map region, scroll
@@ -58,11 +59,23 @@ struct ContentView: View {
         }
         .safeAreaInset(edge: .bottom) {
             FloatingDock(selectedTab: $selectedTab)
+                // Span the full width and make the whole bottom strip a single hit
+                // region, so a tap landing beside or just around the dock is absorbed
+                // here instead of falling through onto a card behind it.
+                .frame(maxWidth: .infinity)
+                .contentShape(.rect)
                 .padding(.bottom, 8)
         }
         .onChange(of: selectedTab) { _, tab in visitedTabs.insert(tab) }
+        // Tapping a place inside a curated Explore trip asks the Map tab to focus it;
+        // remember the current tab first so the map's Back button can return here.
+        .onChange(of: mapModel.navigateRequest) {
+            mapModel.originTab = selectedTab
+            selectedTab = .map
+        }
         .environment(store)
         .environment(auth)
+        .environment(mapModel)
         .task(id: auth.session?.accessToken) {
             // Keep the trip store's token + identity in sync with the auth session and
             // reload the user's trips from Supabase whenever they sign in (or back out).
@@ -84,7 +97,7 @@ struct ContentView: View {
     private func screen(for tab: DockTab) -> some View {
         switch tab {
         case .home: HomeScreen()
-        case .map: MapScreen()
+        case .map: MapScreen(selectedTab: $selectedTab)
         case .rec: RecScreen()
         case .settings: SettingsScreen()
         }
@@ -93,8 +106,109 @@ struct ContentView: View {
 
 // MARK: - Screens
 
-/// The map screen.
+/// A place the Map tab should focus on, chosen from a curated trip in the Explore
+/// tab. Carries both the curated context (the trip's own blurb + cost) and the
+/// real-world POI details resolved from MapKit once the search completes.
+struct MapFocus {
+    let item: TravelPlanItem
+    let destination: Destination
+    var coordinate: CLLocationCoordinate2D
+    /// The resolved point of interest, populated after the async search; `nil` while
+    /// the search is in flight or if nothing matched (the city center is used instead).
+    var mapItem: MKMapItem?
+
+    var title: String { mapItem?.name ?? item.name }
+
+    /// A human-readable POI category (e.g. "Restaurant", "National Park"), derived
+    /// from MapKit's raw category identifier.
+    var categoryText: String? {
+        guard let raw = mapItem?.pointOfInterestCategory?.rawValue else { return nil }
+        let stripped = raw.replacingOccurrences(of: "MKPOICategory", with: "")
+        guard !stripped.isEmpty else { return nil }
+        var spaced = ""
+        for character in stripped {
+            if character.isUppercase && !spaced.isEmpty { spaced.append(" ") }
+            spaced.append(character)
+        }
+        return spaced
+    }
+
+    /// The formatted street address MapKit resolved, if any.
+    var addressText: String? {
+        mapItem?.address?.fullAddress
+    }
+
+    /// An `MKMapItem` suitable for "Open in Maps" — the resolved POI when available,
+    /// otherwise a bare item at the fallback coordinate.
+    var routableMapItem: MKMapItem {
+        if let mapItem { return mapItem }
+        let item = MKMapItem(
+            location: CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude),
+            address: nil
+        )
+        item.name = title
+        return item
+    }
+}
+
+/// Shared bridge between the Explore tab's curated-trip detail pages and the Map tab:
+/// tapping a recommended place or restaurant asks the Map tab to focus and detail it.
+@MainActor @Observable
+final class ExploreMapModel {
+    /// The place currently focused on the Map tab, if any.
+    private(set) var focus: MapFocus?
+    /// Bumped once per "show on map" request so the Map tab recenters even when the
+    /// same place is tapped twice, and so `ContentView` can switch to the Map tab.
+    private(set) var navigateRequest = 0
+    /// The tab the user was on when they jumped to the map, so the map's Back button
+    /// can return them exactly where they were.
+    var originTab: DockTab = .rec
+
+    /// Focus the Map tab on `item` within `destination`. Shows the city center
+    /// immediately, then refines to the exact place + details via an on-device search.
+    func showOnMap(_ item: TravelPlanItem, in destination: Destination) {
+        focus = MapFocus(
+            item: item,
+            destination: destination,
+            coordinate: destination.coordinate,
+            mapItem: nil
+        )
+        navigateRequest += 1
+        let token = navigateRequest
+        Task { await refine(token: token) }
+    }
+
+    /// Resolve the precise coordinate and place details using MapKit local search,
+    /// biased to the destination city. Keeps the city-center fallback if nothing
+    /// matches, and ignores its result if a newer request has replaced the focus.
+    private func refine(token: Int) async {
+        guard let focus else { return }
+        let request = MKLocalSearch.Request()
+        request.naturalLanguageQuery = "\(focus.item.name), \(focus.destination.city), \(focus.destination.country)"
+        request.region = MKCoordinateRegion(
+            center: focus.destination.coordinate,
+            latitudinalMeters: 40_000,
+            longitudinalMeters: 40_000
+        )
+        guard let response = try? await MKLocalSearch(request: request).start(),
+              let match = response.mapItems.first else { return }
+        guard token == navigateRequest else { return }
+        self.focus?.coordinate = match.location.coordinate
+        self.focus?.mapItem = match
+    }
+
+    /// Remove the focus, returning the Map tab to its default state.
+    func clearFocus() {
+        focus = nil
+    }
+}
+
+/// The map screen. Focuses on whatever place the user tapped inside a curated
+/// Explore trip — with an Apple Maps–style detail card — otherwise a default region.
 struct MapScreen: View {
+    @Environment(ExploreMapModel.self) private var mapModel
+    @Binding var selectedTab: DockTab
+
     @State private var position: MapCameraPosition = .region(
         MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194),
@@ -102,68 +216,230 @@ struct MapScreen: View {
         )
     )
 
+    /// A string that changes whenever the focus coordinate does, so `onChange` can
+    /// recenter once the async POI search refines the city-center fallback.
+    private var coordinateKey: String? {
+        guard let c = mapModel.focus?.coordinate else { return nil }
+        return "\(c.latitude),\(c.longitude)"
+    }
+
     var body: some View {
         NavigationStack {
-            Map(position: $position)
-                .ignoresSafeArea(edges: .bottom)
-                .navigationTitle("Map")
-                .navigationBarTitleDisplayMode(.inline)
+            Map(position: $position) {
+                if let focus = mapModel.focus {
+                    Marker(focus.title, coordinate: focus.coordinate)
+                        .tint(Color.accentColor)
+                }
+            }
+            .ignoresSafeArea(edges: .bottom)
+            .navigationTitle(mapModel.focus?.destination.city ?? "Map")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                if mapModel.focus != nil {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button {
+                            selectedTab = mapModel.originTab
+                        } label: {
+                            Label("Back", systemImage: "chevron.left")
+                        }
+                    }
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if let focus = mapModel.focus {
+                    LocationDetailCard(
+                        focus: focus,
+                        onOpenInMaps: { focus.routableMapItem.openInMaps() },
+                        onClose: {
+                            withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+                                mapModel.clearFocus()
+                            }
+                        }
+                    )
+                    .padding()
+                    .padding(.bottom, 80) // Clearance for the floating dock.
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .onAppear(perform: recenter)
+            .onChange(of: mapModel.navigateRequest) { recenter() }
+            .onChange(of: coordinateKey) { recenter() }
+        }
+    }
+
+    /// Move the camera to the current focus, zoomed to a neighborhood-level span.
+    private func recenter() {
+        guard let focus = mapModel.focus else { return }
+        withAnimation(.easeInOut) {
+            position = .region(
+                MKCoordinateRegion(
+                    center: focus.coordinate,
+                    span: MKCoordinateSpan(latitudeDelta: 0.03, longitudeDelta: 0.03)
+                )
+            )
         }
     }
 }
 
-/// A travel-style "Explore" feed of recommended destinations rendered with Liquid Glass.
+/// An Apple Maps–style place card shown over the map: the resolved place name,
+/// category, address, and phone, plus the curated trip's own note and a shortcut
+/// to open turn-by-turn directions in Apple Maps.
+struct LocationDetailCard: View {
+    let focus: MapFocus
+    let onOpenInMaps: () -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(focus.title)
+                        .font(.title3.bold())
+                        .foregroundStyle(.primary)
+                    HStack(spacing: 6) {
+                        if let category = focus.categoryText {
+                            Text(category)
+                        }
+                        Text("· \(focus.destination.city), \(focus.destination.country)")
+                    }
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                Button(action: onClose) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                        .symbolRenderingMode(.hierarchical)
+                }
+                .buttonStyle(.plain)
+            }
+
+            // Curated context from the trip itself.
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text(focus.item.cost)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(.secondary.opacity(0.15), in: .capsule)
+                    Text("From \(focus.destination.title)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Text(focus.item.detail)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let address = focus.addressText {
+                detailRow(icon: "mappin.and.ellipse", text: address)
+            }
+            if let phone = focus.mapItem?.phoneNumber {
+                detailRow(icon: "phone.fill", text: phone)
+            }
+
+            Button(action: onOpenInMaps) {
+                Label("Directions", systemImage: "arrow.triangle.turn.up.right.diamond.fill")
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            }
+            .buttonStyle(.plain)
+            .glassEffect(.regular.tint(.accentColor).interactive(), in: .capsule)
+        }
+        .padding(16)
+        .glassEffect(.regular, in: .rect(cornerRadius: 24))
+    }
+
+    private func detailRow(icon: String, text: String) -> some View {
+        Label(text, systemImage: icon)
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// A TripAdvisor-style "Explore" screen: search up top, a tall "Plan your next
+/// adventure" carousel, a smaller "Trending with travelers" rail, and a saved list.
 struct RecScreen: View {
-    @State private var feed: ExploreFeed = .forYou
-    @AppStorage("exploreLikedDestinationIDs") private var likedDestinationIDs = ""
+    @State private var searchText = ""
     @AppStorage("exploreSavedDestinationIDs") private var savedDestinationIDs = ""
 
-    private var destinations: [Destination] {
-        let bookmarked = idSet(from: likedDestinationIDs).union(idSet(from: savedDestinationIDs))
-        switch feed {
-        case .forYou: return Destination.all
-        case .saved: return Destination.all.filter { bookmarked.contains($0.id) }
-        case .trending: return Destination.all.filter(\.isFeatured)
-        case .recent: return Array(Destination.all.reversed())
+    private var savedIDs: Set<String> { idSet(from: savedDestinationIDs) }
+
+    private var searchResults: [Destination] {
+        let query = searchText.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return [] }
+        return Destination.all.filter {
+            $0.city.localizedCaseInsensitiveContains(query)
+                || $0.country.localizedCaseInsensitiveContains(query)
+                || $0.title.localizedCaseInsensitiveContains(query)
         }
     }
+
+    private var adventures: [Destination] { Destination.all.filter(\.isFeatured) }
+    private var trending: [Destination] { Destination.all.filter { !$0.isFeatured } }
+    private var saved: [Destination] { Destination.all.filter { savedIDs.contains($0.id) } }
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                LazyVStack(spacing: 20) {
-                    GlassEffectContainer(spacing: 14) {
+                VStack(alignment: .leading, spacing: 24) {
+                    searchBar
+
+                    if !searchText.trimmingCharacters(in: .whitespaces).isEmpty {
+                        searchResultsList
+                    } else {
+                        sectionHeader("Plan your next adventure")
                         ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 10) {
-                                ForEach(ExploreFeed.allCases) { option in
-                                    FilterChip(
-                                        title: option.title,
-                                        systemImage: option.systemImage,
-                                        isSelected: feed == option
-                                    ) {
-                                        withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-                                            feed = option
-                                        }
+                            HStack(spacing: 14) {
+                                ForEach(adventures) { destination in
+                                    NavigationLink(value: destination.id) {
+                                        AdventureCard(
+                                            destination: destination,
+                                            isSaved: savedIDs.contains(destination.id),
+                                            onToggleSave: { toggleSaved(destination.id) }
+                                        )
                                     }
+                                    .buttonStyle(.plain)
                                 }
                             }
+                            .padding(.horizontal)
                         }
-                    }
+                        .padding(.horizontal, -16)
 
-                    if destinations.isEmpty {
-                        ContentUnavailableView("No saved plans yet", systemImage: "bookmark")
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 32)
-                            .glassEffect(.regular, in: .rect(cornerRadius: 24))
-                    } else {
-                        ForEach(destinations) { destination in
-                            DestinationCard(
-                                destination: destination,
-                                isLiked: idSet(from: likedDestinationIDs).contains(destination.id),
-                                isSaved: idSet(from: savedDestinationIDs).contains(destination.id),
-                                onToggleLike: { toggle(destination.id, in: &likedDestinationIDs) },
-                                onToggleSave: { toggle(destination.id, in: &savedDestinationIDs) }
-                            )
+                        sectionHeader("Trending with travelers")
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 14) {
+                                ForEach(trending) { destination in
+                                    NavigationLink(value: destination.id) {
+                                        TrendingCard(
+                                            destination: destination,
+                                            isSaved: savedIDs.contains(destination.id),
+                                            onToggleSave: { toggleSaved(destination.id) }
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                            .padding(.horizontal)
+                        }
+                        .padding(.horizontal, -16)
+
+                        if !saved.isEmpty {
+                            sectionHeader("Saved")
+                            VStack(spacing: 12) {
+                                ForEach(saved) { destination in
+                                    NavigationLink(value: destination.id) {
+                                        DestinationRow(destination: destination)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
                         }
                     }
                 }
@@ -179,81 +455,75 @@ struct RecScreen: View {
                 .ignoresSafeArea()
             }
             .navigationTitle("Explore")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                    } label: {
-                        Image(systemName: "magnifyingglass")
-                    }
+            .navigationDestination(for: String.self) { id in
+                if let destination = Destination.all.first(where: { $0.id == id }) {
+                    DestinationDetailView(
+                        destination: destination,
+                        isSaved: savedIDs.contains(id),
+                        onToggleSave: { toggleSaved(id) }
+                    )
                 }
             }
         }
+    }
+
+    private var searchBar: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("Places to go, things to do…", text: $searchText)
+                .autocorrectionDisabled()
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 13)
+        .glassEffect(.regular.interactive(), in: .capsule)
+    }
+
+    @ViewBuilder
+    private var searchResultsList: some View {
+        if searchResults.isEmpty {
+            ContentUnavailableView.search(text: searchText)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 32)
+                .glassEffect(.regular, in: .rect(cornerRadius: 24))
+        } else {
+            VStack(spacing: 12) {
+                ForEach(searchResults) { destination in
+                    NavigationLink(value: destination.id) {
+                        DestinationRow(destination: destination)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.title2.bold())
     }
 
     private func idSet(from rawValue: String) -> Set<String> {
         Set(rawValue.split(separator: "|").map(String.init))
     }
 
-    private func toggle(_ id: String, in rawValue: inout String) {
-        var set = idSet(from: rawValue)
+    private func toggleSaved(_ id: String) {
+        var set = idSet(from: savedDestinationIDs)
         if set.contains(id) {
             set.remove(id)
         } else {
             set.insert(id)
         }
-        rawValue = set.sorted().joined(separator: "|")
-    }
-}
-
-/// The selectable feed filters shown as glass chips.
-enum ExploreFeed: String, CaseIterable, Identifiable {
-    case forYou, saved, trending, recent
-
-    var id: Self { self }
-
-    var title: String {
-        switch self {
-        case .forYou: "For You"
-        case .saved: "Saved"
-        case .trending: "Trending"
-        case .recent: "Recent"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .forYou: "sparkles"
-        case .saved: "bookmark.fill"
-        case .trending: "chart.line.uptrend.xyaxis"
-        case .recent: "clock"
-        }
-    }
-}
-
-/// A single glass filter chip.
-struct FilterChip: View {
-    let title: String
-    let systemImage: String
-    let isSelected: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 13, weight: .semibold))
-                Text(title)
-                    .font(.subheadline.weight(.semibold))
-            }
-            .foregroundStyle(isSelected ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
-            .padding(.horizontal, 16)
-            .padding(.vertical, 9)
-        }
-        .buttonStyle(.plain)
-        .glassEffect(
-            isSelected ? .regular.tint(.accentColor).interactive() : .regular.interactive(),
-            in: .capsule
-        )
+        savedDestinationIDs = set.sorted().joined(separator: "|")
     }
 }
 
@@ -501,165 +771,392 @@ extension Destination {
     ]
 }
 
-/// A photo-style destination card with Liquid Glass overlays.
-struct DestinationCard: View {
+extension Destination {
+    /// The short overview paragraph shown on the detail page.
+    var blurb: String {
+        switch id {
+        case "tokyo": "Neon crossings, temple mornings, and the world's densest food scene — Tokyo rewards wandering between neighborhoods that each feel like their own city."
+        case "kyoto": "Kyoto trades skyline for shrine paths, bamboo groves, and quiet lanes where old Japan is still the everyday backdrop."
+        case "seoul": "Palaces by day and street food by night — Seoul layers hanok alleys, mountain viewpoints, and 24-hour markets into one compact grid."
+        case "bangkok": "Gilded temples, river boats, and markets that never quite close: Bangkok is chaotic, cheap, and endlessly delicious."
+        case "singapore": "A garden city of supertrees, hawker centres, and shophouse neighborhoods, all threaded together by spotless transit."
+        case "bali": "Rice terraces, cliff temples, and slow beach afternoons — Bali balances jungle mornings in Ubud with coastal sunsets in Uluwatu."
+        case "new-york": "Skyline walks, world-class museums, and a different cuisine on every block — New York packs more per day than any other city."
+        case "san-francisco": "Fog over the Golden Gate, murals in the Mission, and coastal trails at the city's edge — San Francisco is best explored one neighborhood at a time."
+        case "vancouver": "Mountains, seawall, and rainforest inside city limits — Vancouver mixes outdoor days with a serious food scene."
+        case "las-vegas": "Beyond the Strip's lights are neon museums, downtown Fremont, and red-rock desert an easy half-day away."
+        case "mexico-city": "Aztec ruins, world-class museums, leafy plazas, and tacos on every corner — CDMX runs deep on culture and flavor."
+        default: "A curated plan with hand-picked places to visit and eat."
+        }
+    }
+
+    /// City-center coordinate, used to bias the Map tab's POI search and as the
+    /// fallback pin location when a specific place can't be resolved.
+    var coordinate: CLLocationCoordinate2D {
+        switch id {
+        case "tokyo": CLLocationCoordinate2D(latitude: 35.6762, longitude: 139.6503)
+        case "kyoto": CLLocationCoordinate2D(latitude: 35.0116, longitude: 135.7681)
+        case "seoul": CLLocationCoordinate2D(latitude: 37.5665, longitude: 126.9780)
+        case "bangkok": CLLocationCoordinate2D(latitude: 13.7563, longitude: 100.5018)
+        case "singapore": CLLocationCoordinate2D(latitude: 1.3521, longitude: 103.8198)
+        case "bali": CLLocationCoordinate2D(latitude: -8.4095, longitude: 115.1889)
+        case "new-york": CLLocationCoordinate2D(latitude: 40.7128, longitude: -74.0060)
+        case "san-francisco": CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194)
+        case "vancouver": CLLocationCoordinate2D(latitude: 49.2827, longitude: -123.1207)
+        case "las-vegas": CLLocationCoordinate2D(latitude: 36.1699, longitude: -115.1398)
+        case "mexico-city": CLLocationCoordinate2D(latitude: 19.4326, longitude: -99.1332)
+        default: CLLocationCoordinate2D(latitude: 0, longitude: 0)
+        }
+    }
+}
+
+/// A tall photo-style carousel card, TripAdvisor's "Plan your next adventure" look:
+/// tag chips and a heart floating over the image, city name anchored at the bottom.
+struct AdventureCard: View {
     let destination: Destination
-    let isLiked: Bool
     let isSaved: Bool
-    let onToggleLike: () -> Void
     let onToggleSave: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Image header (gradient stand-in for a photo)
+        ZStack {
+            LinearGradient(colors: destination.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+
+            Image(systemName: destination.symbol)
+                .font(.system(size: 110))
+                .foregroundStyle(.white.opacity(0.25))
+
+            LinearGradient(
+                colors: [.clear, .black.opacity(0.6)],
+                startPoint: .center,
+                endPoint: .bottom
+            )
+        }
+        .frame(width: 290, height: 380)
+        .overlay(alignment: .topLeading) {
+            HStack(spacing: 8) {
+                ForEach(destination.tags, id: \.self) { tag in
+                    Text(tag)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(.white.opacity(0.92), in: .rect(cornerRadius: 8))
+                }
+            }
+            .padding(12)
+        }
+        .overlay(alignment: .topTrailing) {
+            HeartButton(isSaved: isSaved, action: onToggleSave)
+                .padding(12)
+        }
+        .overlay(alignment: .bottomLeading) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(destination.city)
+                    .font(.system(size: 32, weight: .bold))
+                    .foregroundStyle(.white)
+                Text(destination.country)
+                    .font(.headline)
+                    .foregroundStyle(.white.opacity(0.9))
+            }
+            .padding(16)
+        }
+        .clipShape(.rect(cornerRadius: 20))
+    }
+}
+
+/// A smaller square card for the "Trending with travelers" rail.
+struct TrendingCard: View {
+    let destination: Destination
+    let isSaved: Bool
+    let onToggleSave: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
             ZStack {
                 LinearGradient(colors: destination.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
 
                 Image(systemName: destination.symbol)
-                    .font(.system(size: 90))
-                    .foregroundStyle(.white.opacity(0.25))
-
-                // Bottom scrim for legible text
-                LinearGradient(
-                    colors: [.clear, .black.opacity(0.55)],
-                    startPoint: .center,
-                    endPoint: .bottom
-                )
+                    .font(.system(size: 54))
+                    .foregroundStyle(.white.opacity(0.3))
             }
-            .frame(height: 180)
-            .overlay(alignment: .topLeading) {
-                if destination.isFeatured {
-                    Text("Featured")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .glassEffect(.regular.tint(.accentColor), in: .capsule)
-                        .padding(12)
-                }
-            }
+            .frame(width: 170, height: 130)
             .overlay(alignment: .topTrailing) {
-                HStack(spacing: 8) {
-                    iconButton("heart", filled: isLiked, tint: .red, action: onToggleLike)
-                    iconButton("bookmark", filled: isSaved, tint: .accentColor, action: onToggleSave)
-                }
-                .padding(12)
+                HeartButton(isSaved: isSaved, action: onToggleSave)
+                    .padding(8)
             }
-            .overlay(alignment: .bottomLeading) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(destination.title)
-                        .font(.title3.bold())
-                        .foregroundStyle(.white)
-                    Label("\(destination.city), \(destination.country)", systemImage: "mappin.and.ellipse")
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.9))
-                }
-                .padding(14)
-            }
+            .clipShape(.rect(cornerRadius: 16))
 
-            // Info section
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 8) {
-                    ForEach(destination.tags, id: \.self) { tag in
-                        Text("#\(tag)")
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(.secondary.opacity(0.12), in: .capsule)
-                    }
-                }
-
-                HStack(spacing: 10) {
-                    Label(destination.planner, systemImage: "person.circle.fill")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Text(destination.price)
-                        .font(.subheadline.weight(.bold))
-                        .foregroundStyle(.primary)
-                }
-                HStack(spacing: 10) {
-                    Text(destination.dailyBudget)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    Label("\(destination.stops) stops", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }
-
-                Divider()
-
-                recommendationSection(
-                    title: "Places to visit",
-                    systemImage: "mappin.and.ellipse",
-                    items: destination.places
-                )
-
-                recommendationSection(
-                    title: "Restaurants",
-                    systemImage: "fork.knife",
-                    items: destination.restaurants
-                )
-
-                Label(destination.plannerNote, systemImage: "sparkle.magnifyingglass")
+            VStack(alignment: .leading, spacing: 2) {
+                Text(destination.city)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text(destination.country)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .padding(.top, 2)
             }
-            .padding(16)
+            .padding(.horizontal, 2)
         }
-        .glassEffect(.regular, in: .rect(cornerRadius: 24))
-        .clipShape(.rect(cornerRadius: 24))
+        .frame(width: 170, alignment: .leading)
+    }
+}
+
+/// A compact row used for search results and the saved list.
+struct DestinationRow: View {
+    let destination: Destination
+
+    var body: some View {
+        HStack(spacing: 14) {
+            ZStack {
+                LinearGradient(colors: destination.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+                Image(systemName: destination.symbol)
+                    .font(.system(size: 22))
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+            .frame(width: 56, height: 56)
+            .clipShape(.rect(cornerRadius: 12))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(destination.city), \(destination.country)")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text("\(destination.tags.joined(separator: " · ")) · \(destination.price)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Image(systemName: "chevron.right")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(12)
+        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
+    }
+}
+
+/// The circular white heart button floating over card imagery.
+struct HeartButton: View {
+    let isSaved: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: isSaved ? "heart.fill" : "heart")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(isSaved ? AnyShapeStyle(.red) : AnyShapeStyle(.black))
+                .frame(width: 38, height: 38)
+                .background(.white.opacity(0.95), in: .circle)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// TripAdvisor-style destination page with Overview / Things to do / Restaurants tabs.
+struct DestinationDetailView: View {
+    @Environment(ExploreMapModel.self) private var mapModel
+
+    let destination: Destination
+    let isSaved: Bool
+    let onToggleSave: () -> Void
+
+    private enum DetailTab: String, CaseIterable, Identifiable {
+        case overview = "Overview"
+        case thingsToDo = "Things to do"
+        case restaurants = "Restaurants"
+
+        var id: Self { self }
     }
 
-    private func recommendationSection(title: String, systemImage: String, items: [TravelPlanItem]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(title, systemImage: systemImage)
-                .font(.caption.weight(.bold))
-                .foregroundStyle(.primary)
+    @State private var tab: DetailTab = .overview
 
-            ForEach(items) { item in
-                HStack(alignment: .top, spacing: 8) {
-                    Circle()
-                        .fill(.secondary.opacity(0.35))
-                        .frame(width: 5, height: 5)
-                        .padding(.top, 7)
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(alignment: .firstTextBaseline, spacing: 6) {
-                            Text(item.name)
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.primary)
-                            Text(item.cost)
-                                .font(.caption2.weight(.bold))
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(.secondary.opacity(0.10), in: .capsule)
-                        }
-                        Text(item.detail)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                tabBar
+
+                hero
+                    .padding(.horizontal)
+                    .padding(.top, 12)
+
+                VStack(alignment: .leading, spacing: 20) {
+                    switch tab {
+                    case .overview: overviewSection
+                    case .thingsToDo: planList(destination.places)
+                    case .restaurants: planList(destination.restaurants)
                     }
-                    Spacer(minLength: 0)
+                }
+                .padding()
+                .padding(.bottom, 80)
+            }
+        }
+        .background {
+            LinearGradient(
+                colors: [Color(.systemPurple).opacity(0.18), Color(.systemBackground)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+        }
+        .navigationTitle(destination.city)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button(action: onToggleSave) {
+                    Image(systemName: isSaved ? "heart.fill" : "heart")
+                        .foregroundStyle(isSaved ? AnyShapeStyle(.red) : AnyShapeStyle(.primary))
                 }
             }
         }
     }
 
-    /// A small circular glass button used for like / save actions.
-    private func iconButton(_ name: String, filled: Bool, tint: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: filled ? "\(name).fill" : name)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(filled ? AnyShapeStyle(tint) : AnyShapeStyle(.white))
-                .frame(width: 36, height: 36)
+    /// The underlined segmented tab strip below the navigation bar.
+    private var tabBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 24) {
+                ForEach(DetailTab.allCases) { option in
+                    Button {
+                        withAnimation(.snappy(duration: 0.2)) { tab = option }
+                    } label: {
+                        VStack(spacing: 8) {
+                            Text(option.rawValue)
+                                .font(.headline)
+                                .foregroundStyle(tab == option ? .primary : .secondary)
+                            Capsule()
+                                .fill(tab == option ? Color.primary : .clear)
+                                .frame(height: 3)
+                        }
+                        .fixedSize()
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal)
+            .padding(.top, 8)
         }
-        .buttonStyle(.plain)
-        .glassEffect(.regular.interactive(), in: .circle)
+    }
+
+    private var hero: some View {
+        ZStack {
+            LinearGradient(colors: destination.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+
+            Image(systemName: destination.symbol)
+                .font(.system(size: 100))
+                .foregroundStyle(.white.opacity(0.3))
+        }
+        .frame(height: 240)
+        .frame(maxWidth: .infinity)
+        .overlay(alignment: .bottomLeading) {
+            HStack(spacing: 8) {
+                ForEach(destination.tags, id: \.self) { tag in
+                    Text(tag)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(.white.opacity(0.92), in: .rect(cornerRadius: 8))
+                }
+            }
+            .padding(12)
+        }
+        .clipShape(.rect(cornerRadius: 20))
+    }
+
+    private var overviewSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(destination.title)
+                .font(.largeTitle.bold())
+
+            Text(destination.blurb)
+                .font(.body)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 12) {
+                statTile(value: destination.price, label: "Est. total")
+                statTile(value: destination.dailyBudget, label: "Budget")
+                statTile(value: "\(destination.stops)", label: "Stops")
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Planned by \(destination.planner)", systemImage: "person.circle.fill")
+                    .font(.subheadline.weight(.semibold))
+                Text(destination.plannerNote)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .glassEffect(.regular, in: .rect(cornerRadius: 18))
+        }
+    }
+
+    private func statTile(value: String, label: String) -> some View {
+        VStack(spacing: 4) {
+            Text(value)
+                .font(.subheadline.weight(.bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .glassEffect(.regular, in: .rect(cornerRadius: 14))
+    }
+
+    /// A numbered TripAdvisor-style list of places or restaurants. Tapping a row
+    /// drops a pin on the Map tab so the user can see where it is.
+    private func planList(_ items: [TravelPlanItem]) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Tap a spot to see it on the map", systemImage: "mappin.and.ellipse")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                Button {
+                    mapModel.showOnMap(item, in: destination)
+                } label: {
+                    HStack(alignment: .top, spacing: 14) {
+                        ZStack {
+                            LinearGradient(colors: destination.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+                            Text("\(index + 1)")
+                                .font(.headline)
+                                .foregroundStyle(.white)
+                        }
+                        .frame(width: 44, height: 44)
+                        .clipShape(.rect(cornerRadius: 12))
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Text(item.name)
+                                    .font(.body.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                Text(item.cost)
+                                    .font(.caption2.weight(.bold))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(.secondary.opacity(0.12), in: .capsule)
+                            }
+                            Text(item.detail)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 0)
+
+                        Image(systemName: "map")
+                            .font(.callout.weight(.semibold))
+                            .foregroundStyle(.tint)
+                    }
+                    .padding(14)
+                    .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
+                }
+                .buttonStyle(.plain)
+            }
+        }
     }
 }
 
@@ -1023,7 +1520,7 @@ struct FloatingDock: View {
 
     var body: some View {
         GlassEffectContainer(spacing: 18) {
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
                 ForEach(DockTab.allCases) { tab in
                     let isActive = tab == selectedTab
 
@@ -1044,9 +1541,13 @@ struct FloatingDock: View {
                                     .transition(.opacity.combined(with: .scale))
                             }
                         }
-                        .frame(height: 48)
-                        .padding(.horizontal, isActive ? 16 : 13)
+                        // Enforce a comfortable ≥44pt tap target per tab and make the
+                        // whole capsule (not just the glyph) tappable, so neighboring
+                        // tabs are harder to hit by accident.
+                        .frame(minWidth: isActive ? 0 : 48, minHeight: 48)
+                        .padding(.horizontal, isActive ? 18 : 14)
                         .foregroundStyle(isActive ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
+                        .contentShape(.capsule)
                     }
                     .buttonStyle(.plain)
                     .glassEffect(

@@ -17,6 +17,9 @@ create table if not exists public.trips (
     updated_at timestamptz not null default now()
 );
 
+alter table public.trips add column if not exists user_id uuid references auth.users (id) on delete cascade;
+alter table public.trips alter column user_id set default auth.uid();
+
 create table if not exists public.profiles (
     user_id    uuid primary key references auth.users (id) on delete cascade,
     email      text unique not null,
@@ -152,6 +155,54 @@ insert into public.trip_members (trip_id, user_id, role)
 select id, user_id, 'owner'
 from public.trips
 on conflict (trip_id, user_id) do update set role = 'owner';
+
+create or replace function public.upsert_trip(p_id uuid, p_user_id uuid, p_data jsonb)
+returns void
+security definer
+set search_path = public
+as $$
+declare
+    v_uid uuid := auth.uid();
+    v_owner uuid;
+begin
+    if v_uid is null then
+        raise exception 'You must be signed in.';
+    end if;
+
+    select user_id into v_owner
+    from public.trips
+    where id = p_id;
+
+    if v_owner is null then
+        if p_user_id <> v_uid then
+            raise exception 'Trip owner must be the signed-in user.';
+        end if;
+
+        insert into public.trips (id, user_id, data)
+        values (p_id, v_uid, p_data);
+
+        insert into public.trip_members (trip_id, user_id, role)
+        values (p_id, v_uid, 'owner')
+        on conflict (trip_id, user_id) do update set role = 'owner';
+        return;
+    end if;
+
+    if not exists (
+        select 1
+        from public.trip_members tm
+        where tm.trip_id = p_id
+          and tm.user_id = v_uid
+    ) then
+        raise exception 'You are not a member of this trip.';
+    end if;
+
+    update public.trips
+    set data = p_data
+    where id = p_id;
+end;
+$$ language plpgsql;
+
+grant execute on function public.upsert_trip(uuid, uuid, jsonb) to authenticated;
 
 create or replace function public.invite_trip_member(p_trip_id uuid, p_email text)
 returns table(member_user_id uuid, invitation_id uuid, accepted boolean)
