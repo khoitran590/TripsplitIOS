@@ -497,6 +497,11 @@ final class TripStore {
     /// The signed-in user's profile photo, persisted across launches as JPEG data.
     var profileImageData: Data?
 
+    /// The signed-in user's cloud-backed personal information (name, birthday, bio,
+    /// visited places). Loaded from `public.profiles` on sign-in and saved back on edit;
+    /// `displayName`/`avatarPath` are mirrored onto `currentUser`.
+    var userProfile = UserProfile()
+
     /// Exchange rates with base USD (`usdRates["EUR"]` = EUR per 1 USD), used to
     /// convert each trip's currency into USD for the aggregated home card.
     var usdRates: [String: Double] = [:]
@@ -570,6 +575,10 @@ final class TripStore {
         var name: String
         var imageData: Data?
         var avatarURL: String?
+        // Optional so profiles cached before these fields existed still decode.
+        var dateOfBirth: Date?
+        var bio: String?
+        var visitedPlaces: [String]?
     }
 
     /// Returns a UserDefaults key scoped to the given user UUID, so different accounts
@@ -599,11 +608,9 @@ final class TripStore {
     func updateProfile(name: String, imageData: Data?) {
         let nameChanged = currentUser.name != name
         currentUser.name = name
+        userProfile.displayName = name
         profileImageData = imageData
-        let stored = StoredProfile(name: name, imageData: imageData, avatarURL: currentUser.avatarURL)
-        if let data = try? JSONEncoder().encode(stored) {
-            UserDefaults.standard.set(data, forKey: Self.profileKey(for: currentUser.id))
-        }
+        persistLocalProfile()
         guard nameChanged else { return }
         for index in trips.indices {
             if let memberIndex = trips[index].members.firstIndex(where: { $0.id == currentUser.id }) {
@@ -624,11 +631,9 @@ final class TripStore {
             try await ReceiptStorage.shared.upload(jpeg, path: path, accessToken: token)
         }) else { return }
         currentUser.avatarURL = url
+        userProfile.avatarPath = url
         // Persist locally so the URL survives a relaunch.
-        let stored = StoredProfile(name: currentUser.name, imageData: profileImageData, avatarURL: url)
-        if let data = try? JSONEncoder().encode(stored) {
-            UserDefaults.standard.set(data, forKey: Self.profileKey(for: currentUser.id))
-        }
+        persistLocalProfile()
         // Push the updated Person (name + avatarURL) into every trip the user belongs to
         // so other members pick up the change on their next loadFromCloud.
         for index in trips.indices {
@@ -644,6 +649,80 @@ final class TripStore {
     func resetProfile() {
         currentUser.name = ""
         profileImageData = nil
+        userProfile = UserProfile()
+    }
+
+    /// Writes the full profile (name, photo, avatar path, birthday, bio, places) to
+    /// UserDefaults keyed by user UUID, so it survives relaunches and account switches.
+    private func persistLocalProfile() {
+        let stored = StoredProfile(
+            name: currentUser.name,
+            imageData: profileImageData,
+            avatarURL: currentUser.avatarURL,
+            dateOfBirth: userProfile.dateOfBirth,
+            bio: userProfile.bio,
+            visitedPlaces: userProfile.visitedPlaces
+        )
+        if let data = try? JSONEncoder().encode(stored) {
+            UserDefaults.standard.set(data, forKey: Self.profileKey(for: currentUser.id))
+        }
+    }
+
+    /// Saves an edited profile: applies it locally (and to every trip via the display
+    /// name), uploads a new avatar when the photo changed, then upserts the row in
+    /// `public.profiles` so the profile follows the account to other devices.
+    func saveProfile(_ profile: UserProfile, imageData: Data?) async {
+        userProfile = profile
+        userProfile.avatarPath = currentUser.avatarURL
+        updateProfile(name: profile.displayName, imageData: imageData)
+        if let imageData, imageData != profileImageData || currentUser.avatarURL == nil {
+            await uploadAndSetAvatar(imageData)
+        } else if imageData == nil {
+            currentUser.avatarURL = nil
+            userProfile.avatarPath = nil
+            persistLocalProfile()
+        }
+        await pushProfileToCloud()
+    }
+
+    /// Loads the account's profile row from Supabase, replacing the local cache. When
+    /// the cloud row is still empty (fresh account or pre-profile install) but a local
+    /// profile exists, the local one is pushed up instead.
+    func loadProfileFromCloud() async {
+        guard let accessToken = try? await authorizedAccessToken() else { return }
+        let userID = currentUser.id
+        guard let fetched = try? await withFreshTokenIfNeeded(initialToken: accessToken, operation: { token in
+            try await ProfilesRepository.shared.fetch(userID: userID, accessToken: token)
+        }) else { return }
+
+        if fetched.displayName.trimmingCharacters(in: .whitespaces).isEmpty && !currentUser.name.isEmpty {
+            // Cloud row never populated — seed it from this device's profile.
+            await pushProfileToCloud()
+            return
+        }
+        userProfile = fetched
+        currentUser.name = fetched.displayName
+        if let path = fetched.avatarPath, !path.isEmpty {
+            currentUser.avatarURL = path
+        }
+        persistLocalProfile()
+    }
+
+    /// Upserts the in-memory profile into `public.profiles`. Best-effort: failures are
+    /// logged but not surfaced, since the local copy is already saved.
+    private func pushProfileToCloud() async {
+        guard let accessToken = try? await authorizedAccessToken() else { return }
+        var profile = userProfile
+        profile.displayName = currentUser.name
+        profile.avatarPath = currentUser.avatarURL
+        let userID = currentUser.id
+        do {
+            try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
+                try await ProfilesRepository.shared.update(profile, userID: userID, accessToken: token)
+            }
+        } catch {
+            BackendSecurity.log("Profile cloud save failed", error: error)
+        }
     }
 
     private static func loadProfile(for userID: UUID) -> StoredProfile? {
@@ -963,6 +1042,12 @@ final class TripStore {
         currentUser.name = stored?.name ?? ""
         profileImageData = stored?.imageData
         currentUser.avatarURL = stored?.avatarURL
+        userProfile = UserProfile()
+        userProfile.displayName = stored?.name ?? ""
+        userProfile.avatarPath = stored?.avatarURL
+        userProfile.dateOfBirth = stored?.dateOfBirth
+        userProfile.bio = stored?.bio ?? ""
+        userProfile.visitedPlaces = stored?.visitedPlaces ?? []
     }
 
     /// Decodes a JWT's payload (its middle segment) into a claims dictionary.

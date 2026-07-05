@@ -26,6 +26,15 @@ create table if not exists public.profiles (
     updated_at timestamptz not null default now()
 );
 
+-- Personal profile fields shown in Settings → Profile. The row itself is created by
+-- the auth trigger below; the app only ever UPDATEs these columns for its own row.
+-- `visited_places` is a JSON array of place-name strings ("where have they been").
+alter table public.profiles add column if not exists display_name   text;
+alter table public.profiles add column if not exists date_of_birth  date;
+alter table public.profiles add column if not exists bio            text;
+alter table public.profiles add column if not exists avatar_path    text;
+alter table public.profiles add column if not exists visited_places jsonb not null default '[]'::jsonb;
+
 create table if not exists public.trip_members (
     trip_id    uuid not null references public.trips (id) on delete cascade,
     user_id    uuid not null references auth.users (id) on delete cascade,

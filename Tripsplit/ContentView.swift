@@ -84,6 +84,9 @@ struct ContentView: View {
                 try await auth.refreshSession().accessToken
             }
             store.bindIdentity(accessToken: auth.session?.accessToken)
+            // Load the cloud profile first so `loadFromCloud`'s member healing uses
+            // the authoritative name/avatar rather than the local cache.
+            await store.loadProfileFromCloud()
             await store.loadFromCloud()
         }
         .onOpenURL { url in
@@ -1275,6 +1278,8 @@ struct SettingsScreen: View {
     @State private var showPersonalInfo = false
     @State private var showChangePassword = false
     @State private var showLanguagePicker = false
+    @State private var showProfilePage = false
+    @AppStorage("appearancePreference") private var appearance: AppearancePreference = .system
 
     var body: some View {
         Group {
@@ -1289,7 +1294,7 @@ struct SettingsScreen: View {
                             )
                             .ignoresSafeArea()
                         }
-                        .navigationTitle("Settings")
+                        .navigationTitle("Profile")
                 }
             } else {
                 ZStack {
@@ -1322,44 +1327,64 @@ struct SettingsScreen: View {
     private var settingsContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                ProfileCard(name: displayName, email: auth.email ?? "", imageData: store.profileImageData)
+                profileHeader
 
-                SettingsSection("Account") {
-                    SettingsRow(icon: "person.fill", tint: .blue, title: "Personal Information") {
+                exploreCard
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Settings")
+                        .font(.title2.bold())
+                        .padding(.bottom, 8)
+
+                    PlainSettingsRow(icon: "person.crop.circle", title: "Personal information") {
                         showPersonalInfo = true
                     }
-                    SettingsRow(icon: "key.fill", tint: .orange, title: "Change Password") {
+                    PlainSettingsRow(icon: "shield", title: "Login & security") {
                         showChangePassword = true
                     }
-                    SettingsRow(icon: "creditcard.fill", tint: .green, title: "Payment Methods")
-                    SettingsRow(icon: "wallet.bifold.fill", tint: .yellow, title: "Wallets & Currencies", value: "USD")
+                    PlainSettingsRow(icon: "creditcard", title: "Payments")
                 }
 
-                SettingsSection("Preferences") {
-                    SettingsRow(icon: "bell.fill", tint: .indigo, title: "Notifications")
-                    SettingsRow(icon: "globe", tint: .orange, title: "Language", value: localization.language.endonym) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Preferences")
+                        .font(.title2.bold())
+                        .padding(.bottom, 8)
+
+                    PlainSettingsRow(icon: "bell", title: "Notifications")
+                    Menu {
+                        Picker("Appearance", selection: $appearance) {
+                            ForEach(AppearancePreference.allCases) { option in
+                                Label(option.label, systemImage: option.icon).tag(option)
+                            }
+                        }
+                    } label: {
+                        PlainSettingsRow(icon: "paintpalette", title: "Appearance",
+                                         value: appearance.label)
+                    }
+                    .buttonStyle(.plain)
+                    PlainSettingsRow(icon: "globe", title: "Language",
+                                     value: localization.language.endonym) {
                         showLanguagePicker = true
                     }
                 }
 
-                Button(role: .destructive) {
+                PlainSettingsRow(icon: "rectangle.portrait.and.arrow.right", title: "Sign Out",
+                                 showsChevron: false, tint: Color(hex: 0xEF4444)) {
                     store.resetProfile()
                     auth.signOut()
-                } label: {
-                    Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
-                        .font(.headline)
-                        .foregroundStyle(Color(hex: 0xEF4444))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
                 }
-                .buttonStyle(.plain)
-                .glassEffect(.regular.interactive(), in: .capsule)
+                .padding(.top, 8)
+
+                versionFooter
             }
             .padding()
             .padding(.bottom, 80) // Clearance for the floating dock.
         }
+        .navigationDestination(isPresented: $showProfilePage) {
+            ProfileDetailView()
+        }
         .sheet(isPresented: $showPersonalInfo) {
-            PersonalInformationView()
+            EditProfileView()
         }
         .sheet(isPresented: $showChangePassword) {
             ChangePasswordView()
@@ -1367,6 +1392,123 @@ struct SettingsScreen: View {
         .sheet(isPresented: $showLanguagePicker) {
             LanguagePickerView()
         }
+    }
+
+    /// Airbnb-style header: avatar, name, "Show profile", chevron → full profile page.
+    private var profileHeader: some View {
+        Button {
+            showProfilePage = true
+        } label: {
+            VStack(spacing: 16) {
+                HStack(spacing: 16) {
+                    AvatarView(person: store.currentUser, imageData: store.profileImageData, size: 60)
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(displayName)
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        Text("Show profile")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    Image(systemName: "chevron.right")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                Divider()
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Promo card in the Airbnb "Airbnb your home" slot, pointing at the Explore tab.
+    private var exploreCard: some View {
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Plan your next adventure")
+                    .font(.headline)
+                Text("Browse curated trips and split costs with friends.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Image(systemName: "airplane.departure")
+                .font(.system(size: 34, weight: .semibold))
+                .foregroundStyle(Color(hex: 0x6366F1))
+        }
+        .padding(16)
+        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+    }
+
+    /// Luma-style footer: app name, version, terms.
+    private var versionFooter: some View {
+        VStack(spacing: 6) {
+            Text("TripSplit")
+                .font(.headline)
+                .foregroundStyle(.tertiary)
+            Text("Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0") (\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"))")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+            Text("Terms & Privacy")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 16)
+    }
+}
+
+/// A flat, Airbnb-style settings row: thin outline icon, title, optional trailing
+/// value, chevron, and a hairline divider underneath.
+struct PlainSettingsRow: View {
+    let icon: String
+    // LocalizedStringKey (not String): `Text(someString)` renders verbatim and skips
+    // localization, so row titles must come through as keys to pick up translations.
+    let title: LocalizedStringKey
+    var value: String? = nil
+    var showsChevron = true
+    var tint: Color? = nil
+    var action: (() -> Void)? = nil
+
+    var body: some View {
+        Button {
+            action?()
+        } label: {
+            VStack(spacing: 0) {
+                HStack(spacing: 16) {
+                    Image(systemName: icon)
+                        .font(.system(size: 21))
+                        .foregroundStyle(tint ?? .primary)
+                        .frame(width: 28)
+
+                    Text(title)
+                        .font(.body)
+                        .foregroundStyle(tint ?? .primary)
+
+                    Spacer()
+
+                    if let value {
+                        Text(value)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if showsChevron {
+                        Image(systemName: "chevron.right")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .padding(.vertical, 16)
+                Divider()
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -1423,195 +1565,6 @@ private enum ProfileImageCache {
         guard let image = UIImage(data: data) else { return nil }
         cache.setObject(image, forKey: key)
         return image
-    }
-}
-
-/// An editor for the user's display name and profile photo, presented from
-/// Settings → Personal Information.
-struct PersonalInformationView: View {
-    @Environment(TripStore.self) private var store
-    @Environment(\.dismiss) private var dismiss
-
-    @State private var name = ""
-    @State private var photoItem: PhotosPickerItem?
-    @State private var imageData: Data?
-
-    private var initials: String {
-        let parts = name.split(separator: " ")
-        return String(parts.prefix(2).compactMap(\.first)).uppercased()
-    }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    HStack {
-                        Spacer()
-                        VStack(spacing: 12) {
-                            ProfileAvatar(imageData: imageData, initials: initials, size: 96)
-                            PhotosPicker(selection: $photoItem, matching: .images) {
-                                Text(imageData == nil ? "Add Photo" : "Change Photo")
-                            }
-                            if imageData != nil {
-                                Button("Remove Photo", role: .destructive) {
-                                    imageData = nil
-                                    photoItem = nil
-                                }
-                            }
-                        }
-                        Spacer()
-                    }
-                    .padding(.vertical, 8)
-                }
-
-                Section("Name") {
-                    TextField("Your name", text: $name)
-                        .textContentType(.name)
-                }
-            }
-            .navigationTitle("Personal Information")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { save() }
-                        .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
-                }
-            }
-            .onAppear {
-                name = store.currentUser.name
-                imageData = store.profileImageData
-            }
-            .onChange(of: photoItem) { _, newItem in
-                Task {
-                    guard let data = try? await newItem?.loadTransferable(type: Data.self) else { return }
-                    imageData = Self.downsized(data) ?? data
-                }
-            }
-        }
-    }
-
-    private func save() {
-        let trimmedName = name.trimmingCharacters(in: .whitespaces)
-        store.updateProfile(name: trimmedName, imageData: imageData)
-        if let imageData {
-            Task { await store.uploadAndSetAvatar(imageData) }
-        }
-        dismiss()
-    }
-
-    /// Re-encodes a picked photo down to a modest size so it stays small in storage.
-    private static func downsized(_ data: Data) -> Data? {
-        guard let image = UIImage(data: data) else { return nil }
-        let maxDimension: CGFloat = 512
-        let longestSide = max(image.size.width, image.size.height)
-        let scale = longestSide > maxDimension ? maxDimension / longestSide : 1
-        let newSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-        let renderer = UIGraphicsImageRenderer(size: newSize)
-        let resized = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: newSize)) }
-        return resized.jpegData(compressionQuality: 0.8)
-    }
-}
-
-/// The user header card at the top of the settings screen.
-struct ProfileCard: View {
-    let name: String
-    let email: String
-    var imageData: Data? = nil
-
-    private var initials: String {
-        let parts = name.split(separator: " ")
-        return String(parts.prefix(2).compactMap(\.first)).uppercased()
-    }
-
-    var body: some View {
-        HStack(spacing: 14) {
-            ProfileAvatar(imageData: imageData, initials: initials, size: 56)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(name)
-                    .font(.title3.weight(.semibold))
-                Text(email)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-        }
-        .padding(16)
-        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 24))
-    }
-}
-
-/// A titled group of settings rows rendered inside a Liquid Glass container.
-struct SettingsSection<Content: View>: View {
-    let title: LocalizedStringKey
-    @ViewBuilder let content: Content
-
-    init(_ title: LocalizedStringKey, @ViewBuilder content: () -> Content) {
-        self.title = title
-        self.content = content()
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(.headline)
-                .foregroundStyle(.secondary)
-                .padding(.leading, 4)
-
-            GlassEffectContainer(spacing: 12) {
-                VStack(spacing: 12) {
-                    content
-                }
-            }
-        }
-    }
-}
-
-/// A single tappable settings row with a colored icon badge and optional trailing value.
-struct SettingsRow: View {
-    let icon: String
-    let tint: Color
-    // LocalizedStringKey (not String): `Text(someString)` renders verbatim and skips
-    // localization, so row titles must come through as keys to pick up translations.
-    let title: LocalizedStringKey
-    var value: String? = nil
-    var action: (() -> Void)? = nil
-
-    var body: some View {
-        Button {
-            action?()
-        } label: {
-            HStack(spacing: 14) {
-                Image(systemName: icon)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(tint)
-                    .frame(width: 38, height: 38)
-                    .background(tint.opacity(0.18), in: .circle)
-
-                Text(title)
-                    .font(.body)
-                    .foregroundStyle(.primary)
-
-                Spacer()
-
-                if let value {
-                    Text(value)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-
-                Image(systemName: "chevron.right")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
-        }
-        .buttonStyle(.plain)
-        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 20))
     }
 }
 

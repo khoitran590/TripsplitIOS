@@ -462,15 +462,15 @@ struct AuthView: View {
         var title: String {
             switch self {
             case .signIn: "Welcome back"
-            case .signUp: "Create account"
+            case .signUp: "Create an account"
             case .forgot: "Reset password"
             }
         }
 
         var action: String {
             switch self {
-            case .signIn: "Log In"
-            case .signUp: "Sign Up"
+            case .signIn: "Login"
+            case .signUp: "Sign up"
             case .forgot: "Send reset link"
             }
         }
@@ -490,98 +490,109 @@ struct AuthView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 20) {
-                header
+            VStack(spacing: 28) {
+                brandHeader
 
-                if mode != .forgot {
-                    Picker("Mode", selection: $mode) {
-                        Text("Log In").tag(Mode.signIn)
-                        Text("Sign Up").tag(Mode.signUp)
-                    }
-                    .pickerStyle(.segmented)
-                }
-
-                formCard
-
-                if let infoMessage {
-                    banner(infoMessage, icon: "checkmark.circle.fill", color: Color(hex: 0x10B981))
-                }
-                if let errorMessage {
-                    banner(errorMessage, icon: "exclamationmark.triangle.fill", color: Color(hex: 0xEF4444))
-                }
-
-                primaryButton
-                secondaryLinks
+                card
             }
             .padding()
-            .padding(.top, 12)
+            .padding(.top, 24)
             .padding(.bottom, 80) // Clearance for the floating dock.
             .animation(.snappy, value: mode)
         }
     }
 
-    private var header: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "lock.shield.fill")
-                .font(.system(size: 40, weight: .semibold))
+    /// The app mark above the card, mirroring the reference's "Product Inc." lockup.
+    private var brandHeader: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "airplane.departure")
+                .font(.system(size: 26, weight: .semibold))
                 .foregroundStyle(.white)
-                .frame(width: 76, height: 76)
+                .frame(width: 58, height: 58)
                 .background(
                     LinearGradient(colors: [Color(hex: 0x818CF8), Color(hex: 0x4F46E5)],
                                    startPoint: .topLeading, endPoint: .bottomTrailing),
-                    in: .circle
+                    in: .rect(cornerRadius: 16)
                 )
-            Text(LocalizedStringKey(mode.title)).font(.title2.bold())
-            Text(LocalizedStringKey(subtitle)).font(.subheadline).foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+            Text("TripSplit")
+                .font(.headline)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
+        .padding(.top, 12)
     }
 
-    private var subtitle: String {
-        switch mode {
-        case .signIn: "Log in to access your settings."
-        case .signUp: "Sign up to get started."
-        case .forgot: "Enter your email and we'll send a reset link."
-        }
-    }
+    /// The single centered card: title, subtitle, fields, primary action, and the
+    /// sign-in/sign-up switch link at the bottom.
+    private var card: some View {
+        VStack(spacing: 16) {
+            VStack(spacing: 6) {
+                Text(LocalizedStringKey(mode.title))
+                    .font(.title.bold())
+                Text(LocalizedStringKey(subtitle))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(.bottom, 8)
 
-    private var formCard: some View {
-        VStack(spacing: 14) {
-            field(icon: "envelope.fill", placeholder: "Email", text: $email, isSecure: false)
+            field(placeholder: "name@company.com", text: $email, isSecure: false)
                 .textContentType(.emailAddress)
                 .keyboardType(.emailAddress)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
 
             if mode != .forgot {
-                field(icon: "lock.fill", placeholder: "Password", text: $password, isSecure: true)
+                field(placeholder: mode == .signUp ? "Create a password" : "Enter your password",
+                      text: $password, isSecure: true)
                     .textContentType(mode == .signUp ? .newPassword : .password)
             }
+
+            if let infoMessage {
+                banner(infoMessage, icon: "checkmark.circle.fill", color: Color(hex: 0x10B981))
+            }
+            if let errorMessage {
+                banner(errorMessage, icon: "exclamationmark.triangle.fill", color: Color(hex: 0xEF4444))
+            }
+
+            primaryButton
+
+            if mode == .signIn {
+                Button("Forgot password?") { switchMode(.forgot) }
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            switchModeFooter
+                .padding(.top, 8)
         }
-        .padding(18)
+        .padding(24)
         .frame(maxWidth: .infinity)
-        .glassEffect(.regular, in: .rect(cornerRadius: 24))
+        .glassEffect(.regular, in: .rect(cornerRadius: 28))
     }
 
-    private func field(icon: String, placeholder: LocalizedStringKey, text: Binding<String>, isSecure: Bool) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon)
-                .foregroundStyle(Color(hex: 0x6366F1))
-                .frame(width: 22)
-            Group {
-                if isSecure {
-                    SecureField(placeholder, text: text)
-                } else {
-                    TextField(placeholder, text: text)
-                }
-            }
-            .font(.subheadline)
+    private var subtitle: String {
+        switch mode {
+        case .signIn: "Sign in to your account"
+        case .signUp: "Start splitting trip expenses with friends"
+        case .forgot: "Enter your email and we'll send a reset link."
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .background(.secondary.opacity(0.12), in: .rect(cornerRadius: 12))
+    }
+
+    private func field(placeholder: LocalizedStringKey, text: Binding<String>, isSecure: Bool) -> some View {
+        Group {
+            if isSecure {
+                SecureField(placeholder, text: text)
+            } else {
+                TextField(placeholder, text: text)
+            }
+        }
+        .font(.body)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(.secondary.opacity(0.1), in: .rect(cornerRadius: 14))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .strokeBorder(.secondary.opacity(0.25), lineWidth: 1)
+        )
     }
 
     private var primaryButton: some View {
@@ -593,24 +604,36 @@ struct AuthView: View {
                     .foregroundStyle(.white)
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
+            .padding(.vertical, 15)
         }
         .buttonStyle(.plain)
-        .glassEffect(.regular.tint(Color(hex: 0x4F46E5)).interactive(), in: .capsule)
+        .glassEffect(.regular.tint(Color(hex: 0x4F46E5)).interactive(), in: .rect(cornerRadius: 14))
         .disabled(!canSubmit || isWorking)
         .opacity(canSubmit && !isWorking ? 1 : 0.5)
     }
 
+    /// "Don't have an account? Sign up" / "Already have an account? Login".
     @ViewBuilder
-    private var secondaryLinks: some View {
+    private var switchModeFooter: some View {
         switch mode {
         case .signIn:
-            Button("Forgot password?") { switchMode(.forgot) }
-                .font(.subheadline)
+            HStack(spacing: 5) {
+                Text("Don't have an account?")
+                    .foregroundStyle(.secondary)
+                Button("Sign up") { switchMode(.signUp) }
+                    .fontWeight(.semibold)
+            }
+            .font(.subheadline)
         case .signUp:
-            EmptyView()
+            HStack(spacing: 5) {
+                Text("Already have an account?")
+                    .foregroundStyle(.secondary)
+                Button("Login") { switchMode(.signIn) }
+                    .fontWeight(.semibold)
+            }
+            .font(.subheadline)
         case .forgot:
-            Button("Back to log in") { switchMode(.signIn) }
+            Button("Back to login") { switchMode(.signIn) }
                 .font(.subheadline)
         }
     }
