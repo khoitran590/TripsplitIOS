@@ -1034,8 +1034,12 @@ final class TripStore {
         guard let accessToken, let uuid = Self.userID(fromJWT: accessToken) else {
             // Signed out — clear in-memory profile so the next user starts blank.
             resetProfile()
+            feedPostsByTrip = [:]
             return
         }
+        // Identity changed: drop cached feeds so a different account never sees the
+        // previous user's loaded posts.
+        if currentUser.id != uuid { feedPostsByTrip = [:] }
         currentUser.id = uuid
         // Load this specific user's saved profile (name, photo, avatarURL) keyed to their UUID.
         let stored = Self.loadProfile(for: uuid)
@@ -1223,7 +1227,9 @@ final class TripStore {
         }
     }
 
-    private func authorizedAccessToken(requireServerAccepted: Bool = false) async throws -> String? {
+    // Internal (not private): the trip-feed extension in FeedFeature.swift runs its
+    // repository calls through the same token validation/refresh pipeline.
+    func authorizedAccessToken(requireServerAccepted: Bool = false) async throws -> String? {
         // Reuse the stored token only while it's a real, non-expired user JWT. Sending an
         // expired/malformed one lets the request reach Postgres as the anonymous role,
         // where RLS rejects the write with a 403 (auth.uid() is null) — the failure mode
@@ -1267,7 +1273,7 @@ final class TripStore {
         return refreshed
     }
 
-    private func withFreshTokenIfNeeded<T>(
+    func withFreshTokenIfNeeded<T>(
         initialToken: String,
         operation: (String) async throws -> T
     ) async throws -> T {
@@ -1354,6 +1360,14 @@ final class TripStore {
         trips[index].comments[expenseID.uuidString]?.removeAll { $0.id == commentID }
         persist(trips[index])
     }
+
+    // MARK: Feed state
+
+    /// Feed posts per trip, newest first. Posts live in their own `trip_feed_posts`
+    /// table (see `FeedFeature.swift`), loaded on demand when the Feed tab opens and
+    /// mutated optimistically by the feed methods in that file. State lives here (not
+    /// in the extension) because extensions can't add storage to an @Observable class.
+    var feedPostsByTrip: [Trip.ID: [FeedPost]] = [:]
 }
 
 // MARK: - Trips repository (Supabase PostgREST)
@@ -1587,7 +1601,7 @@ let memberPalette: [UInt32] = [0x10B981, 0xF59E0B, 0xEC4899, 0x3B82F6, 0x8B5CF6,
 
 /// Prepares user-picked images for upload/display without keeping full-resolution originals
 /// around in SwiftUI state. ImageIO thumbnails avoid a large decode for camera-roll photos.
-private enum UploadImagePreparation {
+enum UploadImagePreparation {
     static func preparedImage(
         from data: Data,
         maxPixelSize: Int,
@@ -2286,6 +2300,11 @@ struct TripDetailView: View {
     @State private var inviteLink: URL?
     @State private var isInviting = false
     @State private var isGeneratingLink = false
+    @State private var detailTab: TripDetailTab = .overview
+
+    private enum TripDetailTab: String, CaseIterable {
+        case overview, feed
+    }
 
     private var trip: Trip? { store.trip(tripID) }
 
@@ -2304,13 +2323,19 @@ struct TripDetailView: View {
                             VStack(spacing: 0) {
                                 heroHeader(trip)
                                 VStack(spacing: 18) {
-                                    tripDetailsCard(trip)
-                                    budgetOverviewCard(trip)
-                                    settleCard(trip).id("settle")
-                                    membersCard(trip)
-                                    expensesCard(trip)
-                                    if !trip.deletedExpenses.isEmpty {
-                                        recentlyDeletedCard(trip)
+                                    detailTabPicker
+                                    switch detailTab {
+                                    case .overview:
+                                        tripDetailsCard(trip)
+                                        budgetOverviewCard(trip)
+                                        settleCard(trip).id("settle")
+                                        membersCard(trip)
+                                        expensesCard(trip)
+                                        if !trip.deletedExpenses.isEmpty {
+                                            recentlyDeletedCard(trip)
+                                        }
+                                    case .feed:
+                                        TripFeedView(tripID: tripID)
                                     }
                                 }
                                 .padding()
@@ -2321,6 +2346,7 @@ struct TripDetailView: View {
                         .ignoresSafeArea(edges: .top)
                         .onChange(of: scrollToSettle) { _, shouldScroll in
                             guard shouldScroll else { return }
+                            detailTab = .overview
                             withAnimation(.snappy) { proxy.scrollTo("settle", anchor: .top) }
                             scrollToSettle = false
                         }
@@ -2439,6 +2465,34 @@ struct TripDetailView: View {
         }
         .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: .capsule)
+    }
+
+    // MARK: Detail tabs
+
+    private var detailTabPicker: some View {
+        HStack(spacing: 8) {
+            detailTabButton(.overview, title: "Overview", icon: "list.bullet.rectangle")
+            detailTabButton(.feed, title: "Feed", icon: "photo.on.rectangle.angled")
+        }
+    }
+
+    private func detailTabButton(_ tab: TripDetailTab, title: LocalizedStringKey, icon: String) -> some View {
+        Button {
+            withAnimation(.snappy) { detailTab = tab }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: icon).font(.caption.weight(.semibold))
+                Text(title).font(.subheadline.weight(.semibold))
+            }
+            .foregroundStyle(detailTab == tab ? Color.white : .secondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(
+                detailTab == tab ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Theme.fieldBackground),
+                in: .capsule
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: Detail cards
@@ -4511,7 +4565,11 @@ struct TripCoverView: View {
     ]
 
     private var palette: [Color] {
-        let index = abs(trip.id.uuidString.hashValue) % Self.palettes.count
+        // Seed from raw UUID bytes, not `hashValue`: String hashing is seeded per launch,
+        // so hashValue-based selection re-rolled every cover's gradient on each run (and
+        // hashed the string on every render). Byte math is stable and effectively free.
+        let bytes = trip.id.uuid
+        let index = Int(bytes.0 ^ bytes.7 ^ bytes.15) % Self.palettes.count
         return Self.palettes[index].map { Color(hex: $0) }
     }
 

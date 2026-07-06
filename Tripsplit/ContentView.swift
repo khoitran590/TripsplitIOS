@@ -5,6 +5,17 @@ import PhotosUI
 import UIKit
 
 @main struct MyApp: App {
+    init() {
+        // AsyncImage loads covers/avatars/receipts/feed photos through URLSession.shared,
+        // whose default cache is tiny (512 KB memory). Signed storage URLs stay stable for
+        // ~50 minutes (TripStore.signedURLCache), so a properly sized shared URLCache turns
+        // repeat views of the same image into instant cache hits instead of re-downloads.
+        URLCache.shared = URLCache(
+            memoryCapacity: 64 * 1024 * 1024,
+            diskCapacity: 256 * 1024 * 1024
+        )
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()
