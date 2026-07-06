@@ -36,13 +36,7 @@ struct HomeScreen: View {
                 // Animate the sync banner in/out instead of snapping the whole layout.
                 .animation(.snappy, value: store.syncState)
             }
-            .background {
-                LinearGradient(
-                    colors: Theme.homeGradient,
-                    startPoint: .top, endPoint: .bottom
-                )
-                .ignoresSafeArea()
-            }
+            .background { AppBackground() }
             .navigationTitle("Hi, \(greetingName)")
             .refreshable {
                 await store.loadFromCloud()
@@ -960,10 +954,7 @@ struct TripPickerSheet: View {
                 }
                 .padding()
             }
-            .background {
-                LinearGradient(colors: Theme.homeGradient, startPoint: .top, endPoint: .bottom)
-                    .ignoresSafeArea()
-            }
+            .background { AppBackground() }
             .navigationTitle("Choose a Trip")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

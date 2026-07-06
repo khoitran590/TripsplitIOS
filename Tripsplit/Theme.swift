@@ -103,52 +103,81 @@ enum AppTheme: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Home dashboard backdrop, light and dark variants per theme.
+    /// App-wide backdrop wash, light and dark variants per theme. Three stops:
+    /// the theme's tint at the top, a faint mid, and a near-neutral base at the
+    /// bottom shared across themes so the dock area reads the same on every tab.
     var homeGradient: [Color] {
         switch self {
         case .classic:
             [
-                Color(light: 0xCCE0FF, dark: 0x0D1B2E),
-                Color(light: 0xCCF0F5, dark: 0x0A1525),
-                Color(light: 0xEBD0F0, dark: 0x070E18),
-                Color(light: 0xFAD0DE, dark: 0x04070C),
+                Color(light: 0xDCE7FF, dark: 0x151A2E),
+                Color(light: 0xEDF1FD, dark: 0x0F1220),
+                Color(light: 0xF8F8FC, dark: 0x0A0B12),
             ]
         case .matcha:
             [
-                Color(light: 0xD8E8CC, dark: 0x142010),
-                Color(light: 0xE4F0D4, dark: 0x101A0C),
-                Color(light: 0xF0F5E1, dark: 0x0B1208),
-                Color(light: 0xFAF7E8, dark: 0x060A04),
+                Color(light: 0xDEEBD2, dark: 0x17220F),
+                Color(light: 0xEDF3E3, dark: 0x10160B),
+                Color(light: 0xF8F9F3, dark: 0x0A0D07),
             ]
         case .butter:
             [
-                Color(light: 0xFFE9B8, dark: 0x241B08),
-                Color(light: 0xFFF1CC, dark: 0x1C1506),
-                Color(light: 0xFFF7E0, dark: 0x140F04),
-                Color(light: 0xFFFBEF, dark: 0x0A0702),
+                Color(light: 0xFBEBC4, dark: 0x241C0A),
+                Color(light: 0xFDF4DD, dark: 0x181307),
+                Color(light: 0xFDFAF1, dark: 0x0D0B05),
             ]
         case .chocolate:
             [
-                Color(light: 0xEBD9C8, dark: 0x241710),
-                Color(light: 0xF2E4D4, dark: 0x1C120C),
-                Color(light: 0xF8EEE2, dark: 0x140D08),
-                Color(light: 0xFCF6EE, dark: 0x0A0604),
+                Color(light: 0xF0E1D0, dark: 0x241910),
+                Color(light: 0xF6ECDF, dark: 0x18110B),
+                Color(light: 0xFBF7F1, dark: 0x0D0906),
             ]
         case .gothic:
             [
-                Color(light: 0xD5DCE6, dark: 0x131A26),
-                Color(light: 0xDFE4EC, dark: 0x0F141E),
-                Color(light: 0xE9ECF2, dark: 0x0A0E16),
-                Color(light: 0xF3F4F8, dark: 0x05070B),
+                Color(light: 0xDCE2EA, dark: 0x161C29),
+                Color(light: 0xE9EDF2, dark: 0x0F131C),
+                Color(light: 0xF5F6F9, dark: 0x0A0C11),
             ]
         case .y2k:
             [
-                Color(light: 0xD9D4FF, dark: 0x1A1430),
-                Color(light: 0xE8D4F8, dark: 0x141026),
-                Color(light: 0xF8D4EE, dark: 0x0E0B1C),
-                Color(light: 0xFFE4F0, dark: 0x070510),
+                Color(light: 0xE5DEFF, dark: 0x1E1636),
+                Color(light: 0xF3E4F8, dark: 0x140F25),
+                Color(light: 0xFCF1F7, dark: 0x0C0916),
             ]
         }
+    }
+}
+
+// MARK: - Shared app backdrop
+
+/// The one backdrop every screen sits on: the theme's vertical wash plus two soft
+/// accent glows near the top. Use `.background { AppBackground() }` (or as the base
+/// layer of a `ZStack`) instead of ad-hoc gradients so all tabs and sheets match
+/// and follow the chosen theme in both light and dark mode.
+struct AppBackground: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let theme = ThemeManager.shared.selection
+        // Glows sit brighter over the dark wash than the light one.
+        let glowOpacity = colorScheme == .dark ? 0.16 : 0.22
+        LinearGradient(colors: theme.homeGradient, startPoint: .top, endPoint: .bottom)
+            .overlay(alignment: .topLeading) {
+                glow(theme.accent, opacity: glowOpacity)
+                    .offset(x: -100, y: -140)
+            }
+            .overlay(alignment: .topTrailing) {
+                glow(theme.accentSecondary, opacity: glowOpacity)
+                    .offset(x: 120, y: -60)
+            }
+            .ignoresSafeArea()
+    }
+
+    private func glow(_ color: Color, opacity: Double) -> some View {
+        Circle()
+            .fill(color.opacity(opacity))
+            .frame(width: 320, height: 320)
+            .blur(radius: 90)
     }
 }
 

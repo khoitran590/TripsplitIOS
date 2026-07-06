@@ -1679,19 +1679,16 @@ struct AddTripView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                LinearGradient(
-                    colors: Theme.sheetGradient,
-                    startPoint: .top, endPoint: .bottom
-                )
-                .ignoresSafeArea()
+                AppBackground()
 
                 ScrollView {
                     VStack(spacing: 18) {
-                        coverCard
-                        detailsCard
+                        coverHero
+                        header
+                        whereCard
                         datesCard
                         budgetCard
-                        membersCard
+                        tripmatesCard
                         if let errorMessage {
                             Text(errorMessage)
                                 .font(.caption)
@@ -1700,23 +1697,16 @@ struct AddTripView: View {
                         }
                     }
                     .padding()
-                    .padding(.bottom, 24)
+                    .padding(.bottom, 12)
                 }
             }
-            .navigationTitle("Add Trip")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    if isSaving {
-                        ProgressView()
-                    } else {
-                        Button("Create") { create() }.disabled(!canCreate)
-                    }
-                }
             }
+            .safeAreaInset(edge: .bottom) { startPlanningButton }
             .onChange(of: coverPick) { _, pick in
                 guard let pick else { return }
                 Task {
@@ -1737,8 +1727,10 @@ struct AddTripView: View {
         }
     }
 
-    private var coverCard: some View {
-        TripCard(title: "Cover Photo", icon: "photo.fill") {
+    /// Wanderlog-style full-bleed cover header: the picked photo (or a themed gradient
+    /// placeholder) with a small glass "Add photo" chip floating over its corner.
+    private var coverHero: some View {
+        ZStack(alignment: .bottomTrailing) {
             ZStack {
                 if let coverImage {
                     Image(uiImage: coverImage).resizable().scaledToFill()
@@ -1747,35 +1739,50 @@ struct AddTripView: View {
                         colors: [Theme.accent, Theme.accentSecondary],
                         startPoint: .topLeading, endPoint: .bottomTrailing
                     )
-                    Image(systemName: "photo")
-                        .font(.largeTitle)
-                        .foregroundStyle(.white.opacity(0.7))
+                    Image(systemName: "airplane.departure")
+                        .font(.system(size: 42, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.75))
                 }
             }
-            .frame(height: 150)
+            .frame(height: 170)
             .frame(maxWidth: .infinity)
             .clipped()
-            .clipShape(.rect(cornerRadius: 14))
+            .clipShape(.rect(cornerRadius: 28))
 
             PhotosPicker(selection: $coverPick, matching: .images) {
-                Label(coverImage == nil ? "Add Photo" : "Change Photo", systemImage: "photo.on.rectangle.angled")
-                    .font(.subheadline.weight(.semibold))
+                Label(coverImage == nil ? "Add photo" : "Change photo", systemImage: "camera.fill")
+                    .font(.footnote.weight(.semibold))
                     .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 11)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
             }
             .buttonStyle(.plain)
-            .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+            .glassEffect(.regular.tint(.black.opacity(0.35)).interactive(), in: .capsule)
+            .padding(12)
         }
     }
 
-    private var detailsCard: some View {
-        TripCard(title: "Trip details", icon: "suitcase.fill") {
-            TextField("Trip name", text: $name)
-                .font(.title3.weight(.semibold))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Plan a new trip")
+                .font(.system(.largeTitle, design: .rounded).weight(.bold))
+            Text("Name it, pick a place, and bring your crew.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var whereCard: some View {
+        TripCard(title: "Where to?", icon: "mappin.and.ellipse") {
+            HStack(spacing: 10) {
+                Image(systemName: "suitcase.fill").foregroundStyle(.secondary)
+                TextField("Trip name (e.g. Summer in Tokyo)", text: $name)
+                    .font(.body.weight(.semibold))
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
 
             LocationField(text: $location)
 
@@ -1800,9 +1807,10 @@ struct AddTripView: View {
     }
 
     private var datesCard: some View {
-        TripCard(title: "Dates", icon: "calendar") {
+        TripCard(title: "When?", icon: "calendar") {
             Toggle("Add travel dates", isOn: $hasDates.animation(.snappy))
                 .font(.subheadline.weight(.medium))
+                .tint(Theme.accent)
             if hasDates {
                 DatePicker("Start", selection: $startDate, displayedComponents: .date)
                     .font(.subheadline)
@@ -1810,6 +1818,33 @@ struct AddTripView: View {
                     .font(.subheadline)
             }
         }
+    }
+
+    /// The pinned bottom call-to-action, mirroring Wanderlog's "Start planning".
+    private var startPlanningButton: some View {
+        Button {
+            create()
+        } label: {
+            Group {
+                if isSaving {
+                    ProgressView().tint(.white)
+                } else {
+                    Label("Start planning", systemImage: "arrow.right")
+                        .labelStyle(.titleAndIcon)
+                        .font(.headline)
+                }
+            }
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 15)
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+        .disabled(!canCreate)
+        .opacity(canCreate ? 1 : 0.5)
+        .padding(.horizontal)
+        .padding(.top, 6)
+        .padding(.bottom, 10)
     }
 
     private var budgetCard: some View {
@@ -1829,31 +1864,28 @@ struct AddTripView: View {
         }
     }
 
-    private var membersCard: some View {
-        TripCard(title: "Members", icon: "person.2.fill") {
-            HStack {
-                avatar(store.currentUser, size: 30)
-                Text(store.currentUser.name.isEmpty ? "You (owner)" : "\(store.currentUser.name) (You · owner)")
-                    .font(.subheadline.weight(.medium))
-                Spacer()
-            }
+    private var tripmatesCard: some View {
+        TripCard(title: "Tripmates", icon: "person.2.fill") {
+            Text("You can invite people with an account after the trip is created.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
 
-            ForEach(members) { member in
-                HStack {
-                    avatar(member, size: 30)
-                    Text(member.name).font(.subheadline.weight(.medium))
-                    Spacer()
-                    Button {
-                        members.removeAll { $0.id == member.id }
-                    } label: {
-                        Image(systemName: "minus.circle.fill").foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
+            // Everyone on the trip so far, as removable chips (owner first, fixed).
+            FlowLayout(spacing: 8) {
+                if store.currentUser.name.isEmpty {
+                    tripmateChip(person: store.currentUser, label: Text("You"), removable: false)
+                } else {
+                    tripmateChip(person: store.currentUser, label: Text("\(store.currentUser.name) (You)"), removable: false)
+                }
+                ForEach(members) { member in
+                    tripmateChip(person: member, label: Text(verbatim: member.name), removable: true)
                 }
             }
 
             HStack(spacing: 10) {
-                TextField("Add member name", text: $memberName)
+                TextField("Add tripmate name", text: $memberName)
+                    .submitLabel(.done)
+                    .onSubmit { addMember() }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
@@ -1868,6 +1900,29 @@ struct AddTripView: View {
                 .disabled(memberName.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
+    }
+
+    private func tripmateChip(person: Person, label: Text, removable: Bool) -> some View {
+        HStack(spacing: 6) {
+            avatar(person, size: 24)
+            label
+                .font(.footnote.weight(.medium))
+                .lineLimit(1)
+            if removable {
+                Button {
+                    members.removeAll { $0.id == person.id }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.leading, 5)
+        .padding(.trailing, removable ? 8 : 11)
+        .padding(.vertical, 5)
+        .background(person.color.opacity(0.12), in: .capsule)
     }
 
     private func addMember() {

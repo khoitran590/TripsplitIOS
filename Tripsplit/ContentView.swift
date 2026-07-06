@@ -541,14 +541,7 @@ struct RecScreen: View {
                 .padding()
                 .padding(.bottom, 80)
             }
-            .background {
-                LinearGradient(
-                    colors: [Color(.systemPurple).opacity(0.22), Color(.systemBackground)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea()
-            }
+            .background { AppBackground() }
             .navigationTitle("Explore")
             .navigationDestination(for: String.self) { id in
                 if let destination = Destination.all.first(where: { $0.id == id }) {
@@ -1102,14 +1095,7 @@ struct DestinationDetailView: View {
                 .padding(.bottom, 80)
             }
         }
-        .background {
-            LinearGradient(
-                colors: [Color(.systemPurple).opacity(0.18), Color(.systemBackground)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
-        }
+        .background { AppBackground() }
         .navigationTitle(destination.city)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -1293,24 +1279,12 @@ struct SettingsScreen: View {
             if auth.isAuthenticated {
                 NavigationStack {
                     settingsContent
-                        .background {
-                            LinearGradient(
-                                colors: [Color(.systemIndigo).opacity(0.25), Color(.systemBackground)],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                            .ignoresSafeArea()
-                        }
+                        .background { AppBackground() }
                         .navigationTitle("Profile")
                 }
             } else {
                 ZStack {
-                    LinearGradient(
-                        colors: [Color(.systemIndigo).opacity(0.25), Color(.systemBackground)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .ignoresSafeArea()
+                    AppBackground()
 
                     AuthView()
                 }
