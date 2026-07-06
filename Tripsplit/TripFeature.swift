@@ -1632,7 +1632,12 @@ private enum UploadImagePreparation {
                 if longestSide > maxPixelSize {
                     let scale = maxPixelSize / longestSide
                     let newSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-                    let renderer = UIGraphicsImageRenderer(size: newSize)
+                    // scale = 1 so `newSize` IS the pixel size — the renderer default is
+                    // the screen scale (3x on device), which would triple the dimensions
+                    // and can OOM-kill the app on a full-size photo.
+                    let format = UIGraphicsImageRendererFormat.default()
+                    format.scale = 1
+                    let renderer = UIGraphicsImageRenderer(size: newSize, format: format)
                     output = renderer.image { _ in
                         image.draw(in: CGRect(origin: .zero, size: newSize))
                     }

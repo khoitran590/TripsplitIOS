@@ -20,6 +20,12 @@ enum ReceiptAIConfig {
         "\(SupabaseConfig.url)/functions/v1/parse-receipt"
     }
 
+    /// The Edge Function endpoint that proxies Google Cloud Vision OCR (the key lives
+    /// server-side as the Supabase secret `GOOGLE_VISION_API_KEY`).
+    nonisolated static var ocrEndpoint: String {
+        "\(SupabaseConfig.url)/functions/v1/ocr-receipt"
+    }
+
     /// True when the backend is configured; scanning still requires a signed-in user's
     /// token (passed to `ReceiptScanner.scan`) before it will attempt the LLM step.
     nonisolated static var isConfigured: Bool { SupabaseConfig.isConfigured }
@@ -87,14 +93,14 @@ struct ParsedReceipt: Decodable {
     }
 }
 
-// MARK: - Receipt LLM parser (Gemini free tier) — currently unused
+// MARK: - Receipt LLM parser (Gemini via Edge Function)
 
 /// Turns a receipt image into a structured `ParsedReceipt` via Gemini. Network I/O only —
 /// no observable state — so it's a plain namespace with static async calls.
 ///
-/// NOTE: no longer called by `ReceiptScanner.scan` — receipt scanning now runs fully
-/// on-device via Vision OCR, which proved more reliable at itemizing. Kept (with the
-/// `parse-receipt` Edge Function) in case a server-side parse is reintroduced.
+/// Called by `ReceiptScanner.scan` in `.onlineBest` mode: the app sends the photo plus the
+/// on-device Vision OCR text so Gemini can cross-check both instead of starting from
+/// scratch. The Gemini key never leaves the `parse-receipt` Edge Function.
 enum ReceiptParser {
     private static let maxImageBytes = 4_000_000
     private static let maxImageDimension: CGFloat = 2_200
@@ -153,8 +159,8 @@ enum ReceiptParser {
     }
 
     /// Compresses the picked receipt enough for a JSON request while preserving enough
-    /// detail for Gemini to read item rows.
-    private static func jpegData(for image: UIImage) -> Data? {
+    /// detail for the OCR/LLM services to read item rows. Shared with `CloudOCR`.
+    static func jpegData(for image: UIImage) -> Data? {
         let candidates = [image, resizedImageIfNeeded(image)].compactMap { $0 }
         for candidate in candidates {
             for quality in stride(from: 0.82, through: 0.42, by: -0.10) {
@@ -177,14 +183,84 @@ enum ReceiptParser {
 
         let scale = maxImageDimension / longestSide
         let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-        let renderer = UIGraphicsImageRenderer(size: size)
+        // scale = 1 so `size` IS the pixel size — the default (screen scale, 3x on
+        // device) would triple every dimension and defeat the downsizing.
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
         return renderer.image { _ in
             image.draw(in: CGRect(origin: .zero, size: size))
         }
     }
 }
 
-// MARK: - Receipt scanning (hybrid: Gemini image parse + on-device OCR fallback)
+// MARK: - Cloud OCR (Google Cloud Vision via Edge Function)
+
+/// Calls the `ocr-receipt` Edge Function, which runs the receipt image through Google
+/// Cloud Vision OCR with the API key held server-side (hard rule: no keys in the app
+/// bundle). Returns the recognized text already grouped into receipt rows (name and
+/// price merged onto one line), ready for `ReceiptScanner.parseItems`.
+enum CloudOCR {
+    /// Runs server-side OCR on the receipt and returns its text rows, top to bottom.
+    /// `accessToken` is the signed-in user's Supabase JWT.
+    static func recognizeRows(_ image: UIImage, accessToken: String) async throws -> [String] {
+        guard ReceiptAIConfig.isConfigured, let url = URL(string: ReceiptAIConfig.ocrEndpoint) else {
+            throw ReceiptScanError.notConfigured
+        }
+        guard let jpeg = ReceiptParser.jpegData(for: image) else {
+            throw ReceiptScanError.invalidResponse
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(SupabaseConfig.anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "imageBase64": jpeg.base64EncodedString(),
+            "mimeType": "image/jpeg",
+        ])
+
+        let (data, response) = try await BackendSecurity.secureSession.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw ReceiptScanError.invalidResponse
+        }
+        switch http.statusCode {
+        case 200:
+            struct OCRResponse: Decodable {
+                let text: String?
+                let lines: [String]?
+            }
+            let decoded = try JSONDecoder().decode(OCRResponse.self, from: data)
+            if let lines = decoded.lines, !lines.isEmpty { return lines }
+            // Older deployments may return only the raw text blob; split it into rows.
+            return (decoded.text ?? "")
+                .components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+        case 401, 403:
+            throw ReceiptScanError.unauthorized
+        case 429:
+            throw ReceiptScanError.rateLimited
+        default:
+            let detail = ReceiptStorage.messageField(from: String(data: data, encoding: .utf8) ?? "")
+            throw ReceiptScanError.apiError(detail ?? "HTTP \(http.statusCode)")
+        }
+    }
+}
+
+// MARK: - Receipt scanning (hybrid: cloud OCR + Gemini primary, on-device Vision fallback)
+
+/// How `ReceiptScanner.scan` balances quality against privacy/latency.
+enum ReceiptScanMode {
+    /// On-device Apple Vision OCR only — no network, no sign-in, fastest and fully private.
+    case offlineFast
+    /// Best understanding: Google Cloud Vision OCR runs first (server-side key, via the
+    /// `ocr-receipt` Edge Function), then the image and that OCR text go to Gemini via
+    /// the `parse-receipt` Edge Function. On-device Apple Vision is the fallback whenever
+    /// the network steps fail or return nothing usable.
+    case onlineBest
+}
 
 /// The outcome of scanning a receipt: the purchasable line items plus any tax/tip rows
 /// detected separately so they can be allocated across the items.
@@ -192,17 +268,23 @@ struct ReceiptScanResult {
     var items: [ReceiptItem] = []
     var tax: Double? = nil
     var tip: Double? = nil
+    /// The subtotal as printed on the receipt (items only), when a labeled row was read.
+    var printedSubtotal: Double? = nil
+    /// The grand total as printed on the receipt, when known. Ground truth for
+    /// `reconcileAgainstPrintedTotals` — the parsed items must add up to it.
+    var printedTotal: Double? = nil
 
     /// Whether the scan produced anything worth showing. Used by the scan orchestrator to
-    /// decide if the Vision main path succeeded or the Gemini fallback should run.
+    /// decide if a Gemini result should be preferred over the local Vision parse.
     var isUsable: Bool { !items.isEmpty }
 }
 
-/// Reads line items off a receipt photo entirely on-device: Apple's Vision OCR extracts
-/// the text rows, and the heuristic parser pairs names with prices and pulls out tax/tip.
-/// No network, no sign-in requirement, and no LLM variability — testing showed this to be
-/// more reliable at itemizing receipts than the Gemini path (`ReceiptParser`, retained
-/// below but no longer called). The results are an editable list the user can correct.
+/// Reads line items off a receipt photo. In `.onlineBest` mode the OCR is Google Cloud
+/// Vision (`CloudOCR`, key server-side) and the structured understanding is Gemini
+/// (`ReceiptParser`, key server-side), with the on-device Apple Vision pipeline (deskew,
+/// enhancement, text rows, heuristic name/price parser) as the offline/failure fallback
+/// and the sole engine in `.offlineFast`. The results are an editable list the user can
+/// correct.
 enum ReceiptScanner {
 
     /// Words that mark a line as a total/tax/payment row rather than a purchasable item.
@@ -212,39 +294,87 @@ enum ReceiptScanner {
         "amount", "due", "payment", "tendered", "auth", "approval",
     ]
 
+    /// Lines that are per-item metadata, not purchases — they end in a number, so without
+    /// this filter they parse as bogus items (e.g. H Mart prints "Regular Price 12.99 ,
+    /// You saved 5.00" under every discounted item, and a member-number row under the
+    /// membership line).
+    private static let metaLineKeywords = [
+        "you saved", "regular price", "member", "cashier", "price/lb", "reg price",
+    ]
+
     /// Keywords identifying a tax row, kept apart so the amount can be allocated.
     private static let taxKeywords = ["tax", "vat", "gst", "hst", "pst"]
     /// Keywords identifying a tip / gratuity row.
     private static let tipKeywords = ["tip", "gratuity", "service charge", "service chg"]
 
-    /// Scans a receipt image into line items plus tax/tip. Two engines, tried in order:
+    /// Scans a receipt image into line items plus tax/tip.
     ///
-    /// 1. **Apple Vision (main)** — on-device OCR, no network or sign-in required, and the
-    ///    most reliable at itemizing receipts. Its result is used whenever it finds anything.
-    /// 2. **Gemini (fallback)** — only when Vision comes back empty and a signed-in user's
-    ///    token is available: the image is sent to the `parse-receipt` Edge Function (which
-    ///    holds the Gemini key server-side) and its structured receipt is used instead.
+    /// `.onlineBest` (the default, requires a signed-in user's token) tries, in order:
     ///
-    /// `accessToken` is the signed-in user's Supabase JWT; without it the Gemini fallback is
-    /// skipped and the (empty) Vision result is returned.
-    static func scan(_ image: UIImage, accessToken: String? = nil) async -> ReceiptScanResult {
-        let vision = await visionScan(image)
-        if vision.isUsable { return vision }
+    /// 1. **Google Cloud Vision OCR** via the `ocr-receipt` Edge Function (key server-side)
+    ///    — the best raw text extraction, returned already grouped into receipt rows.
+    /// 2. **Gemini** via the `parse-receipt` Edge Function, given the image *plus* the OCR
+    ///    text (from step 1, or on-device Apple Vision if step 1 failed) so it can
+    ///    cross-check both. Its structured receipt wins when usable.
+    /// 3. The **heuristic parse of the Cloud Vision rows** when Gemini fails.
+    /// 4. **On-device Apple Vision** as the final fallback — also the sole engine in
+    ///    `.offlineFast` mode or when no token is available.
+    ///
+    /// `accessToken` is the signed-in user's Supabase JWT; the Google Cloud Vision and
+    /// Gemini keys never leave their Edge Functions.
+    static func scan(_ image: UIImage,
+                     mode: ReceiptScanMode = .onlineBest,
+                     accessToken: String? = nil) async -> ReceiptScanResult {
+        // Bake any EXIF rotation into the pixels first: `cgImage` ignores
+        // `imageOrientation`, and Cloud Vision ignores EXIF too — so a library photo
+        // taken in another orientation would otherwise be OCR'd sideways everywhere.
+        let image = normalizedUpright(image)
 
-        // Vision found nothing usable — try the server-side Gemini parse as a fallback.
-        if let accessToken, ReceiptAIConfig.isConfigured,
-           let parsed = try? await ReceiptParser.parse(image: image, accessToken: accessToken) {
-            let mapped = mapToScanResult(parsed)
-            if mapped.isUsable { return mapped }
+        if mode == .onlineBest, let accessToken, ReceiptAIConfig.isConfigured {
+            // 1. Server-side Google Cloud Vision OCR.
+            let cloudRows = (try? await CloudOCR.recognizeRows(image, accessToken: accessToken)) ?? []
+
+            // Only run the on-device pass here if the cloud OCR came back empty — its rows
+            // then stand in as the OCR text for Gemini, and its parse as a ready fallback.
+            var localScan: (result: ReceiptScanResult, rows: [String])?
+            var ocrRows = cloudRows
+            if ocrRows.isEmpty {
+                localScan = await visionScanWithRows(image)
+                ocrRows = localScan?.rows ?? []
+            }
+
+            // 2. Gemini structured parse, cross-checking the photo against the OCR text.
+            let ocrText = ocrRows.joined(separator: "\n")
+            if let parsed = try? await ReceiptParser.parse(
+                image: image,
+                ocrText: ocrText.isEmpty ? nil : ocrText,
+                accessToken: accessToken
+            ) {
+                let mapped = mapToScanResult(parsed)
+                if mapped.isUsable { return mapped }
+            }
+
+            // 3. Heuristic parse of the Cloud Vision rows.
+            let cloudParse = parseItems(from: cloudRows)
+            if cloudParse.isUsable { return cloudParse }
+
+            // 4. On-device result if it already ran; otherwise fall through to run it.
+            if let localScan { return localScan.result }
         }
-        return vision
+        return await visionScan(image)
     }
 
-    /// The on-device Apple Vision OCR pipeline — the main scan engine. Extracts text rows with
-    /// Vision, then pairs names to prices with the heuristic parser, retrying on an enhanced
-    /// copy when the first pass is thin.
+    /// The on-device Apple Vision OCR pipeline. Extracts text rows with Vision, then pairs
+    /// names to prices with the heuristic parser, retrying on an enhanced copy when the
+    /// first pass is thin.
     static func visionScan(_ image: UIImage) async -> ReceiptScanResult {
-        guard let cgImage = image.cgImage else { return ReceiptScanResult() }
+        await visionScanWithRows(image).result
+    }
+
+    /// Like `visionScan`, but also returns the raw OCR rows of the winning pass so the
+    /// caller can ship them to Gemini alongside the image (`.onlineBest` mode).
+    static func visionScanWithRows(_ image: UIImage) async -> (result: ReceiptScanResult, rows: [String]) {
+        guard let cgImage = normalizedUpright(image).cgImage else { return (ReceiptScanResult(), []) }
         // Photos picked from the library arrive un-cropped and skewed (the document
         // camera deskews on capture, the library doesn't). Find the receipt in the frame
         // and perspective-correct it first — OCR accuracy on picked photos improves a lot.
@@ -253,6 +383,7 @@ enum ReceiptScanner {
         // First pass reads the receipt as-photographed.
         let firstRows = await recognizeRows(prepared)
         var best = parseItems(from: firstRows)
+        var bestRows = firstRows
 
         // Faint thermal ink, wrinkles, glare, or something scrawled across the receipt leave
         // the first pass thin. Retry on a grayscale, contrast-boosted, sharpened copy — which
@@ -263,9 +394,43 @@ enum ReceiptScanner {
             let alt = parseItems(from: altRows)
             let altIsBetter = alt.items.count > best.items.count
                 || (alt.items.count == best.items.count && altRows.count > firstRows.count)
-            if altIsBetter { best = alt }
+            if altIsBetter {
+                best = alt
+                bestRows = altRows
+            }
         }
-        return best
+
+        // A receipt lying SIDEWAYS in the frame (a common way to photograph a long
+        // receipt) reads as gibberish upright — Vision doesn't auto-rotate. When the
+        // upright passes found no items, retry telling Vision the image is rotated and
+        // keep whichever orientation actually reads like a receipt.
+        if best.items.isEmpty {
+            for orientation in [CGImagePropertyOrientation.right, .left] {
+                let rows = await recognizeRows(prepared, orientation: orientation)
+                let parsed = parseItems(from: rows)
+                if parsed.items.count > best.items.count
+                    || (best.items.isEmpty && rows.count > bestRows.count) {
+                    best = parsed
+                    bestRows = rows
+                }
+            }
+        }
+        return (best, bestRows)
+    }
+
+    /// Redraws the image so `imageOrientation` is baked into the pixels — a no-op for
+    /// already-upright images.
+    private static func normalizedUpright(_ image: UIImage) -> UIImage {
+        guard image.imageOrientation != .up else { return image }
+        // Render at the image's own scale: the renderer's default is the SCREEN scale
+        // (3x on device), which would blow a 12 MP photo up to a ~9x larger bitmap and
+        // get the app killed for memory.
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = image.scale
+        let renderer = UIGraphicsImageRenderer(size: image.size, format: format)
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: image.size))
+        }
     }
 
     /// Reused across the OCR preprocessing passes — constructing a `CIContext` per call is
@@ -334,7 +499,8 @@ enum ReceiptScanner {
 
     /// Runs Vision text recognition and returns the receipt's rows (name and price merged
     /// onto one line via `groupIntoRows`). Empty on failure.
-    private static func recognizeRows(_ cgImage: CGImage) async -> [String] {
+    private static func recognizeRows(_ cgImage: CGImage,
+                                      orientation: CGImagePropertyOrientation = .up) async -> [String] {
         await withCheckedContinuation { continuation in
             let request = VNRecognizeTextRequest { request, _ in
                 let observations = request.results as? [VNRecognizedTextObservation] ?? []
@@ -354,7 +520,7 @@ enum ReceiptScanner {
                 request.automaticallyDetectsLanguage = true
             }
 
-            let handler = VNImageRequestHandler(cgImage: cgImage, orientation: .up)
+            let handler = VNImageRequestHandler(cgImage: cgImage, orientation: orientation)
             DispatchQueue.global(qos: .userInitiated).async {
                 do {
                     try handler.perform([request])
@@ -382,9 +548,11 @@ enum ReceiptScanner {
         }
         if parsed.tax > 0 { result.tax = SplitEngine.roundToTwo(parsed.tax) }
         if parsed.tip > 0 { result.tip = SplitEngine.roundToTwo(parsed.tip) }
+        if parsed.total > 0 { result.printedTotal = SplitEngine.roundToTwo(parsed.total) }
         // The model occasionally lists the (unlabeled) total as one more item; the same
         // arithmetic check used for the OCR path removes it here too.
         dropUnlabeledTotalRow(&result)
+        reconcileAgainstPrintedTotals(&result)
         return result
     }
 
@@ -451,6 +619,10 @@ enum ReceiptScanner {
 
             let lower = line.lowercased()
 
+            // Discount/meta lines under an item are not purchases, but they end in a
+            // number and would otherwise be parsed as one.
+            if metaLineKeywords.contains(where: { lower.contains($0) }) { continue }
+
             let range = NSRange(line.startIndex..., in: line)
             guard let match = priceRegex.firstMatch(in: line, range: range),
                   let priceRange = Range(match.range(at: 1), in: line) else { continue }
@@ -469,6 +641,13 @@ enum ReceiptScanner {
                 continue
             }
             if nonItemKeywords.contains(where: { lower.contains($0) }) {
+                // Record the printed subtotal/total rows — they're the receipt's own
+                // ground truth, used below to check the items actually add up.
+                if lower.contains("subtotal") || lower.contains("sub total") || lower.contains("sub-total") {
+                    result.printedSubtotal = max(result.printedSubtotal ?? 0, rounded)
+                } else if lower.contains("total") || lower.contains("amount due") || lower.contains("balance") {
+                    result.printedTotal = max(result.printedTotal ?? 0, rounded)
+                }
                 if lower.contains("total") || lower.contains("amount") || lower.contains("balance") {
                     itemSectionEnded = true
                 }
@@ -488,21 +667,62 @@ enum ReceiptScanner {
                 }
                 name.removeSubrange(qtyMatch)
             }
-            // Drop a bare leading count (e.g. "1  Grande Latte" → "Grande Latte").
-            else if let qtyRange = name.range(of: #"^\s*\d{1,3}\s+"#, options: .regularExpression) {
+            // Drop a bare leading count or register item code, optionally preceded by a
+            // single tax-flag letter (e.g. "1  Grande Latte" → "Grande Latte", Costco's
+            // "E 1830455 KS BAGUETTE" → "KS BAGUETTE").
+            else if let qtyRange = name.range(of: #"^\s*(?:[A-Za-z]\s+)?\d{4,}\s+|^\s*\d{1,3}\s+"#,
+                                              options: .regularExpression) {
                 name.removeSubrange(qtyRange)
             }
             name = name.trimmingCharacters(in: CharacterSet(charactersIn: " .-*x×@$€£¥"))
             if name.isEmpty { name = "Item" }
 
-            let unitPrice = SplitEngine.roundToTwo(rounded / Double(unitCount))
-            for _ in 0..<unitCount {
+            // Split the line total into unit prices that sum back EXACTLY to the line
+            // ("10.00 / 3" as 3.34 + 3.33 + 3.33, not 3 × 3.33 = 9.99) so expanding a
+            // multiplier row never drifts the receipt total.
+            let unitPrices = SplitEngine.equalShares(total: rounded, count: unitCount)
+            for unitPrice in unitPrices {
                 result.items.append(ReceiptItem(name: name, price: unitPrice))
             }
         }
 
         dropUnlabeledTotalRow(&result)
+        reconcileAgainstPrintedTotals(&result)
         return result
+    }
+
+    /// Checks the parsed items against the receipt's own printed subtotal/total and
+    /// repairs the two failure modes that make the final amount wrong:
+    ///
+    /// - **Items sum short of the printed amount** (OCR/model missed or misread lines):
+    ///   append a single "Other items" row carrying the shortfall, so the expense total
+    ///   matches what was actually charged and the user can rename/edit the remainder.
+    /// - **Items sum over the printed amount** (a stray non-item row was parsed as a
+    ///   purchase): drop the single item whose price exactly equals the overage.
+    ///
+    /// The items target is the printed subtotal when one was read, otherwise the printed
+    /// grand total minus detected tax/tip. No-op when neither is known.
+    private static func reconcileAgainstPrintedTotals(_ result: inout ReceiptScanResult) {
+        guard !result.items.isEmpty else { return }
+        let target: Double
+        if let subtotal = result.printedSubtotal {
+            target = subtotal
+        } else if let total = result.printedTotal {
+            target = SplitEngine.roundToTwo(total - (result.tax ?? 0) - (result.tip ?? 0))
+        } else {
+            return
+        }
+        guard target > 0 else { return }
+
+        let itemsSum = SplitEngine.roundToTwo(result.items.reduce(0) { $0 + $1.price })
+        let shortfall = SplitEngine.roundToTwo(target - itemsSum)
+
+        if shortfall >= 0.02 {
+            result.items.append(ReceiptItem(name: "Other items", price: shortfall))
+        } else if shortfall <= -0.02,
+                  let overIndex = result.items.firstIndex(where: { abs($0.price + shortfall) <= 0.02 }) {
+            result.items.remove(at: overIndex)
+        }
     }
 
     /// Receipts sometimes print the total with no recognizable label (or OCR garbles it),

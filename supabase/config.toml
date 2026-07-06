@@ -4,3 +4,6 @@ project_id = "tripsplit"
 
 [functions.parse-receipt]
 verify_jwt = true
+
+[functions.ocr-receipt]
+verify_jwt = true
