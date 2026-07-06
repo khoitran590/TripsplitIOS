@@ -477,15 +477,24 @@ struct BalanceCard: View {
         let ringColor = isOver ? Color(hex: 0xDC2626)
             : isNear ? Color(hex: 0xD97706)
             : Theme.accent
-        let centerValue = hasBudget
+        let heroValue = hasBudget
             ? (isOver ? money(totals.spent - totals.budget, "USD") : money(totals.available, "USD"))
             : money(totals.spent, "USD")
-        let centerLabel = !hasBudget ? "Spent" : (isOver ? "Over budget" : "Remaining")
+        let heroLabel = !hasBudget ? "Spent" : (isOver ? "Over budget" : "Remaining")
+        let statusText = isOver ? "Over budget" : isNear ? "Near limit" : "On track"
 
         return VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Text("Budget")
                     .font(.title3.weight(.bold))
+                if hasBudget {
+                    Text(LocalizedStringKey(statusText))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(ringColor)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 4)
+                        .background(ringColor.opacity(0.12), in: .capsule)
+                }
                 Spacer()
                 Button(action: flip) {
                     Image(systemName: "arrow.left.arrow.right")
@@ -498,24 +507,46 @@ struct BalanceCard: View {
                 .accessibilityLabel("Currency converter")
             }
 
-            HStack(spacing: 18) {
-                BudgetRing(
-                    fraction: fraction,
-                    centerValue: centerValue,
-                    centerLabel: centerLabel,
-                    color: ringColor,
-                    emphasizeCenter: isOver
-                )
-
-                VStack(spacing: 10) {
-                    statRow(icon: "flag.fill", tint: Theme.accent,
-                            label: "Budget", value: money(totals.budget, "USD"))
-                    statRow(icon: "creditcard.fill", tint: Color(hex: 0x0EA5E9),
-                            label: "Spent", value: money(totals.spent, "USD"))
-                    statRow(icon: "suitcase.fill", tint: Theme.accentSecondary,
-                            label: "Trips", value: "\(store.myTrips.count)")
+            // Hero figure: the one number that answers "how am I doing?"
+            VStack(alignment: .leading, spacing: 2) {
+                Text(heroValue)
+                    .font(.system(size: 34, weight: .bold, design: .rounded))
+                    .foregroundStyle(isOver ? ringColor : .primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                HStack(spacing: 6) {
+                    Text(LocalizedStringKey(heroLabel))
+                    Text(verbatim: "·")
+                    Text("\(store.myTrips.count) trips")
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            }
+
+            // Spent vs. budget as a full-width bar, with both figures anchored under it.
+            VStack(alignment: .leading, spacing: 6) {
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.primary.opacity(0.08))
+                        Capsule()
+                            .fill(ringColor)
+                            .frame(width: geo.size.width * min(1, max(0, hasBudget ? fraction : (totals.spent > 0 ? 1 : 0))))
+                            .animation(.easeInOut(duration: 0.4), value: fraction)
+                    }
+                }
+                .frame(height: 10)
+
+                HStack {
+                    barLabel("Spent", money(totals.spent, "USD"))
+                    Spacer()
+                    if hasBudget {
+                        Text("\(Int((fraction * 100).rounded()))%")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(ringColor)
+                        Spacer()
+                    }
+                    barLabel("Budget", hasBudget ? money(totals.budget, "USD") : "—", trailing: true)
+                }
             }
 
             HStack(spacing: 10) {
@@ -530,25 +561,18 @@ struct BalanceCard: View {
         .glassEffect(.regular, in: .rect(cornerRadius: 34))
     }
 
-    /// A labeled figure in the ring's side column (MyFitnessPal's Base Goal / Food style).
-    private func statRow(icon: String, tint: Color, label: String, value: String) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: icon)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(tint)
-                .frame(width: 24)
-            VStack(alignment: .leading, spacing: 1) {
-                // Wrap so the literal label localizes; `value` stays verbatim (money/counts).
-                Text(LocalizedStringKey(label))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text(value)
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-            }
-            Spacer(minLength: 0)
+    /// A caption/value pair anchored under an end of the progress bar.
+    private func barLabel(_ label: String, _ value: String, trailing: Bool = false) -> some View {
+        VStack(alignment: trailing ? .trailing : .leading, spacing: 1) {
+            // Wrap so the literal label localizes; `value` stays verbatim (money).
+            Text(LocalizedStringKey(label))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
         }
     }
 
@@ -575,40 +599,6 @@ struct BalanceCard: View {
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(tint.opacity(0.08), in: .rect(cornerRadius: 14))
-    }
-}
-
-/// A MyFitnessPal-style progress ring: a faint full track, a colored arc for the
-/// fraction of the budget used, and the headline figure centered inside.
-struct BudgetRing: View {
-    let fraction: Double
-    let centerValue: String
-    let centerLabel: String
-    let color: Color
-    var emphasizeCenter: Bool = false
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .stroke(Color.primary.opacity(0.08), lineWidth: 11)
-            Circle()
-                .trim(from: 0, to: min(1, max(0, fraction)))
-                .stroke(color, style: StrokeStyle(lineWidth: 11, lineCap: .round))
-                .rotationEffect(.degrees(-90))
-                .animation(.easeInOut(duration: 0.4), value: fraction)
-            VStack(spacing: 1) {
-                Text(centerValue)
-                    .font(.system(size: 21, weight: .bold, design: .rounded))
-                    .foregroundStyle(emphasizeCenter ? color : .primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.5)
-                Text(LocalizedStringKey(centerLabel))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 10)
-        }
-        .frame(width: 118, height: 118)
     }
 }
 
