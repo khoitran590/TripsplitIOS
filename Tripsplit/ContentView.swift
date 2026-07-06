@@ -67,6 +67,12 @@ struct ContentView: View {
                 .padding(.bottom, 8)
         }
         .onChange(of: selectedTab) { _, tab in visitedTabs.insert(tab) }
+        // Sign-in happens on the Settings tab (it hosts `AuthView` when signed out);
+        // once authentication succeeds, land the user on Home instead of leaving
+        // them parked on Settings.
+        .onChange(of: auth.isAuthenticated) { _, isAuthenticated in
+            if isAuthenticated { selectedTab = .home }
+        }
         // Tapping a place inside a curated Explore trip asks the Map tab to focus it;
         // remember the current tab first so the map's Back button can return here.
         .onChange(of: mapModel.navigateRequest) {
@@ -1280,6 +1286,7 @@ struct SettingsScreen: View {
     @State private var showLanguagePicker = false
     @State private var showProfilePage = false
     @AppStorage("appearancePreference") private var appearance: AppearancePreference = .system
+    @State private var themeManager = ThemeManager.shared
 
     var body: some View {
         Group {
@@ -1366,6 +1373,7 @@ struct SettingsScreen: View {
                                      value: localization.language.endonym) {
                         showLanguagePicker = true
                     }
+                    themePicker
                 }
 
                 PlainSettingsRow(icon: "rectangle.portrait.and.arrow.right", title: "Sign Out",
@@ -1392,6 +1400,76 @@ struct SettingsScreen: View {
         .sheet(isPresented: $showLanguagePicker) {
             LanguagePickerView()
         }
+    }
+
+    /// Inline theme chooser: one swatch per `AppTheme`, applied app-wide immediately.
+    /// The same palette drives both light and dark appearances, so it lives alongside
+    /// (not inside) the light/dark Appearance picker.
+    private var themePicker: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 16) {
+                Image(systemName: "swatchpalette")
+                    .font(.system(size: 21))
+                    .frame(width: 28)
+                Text("Theme")
+                    .font(.body)
+                Spacer()
+                // Theme names are proper nouns — shown verbatim, not localized.
+                Text(verbatim: themeManager.selection.label)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.top, 16)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 14) {
+                    ForEach(AppTheme.allCases) { theme in
+                        themeSwatch(theme)
+                    }
+                }
+                .padding(.horizontal, 2)
+                .padding(.bottom, 2)
+            }
+
+            Divider()
+        }
+    }
+
+    private func themeSwatch(_ theme: AppTheme) -> some View {
+        let isSelected = themeManager.selection == theme
+        return Button {
+            withAnimation(.snappy) { themeManager.selection = theme }
+        } label: {
+            VStack(spacing: 6) {
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: [theme.accent, theme.accentSecondary],
+                            startPoint: .topLeading, endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 44, height: 44)
+                    .overlay {
+                        if isSelected {
+                            Image(systemName: "checkmark")
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(.white)
+                        }
+                    }
+                    .overlay {
+                        Circle()
+                            .strokeBorder(isSelected ? theme.accent : .clear, lineWidth: 2)
+                            .padding(-4)
+                    }
+
+                Text(verbatim: theme.label)
+                    .font(.caption2)
+                    .foregroundStyle(isSelected ? .primary : .secondary)
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     /// Airbnb-style header: avatar, name, "Show profile", chevron → full profile page.
@@ -1438,7 +1516,7 @@ struct SettingsScreen: View {
             Spacer()
             Image(systemName: "airplane.departure")
                 .font(.system(size: 34, weight: .semibold))
-                .foregroundStyle(Color(hex: 0x6366F1))
+                .foregroundStyle(Theme.accent)
         }
         .padding(16)
         .glassEffect(.regular, in: .rect(cornerRadius: 20))

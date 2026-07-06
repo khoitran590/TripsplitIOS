@@ -143,7 +143,7 @@ struct HomeScreen: View {
                         .padding(.vertical, 8)
                 }
                 .buttonStyle(.plain)
-                .glassEffect(.regular.tint(Color(hex: 0x6366F1)).interactive(), in: .capsule)
+                .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
             }
 
             if store.myTrips.isEmpty {
@@ -476,34 +476,29 @@ struct BalanceCard: View {
         // Ring + accents mirror the trip cards: indigo healthy, amber near, red over.
         let ringColor = isOver ? Color(hex: 0xDC2626)
             : isNear ? Color(hex: 0xD97706)
-            : Color(hex: 0x6366F1)
+            : Theme.accent
         let centerValue = hasBudget
             ? (isOver ? money(totals.spent - totals.budget, "USD") : money(totals.available, "USD"))
             : money(totals.spent, "USD")
         let centerLabel = !hasBudget ? "Spent" : (isOver ? "Over budget" : "Remaining")
 
-        return VStack(alignment: .leading, spacing: 20) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Budget")
-                        .font(.title3.weight(.bold))
-                    Text("Remaining = Budget − Spent")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("Budget")
+                    .font(.title3.weight(.bold))
                 Spacer()
                 Button(action: flip) {
                     Image(systemName: "arrow.left.arrow.right")
-                        .font(.subheadline.weight(.bold))
+                        .font(.footnote.weight(.bold))
                         .foregroundStyle(.primary)
-                        .frame(width: 36, height: 36)
+                        .frame(width: 32, height: 32)
                 }
                 .buttonStyle(.plain)
                 .glassEffect(.regular.interactive(), in: .circle)
                 .accessibilityLabel("Currency converter")
             }
 
-            HStack(spacing: 20) {
+            HStack(spacing: 18) {
                 BudgetRing(
                     fraction: fraction,
                     centerValue: centerValue,
@@ -512,25 +507,25 @@ struct BalanceCard: View {
                     emphasizeCenter: isOver
                 )
 
-                VStack(spacing: 16) {
-                    statRow(icon: "flag.fill", tint: Color(hex: 0x6366F1),
+                VStack(spacing: 10) {
+                    statRow(icon: "flag.fill", tint: Theme.accent,
                             label: "Budget", value: money(totals.budget, "USD"))
                     statRow(icon: "creditcard.fill", tint: Color(hex: 0x0EA5E9),
                             label: "Spent", value: money(totals.spent, "USD"))
-                    statRow(icon: "suitcase.fill", tint: Color(hex: 0x8B5CF6),
+                    statRow(icon: "suitcase.fill", tint: Theme.accentSecondary,
                             label: "Trips", value: "\(store.myTrips.count)")
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
                 oweTile(icon: "arrow.up.right", label: "You owe",
                         value: money(totals.youOwe, "USD"), tint: Color(hex: 0xDC2626))
                 oweTile(icon: "arrow.down.left", label: "People owe",
                         value: money(totals.owedToYou, "USD"), tint: Color(hex: 0x16A34A))
             }
         }
-        .padding(20)
+        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassEffect(.regular, in: .rect(cornerRadius: 34))
     }
@@ -577,9 +572,9 @@ struct BalanceCard: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(12)
+        .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(tint.opacity(0.08), in: .rect(cornerRadius: 16))
+        .background(tint.opacity(0.08), in: .rect(cornerRadius: 14))
     }
 }
 
@@ -595,15 +590,15 @@ struct BudgetRing: View {
     var body: some View {
         ZStack {
             Circle()
-                .stroke(Color.primary.opacity(0.08), lineWidth: 14)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 11)
             Circle()
                 .trim(from: 0, to: min(1, max(0, fraction)))
-                .stroke(color, style: StrokeStyle(lineWidth: 14, lineCap: .round))
+                .stroke(color, style: StrokeStyle(lineWidth: 11, lineCap: .round))
                 .rotationEffect(.degrees(-90))
                 .animation(.easeInOut(duration: 0.4), value: fraction)
-            VStack(spacing: 2) {
+            VStack(spacing: 1) {
                 Text(centerValue)
-                    .font(.system(size: 24, weight: .bold, design: .rounded))
+                    .font(.system(size: 21, weight: .bold, design: .rounded))
                     .foregroundStyle(emphasizeCenter ? color : .primary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
@@ -613,7 +608,7 @@ struct BudgetRing: View {
             }
             .padding(.horizontal, 10)
         }
-        .frame(width: 150, height: 150)
+        .frame(width: 118, height: 118)
     }
 }
 
@@ -659,7 +654,7 @@ struct TripRow: View {
     private var progressColors: [Color] {
         isOver ? [Color(hex: 0xF87171), Color(hex: 0xDC2626)]
             : isNear ? [Color(hex: 0xFBBF24), Color(hex: 0xD97706)]
-            : [Color(hex: 0x6366F1), Color(hex: 0x8B5CF6)]
+            : [Theme.accent, Theme.accentSecondary]
     }
 
     var body: some View {
@@ -749,8 +744,8 @@ struct TripRow: View {
             statBox(
                 label: "SPENT",
                 value: money(spent, trip.currencyCode),
-                valueColor: Color(hex: 0x6366F1),
-                background: Color(hex: 0x6366F1).opacity(0.10)
+                valueColor: Theme.accent,
+                background: Theme.accent.opacity(0.10)
             )
             statBox(
                 label: isOver ? "OVER BY" : "REMAINING",

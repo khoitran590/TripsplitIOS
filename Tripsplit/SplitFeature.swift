@@ -409,7 +409,7 @@ struct SplitView: View {
                         }
                         .buttonStyle(.plain)
                         .glassEffect(
-                            method == option ? .regular.tint(Color(hex: 0x6366F1)).interactive() : .regular.interactive(),
+                            method == option ? .regular.tint(Theme.accent).interactive() : .regular.interactive(),
                             in: .capsule
                         )
                     }
@@ -549,7 +549,7 @@ struct SplitView: View {
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular.tint(Color(hex: 0x6366F1).opacity(0.08)), in: .rect(cornerRadius: 24))
+        .glassEffect(.regular.tint(Theme.accent.opacity(0.08)), in: .rect(cornerRadius: 24))
     }
 
     // MARK: Reusable pieces
@@ -588,7 +588,7 @@ struct SplitView: View {
             if let leadingSystemImage {
                 Image(systemName: leadingSystemImage)
                     .font(.system(size: 18))
-                    .foregroundStyle(Color(hex: 0x6366F1))
+                    .foregroundStyle(Theme.accent)
             }
             avatar(person)
             Text(person.name).font(.subheadline.weight(.medium))
@@ -830,7 +830,7 @@ struct SettleView: View {
                         }
                         .buttonStyle(.plain)
                         .glassEffect(
-                            method == option ? .regular.tint(Color(hex: 0x6366F1)).interactive() : .regular.interactive(),
+                            method == option ? .regular.tint(Theme.accent).interactive() : .regular.interactive(),
                             in: .capsule
                         )
                     }
@@ -884,7 +884,7 @@ struct SettleView: View {
         HStack(spacing: 10) {
             Image(systemName: icon)
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Color(hex: 0x6366F1))
+                .foregroundStyle(Theme.accent)
                 .frame(width: 22)
             Text(label).font(.subheadline).foregroundStyle(.secondary)
             Spacer()
@@ -921,7 +921,7 @@ struct SettleView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Image(systemName: entry.method.icon)
-                    .foregroundStyle(Color(hex: 0x6366F1))
+                    .foregroundStyle(Theme.accent)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(currency(entry.amount)).font(.subheadline.weight(.semibold))
                     Text("\(entry.method.rawValue) • \(entry.date.formatted(date: .abbreviated, time: .omitted))")

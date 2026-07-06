@@ -1739,7 +1739,7 @@ struct AddTripView: View {
                     Image(uiImage: coverImage).resizable().scaledToFill()
                 } else {
                     LinearGradient(
-                        colors: [Color(hex: 0x6366F1), Color(hex: 0x8B5CF6)],
+                        colors: [Theme.accent, Theme.accentSecondary],
                         startPoint: .topLeading, endPoint: .bottomTrailing
                     )
                     Image(systemName: "photo")
@@ -1760,7 +1760,7 @@ struct AddTripView: View {
                     .padding(.vertical, 11)
             }
             .buttonStyle(.plain)
-            .glassEffect(.regular.tint(Color(hex: 0x6366F1)).interactive(), in: .capsule)
+            .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
         }
     }
 
@@ -1859,7 +1859,7 @@ struct AddTripView: View {
                         .frame(width: 40, height: 40)
                 }
                 .buttonStyle(.plain)
-                .glassEffect(.regular.tint(Color(hex: 0x6366F1)).interactive(), in: .circle)
+                .glassEffect(.regular.tint(Theme.accent).interactive(), in: .circle)
                 .disabled(memberName.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
@@ -2038,7 +2038,7 @@ struct EditTripView: View {
                     .padding(.vertical, 11)
             }
             .buttonStyle(.plain)
-            .glassEffect(.regular.tint(Color(hex: 0x6366F1)).interactive(), in: .capsule)
+            .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
         }
     }
 
@@ -2404,7 +2404,7 @@ struct TripDetailView: View {
         HStack(spacing: 10) {
             Image(systemName: icon)
                 .font(.subheadline)
-                .foregroundStyle(Color(hex: 0x6366F1))
+                .foregroundStyle(Theme.accent)
             VStack(alignment: .leading, spacing: 2) {
                 Text(label).font(.caption).foregroundStyle(.secondary)
                 Text(value).font(.subheadline.weight(.semibold))
@@ -2476,7 +2476,7 @@ struct TripDetailView: View {
             }
 
             HStack(spacing: 12) {
-                budgetTile("Spent So Far", money(spent, trip.currencyCode), Color(hex: 0x6366F1))
+                budgetTile("Spent So Far", money(spent, trip.currencyCode), Theme.accent)
                 budgetTile(
                     overBudget ? "Over Budget" : "Remaining",
                     money(abs(remaining), trip.currencyCode),
@@ -2615,7 +2615,7 @@ struct TripDetailView: View {
                                 .frame(width: 40, height: 40)
                         }
                         .buttonStyle(.plain)
-                        .glassEffect(.regular.tint(Color(hex: 0x6366F1)).interactive(), in: .circle)
+                        .glassEffect(.regular.tint(Theme.accent).interactive(), in: .circle)
                         .disabled(manualMemberName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
 
@@ -2645,7 +2645,7 @@ struct TripDetailView: View {
                         .padding(.vertical, 12)
                     }
                     .buttonStyle(.plain)
-                    .glassEffect(.regular.tint(Color(hex: 0x6366F1)).interactive(), in: .capsule)
+                    .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
                     .disabled(inviteEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isInviting)
                     .opacity(inviteEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isInviting ? 0.55 : 1)
 
@@ -2815,8 +2815,8 @@ struct TripDetailView: View {
                     Text("Restore")
                         .font(.caption.weight(.semibold))
                         .padding(.horizontal, 12).padding(.vertical, 6)
-                        .background(Color(hex: 0x6366F1).opacity(0.16), in: .capsule)
-                        .foregroundStyle(Color(hex: 0x6366F1))
+                        .background(Theme.accent.opacity(0.16), in: .capsule)
+                        .foregroundStyle(Theme.accent)
                 }
                 .buttonStyle(.plain)
             }
@@ -4389,7 +4389,7 @@ struct LocationField: View {
                         Button { select(suggestion) } label: {
                             HStack(spacing: 10) {
                                 Image(systemName: "mappin.circle.fill")
-                                    .foregroundStyle(Color(hex: 0x6366F1))
+                                    .foregroundStyle(Theme.accent)
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text(suggestion.title)
                                         .font(.subheadline).foregroundStyle(.primary)

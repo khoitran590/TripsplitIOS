@@ -4,6 +4,7 @@ import SwiftUI
 struct RootView: View {
     @State private var isActive = false
     @State private var localization = LocalizationManager.shared
+    @State private var themeManager = ThemeManager.shared
     @AppStorage("appearancePreference") private var appearance: AppearancePreference = .system
 
     var body: some View {
@@ -22,6 +23,8 @@ struct RootView: View {
         .environment(localization)
         .environment(\.locale, localization.locale)
         .preferredColorScheme(appearance.colorScheme)
+        // App-wide control tint follows the user's chosen theme (see `ThemeManager`).
+        .tint(themeManager.selection.accent)
         .task {
             // Brief hold so the logo animation reads, then hand off to the app. Kept short —
             // every extra tenth of a second here is pure added launch latency.
