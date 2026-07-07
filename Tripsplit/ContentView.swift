@@ -314,6 +314,8 @@ struct MapScreen: View {
     /// Shown after the camera moves away from the last searched region.
     @State private var showsSearchThisArea = false
     @State private var detailPlace: MapPlace?
+    /// Presents the full-detail sheet for the curated focus place.
+    @State private var showsFocusDetail = false
 
     /// "|"-separated `MapPlace.saveKey`s the user bookmarked from the place card.
     @AppStorage("mapSavedPlaceKeys") private var savedPlaceKeys = ""
@@ -358,6 +360,13 @@ struct MapScreen: View {
             PlaceDetailSheet(place: place, isSaved: savedBinding(for: place))
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showsFocusDetail) {
+            FocusDetailSheet { item, destination in
+                mapModel.showOnMap(item, in: destination)
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
         .onAppear(perform: recenterOnFocus)
         .onChange(of: mapModel.navigateRequest) { recenterOnFocus() }
@@ -500,6 +509,7 @@ struct MapScreen: View {
             FocusPlaceCard(
                 focus: focus,
                 onDirections: { focus.routableMapItem.openInMaps() },
+                onDetails: { showsFocusDetail = true },
                 onClose: {
                     withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
                         mapModel.clearFocus()
@@ -821,6 +831,7 @@ struct FocusPlaceCard: View {
 
     let focus: MapFocus
     let onDirections: () -> Void
+    let onDetails: () -> Void
     let onClose: () -> Void
 
     @State private var lookAroundScene: MKLookAroundScene?
@@ -918,8 +929,9 @@ struct FocusPlaceCard: View {
         .padding(.trailing, 26) // Keep clear of the close button.
     }
 
-    /// Directions is always available; Call and Website appear once the POI
-    /// search resolves a place that has them.
+    /// Directions and Details are always available; Call appears once the POI
+    /// search resolves a place that has a phone number (the website lives in
+    /// the Details sheet).
     private var actions: some View {
         HStack(spacing: 10) {
             Button(action: onDirections) {
@@ -932,14 +944,18 @@ struct FocusPlaceCard: View {
             .buttonStyle(.plain)
             .glassEffect(.regular.tint(.accentColor).interactive(), in: .capsule)
 
+            Button(action: onDetails) {
+                Text("Details")
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+            }
+            .buttonStyle(.plain)
+            .glassEffect(.regular.interactive(), in: .capsule)
+
             if let phoneURL = focus.phoneURL {
                 actionCircle(icon: "phone.fill", label: "Call") {
                     openURL(phoneURL)
-                }
-            }
-            if let websiteURL = focus.websiteURL {
-                actionCircle(icon: "safari.fill", label: "Website") {
-                    openURL(websiteURL)
                 }
             }
         }
@@ -958,6 +974,224 @@ struct FocusPlaceCard: View {
     }
 }
 
+/// Full details for a place opened from a curated Explore trip, presented from the
+/// focus card's "Details" button: Look Around (or the trip photo), the trip's full
+/// note and budget context, the resolved address/phone/website, and a "More from
+/// this trip" list so the user can hop between the trip's stops without leaving
+/// the map. Reads the live focus from `ExploreMapModel` so details fill in as the
+/// POI search resolves while the sheet is open.
+struct FocusDetailSheet: View {
+    @Environment(ExploreMapModel.self) private var mapModel
+    @Environment(\.openURL) private var openURL
+    @Environment(\.dismiss) private var dismiss
+
+    /// Called when the user picks another stop of the same trip; the sheet dismisses
+    /// itself first so the map card underneath is visible when the focus moves.
+    let onShowItem: (TravelPlanItem, Destination) -> Void
+
+    @State private var lookAroundScene: MKLookAroundScene?
+
+    var body: some View {
+        if let focus = mapModel.focus {
+            content(for: focus)
+        }
+    }
+
+    private func content(for focus: MapFocus) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                preview(for: focus)
+                    .frame(height: 180)
+                    .frame(maxWidth: .infinity)
+                    .clipShape(.rect(cornerRadius: 16))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(focus.title)
+                        .font(.title2.bold())
+                    HStack(spacing: 6) {
+                        if let category = focus.categoryText {
+                            Text(category)
+                            Text(verbatim: "·")
+                        }
+                        Text(verbatim: "\(focus.destination.city), \(focus.destination.country)")
+                    }
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                }
+
+                curatedSection(for: focus)
+
+                resolvedDetails(for: focus)
+
+                actionButtons(for: focus)
+
+                moreFromTrip(for: focus)
+            }
+            .padding(20)
+            .padding(.bottom, 12)
+        }
+        .task(id: focus.mapItem) {
+            lookAroundScene = nil
+            guard let mapItem = focus.mapItem else { return }
+            lookAroundScene = try? await MKLookAroundSceneRequest(mapItem: mapItem).scene
+        }
+    }
+
+    /// Look Around when available, otherwise the trip's bundled photo.
+    @ViewBuilder
+    private func preview(for focus: MapFocus) -> some View {
+        if let lookAroundScene {
+            LookAroundPreview(initialScene: lookAroundScene)
+        } else {
+            DestinationPhoto(destination: focus.destination, symbolSize: 44)
+        }
+    }
+
+    /// The trip's own context: full note (unclipped, unlike the map card), the cost
+    /// level, and who planned the trip it comes from.
+    private func curatedSection(for focus: MapFocus) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text(focus.item.cost)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(.secondary.opacity(0.15), in: .capsule)
+                Text("From \(focus.destination.title)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            Text(focus.item.detail)
+                .font(.subheadline)
+                .fixedSize(horizontal: false, vertical: true)
+            Label("Planned by \(focus.destination.planner)", systemImage: "person.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .glassEffect(.regular, in: .rect(cornerRadius: 18))
+    }
+
+    /// Address / phone / website resolved by the POI search, with a progress row
+    /// while the search is still in flight.
+    @ViewBuilder
+    private func resolvedDetails(for focus: MapFocus) -> some View {
+        if focus.isResolving {
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Finding exact location…")
+            }
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+        } else {
+            VStack(alignment: .leading, spacing: 12) {
+                if let address = focus.addressText {
+                    Label(address, systemImage: "mappin.and.ellipse")
+                }
+                if let phone = focus.mapItem?.phoneNumber {
+                    Label(phone, systemImage: "phone.fill")
+                }
+                if let website = focus.websiteURL {
+                    Label(website.absoluteString, systemImage: "safari.fill")
+                        .lineLimit(1)
+                        .onTapGesture { openURL(website) }
+                }
+            }
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private func actionButtons(for focus: MapFocus) -> some View {
+        HStack(spacing: 10) {
+            Button {
+                focus.routableMapItem.openInMaps()
+            } label: {
+                Label("Directions", systemImage: "arrow.triangle.turn.up.right.diamond.fill")
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            }
+            .buttonStyle(.plain)
+            .glassEffect(.regular.tint(.accentColor).interactive(), in: .capsule)
+
+            if let phoneURL = focus.phoneURL {
+                Button {
+                    openURL(phoneURL)
+                } label: {
+                    Image(systemName: "phone.fill")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.tint)
+                        .frame(width: 46, height: 46)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: .circle)
+                .accessibilityLabel(Text("Call"))
+            }
+        }
+    }
+
+    /// The trip's other stops, so the user can jump straight to the next place
+    /// without going back to the Explore tab.
+    @ViewBuilder
+    private func moreFromTrip(for focus: MapFocus) -> some View {
+        let places = focus.destination.places.filter { $0.id != focus.item.id }
+        let restaurants = focus.destination.restaurants.filter { $0.id != focus.item.id }
+        if !places.isEmpty || !restaurants.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("More from this trip")
+                    .font(.headline)
+                ForEach(places) { item in
+                    tripItemRow(item, icon: "mappin.circle.fill", focus: focus)
+                }
+                ForEach(restaurants) { item in
+                    tripItemRow(item, icon: "fork.knife.circle.fill", focus: focus)
+                }
+            }
+            .padding(.top, 4)
+        }
+    }
+
+    private func tripItemRow(_ item: TravelPlanItem, icon: String, focus: MapFocus) -> some View {
+        Button {
+            dismiss()
+            onShowItem(item, focus.destination)
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.title3)
+                    .foregroundStyle(.tint)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.name)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text(item.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                Text(item.cost)
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.secondary.opacity(0.12), in: .capsule)
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(12)
+            .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 16))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 /// A TripAdvisor-style "Explore" screen: search up top, a tall "Plan your next
 /// adventure" carousel, a smaller "Trending with travelers" rail, and a saved list.
 struct RecScreen: View {
@@ -969,10 +1203,21 @@ struct RecScreen: View {
     private var searchResults: [Destination] {
         let query = searchText.trimmingCharacters(in: .whitespaces)
         guard !query.isEmpty else { return [] }
-        return Destination.all.filter {
-            $0.city.localizedCaseInsensitiveContains(query)
-                || $0.country.localizedCaseInsensitiveContains(query)
-                || $0.title.localizedCaseInsensitiveContains(query)
+        return Destination.all.filter { destination in
+            destination.city.localizedCaseInsensitiveContains(query)
+                || destination.country.localizedCaseInsensitiveContains(query)
+                || destination.title.localizedCaseInsensitiveContains(query)
+                || destination.tags.contains { $0.localizedCaseInsensitiveContains(query) }
+                || matchedStop(in: destination, query: query) != nil
+        }
+    }
+
+    /// The first place or restaurant inside `destination` whose name matches the
+    /// query, so results can explain *why* a city matched (e.g. searching "ramen").
+    private func matchedStop(in destination: Destination, query: String) -> TravelPlanItem? {
+        (destination.places + destination.restaurants).first {
+            $0.name.localizedCaseInsensitiveContains(query)
+                || $0.detail.localizedCaseInsensitiveContains(query)
         }
     }
 
@@ -1003,8 +1248,10 @@ struct RecScreen: View {
                                     .buttonStyle(.plain)
                                 }
                             }
+                            .scrollTargetLayout()
                             .padding(.horizontal)
                         }
+                        .scrollTargetBehavior(.viewAligned)
                         .padding(.horizontal, -16)
 
                         sectionHeader("Trending with travelers")
@@ -1021,11 +1268,24 @@ struct RecScreen: View {
                                     .buttonStyle(.plain)
                                 }
                             }
+                            .scrollTargetLayout()
                             .padding(.horizontal)
                         }
+                        .scrollTargetBehavior(.viewAligned)
                         .padding(.horizontal, -16)
 
-                        if !saved.isEmpty {
+                        if saved.isEmpty {
+                            HStack(spacing: 10) {
+                                Image(systemName: "heart")
+                                    .foregroundStyle(.secondary)
+                                Text("Tap the heart on any trip to save it here for later.")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .font(.footnote)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(14)
+                            .glassEffect(.regular, in: .rect(cornerRadius: 18))
+                        } else {
                             sectionHeader("Saved")
                             VStack(spacing: 12) {
                                 ForEach(saved) { destination in
@@ -1084,15 +1344,30 @@ struct RecScreen: View {
                 .padding(.vertical, 32)
                 .glassEffect(.regular, in: .rect(cornerRadius: 24))
         } else {
+            let query = searchText.trimmingCharacters(in: .whitespaces)
             VStack(spacing: 12) {
                 ForEach(searchResults) { destination in
                     NavigationLink(value: destination.id) {
-                        DestinationRow(destination: destination)
+                        DestinationRow(
+                            destination: destination,
+                            matchedStop: cityMatches(destination, query: query)
+                                ? nil
+                                : matchedStop(in: destination, query: query)?.name
+                        )
                     }
                     .buttonStyle(.plain)
                 }
             }
         }
+    }
+
+    /// Whether the destination itself (not one of its stops) matched the query, in
+    /// which case the "Includes …" hint would be noise.
+    private func cityMatches(_ destination: Destination, query: String) -> Bool {
+        destination.city.localizedCaseInsensitiveContains(query)
+            || destination.country.localizedCaseInsensitiveContains(query)
+            || destination.title.localizedCaseInsensitiveContains(query)
+            || destination.tags.contains { $0.localizedCaseInsensitiveContains(query) }
     }
 
     private func sectionHeader(_ title: LocalizedStringKey) -> some View {
@@ -1694,6 +1969,10 @@ struct AdventureCard: View {
                 Text(destination.country)
                     .font(.headline)
                     .foregroundStyle(.white.opacity(0.9))
+                Text("\(destination.dailyBudget) · \(destination.stops) stops")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .padding(.top, 2)
             }
             .padding(16)
         }
@@ -1721,9 +2000,10 @@ struct TrendingCard: View {
                 Text(destination.city)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.primary)
-                Text(destination.country)
+                Text("\(destination.country) · \(destination.tags.joined(separator: " · "))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
             .padding(.horizontal, 2)
         }
@@ -1731,9 +2011,12 @@ struct TrendingCard: View {
     }
 }
 
-/// A compact row used for search results and the saved list.
+/// A compact row used for search results and the saved list. `matchedStop` names
+/// the place/restaurant inside the trip that matched a search, so results can show
+/// *why* a city came up.
 struct DestinationRow: View {
     let destination: Destination
+    var matchedStop: String? = nil
 
     var body: some View {
         HStack(spacing: 14) {
@@ -1748,6 +2031,12 @@ struct DestinationRow: View {
                 Text("\(destination.tags.joined(separator: " · ")) · \(destination.price)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if let matchedStop {
+                    Label("Includes \(matchedStop)", systemImage: "mappin")
+                        .font(.caption)
+                        .foregroundStyle(.tint)
+                        .lineLimit(1)
+                }
             }
 
             Spacer()
@@ -1775,6 +2064,8 @@ struct HeartButton: View {
                 .background(.white.opacity(0.95), in: .circle)
         }
         .buttonStyle(.plain)
+        .sensoryFeedback(.impact(flexibility: .soft), trigger: isSaved)
+        .accessibilityLabel(Text(isSaved ? "Remove from saved" : "Save"))
     }
 }
 
