@@ -241,8 +241,64 @@ final class ExploreMapModel {
     }
 }
 
-/// The map screen. Focuses on whatever place the user tapped inside a curated
-/// Explore trip — with an Apple Maps–style detail card — otherwise a default region.
+/// A searchable place category shown as a chip above the map. Each category maps
+/// to an `MKLocalSearch` query so tapping a chip fills the visible region with pins.
+enum MapCategory: String, CaseIterable, Identifiable {
+    case restaurants, cafes, attractions, hotels, shopping
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .restaurants: "Restaurants"
+        case .cafes: "Cafés"
+        case .attractions: "Attractions"
+        case .hotels: "Hotels"
+        case .shopping: "Shopping"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .restaurants: "fork.knife"
+        case .cafes: "cup.and.saucer.fill"
+        case .attractions: "camera.fill"
+        case .hotels: "bed.double.fill"
+        case .shopping: "handbag.fill"
+        }
+    }
+
+    var searchQuery: String {
+        switch self {
+        case .restaurants: "restaurants"
+        case .cafes: "coffee shops"
+        case .attractions: "tourist attractions"
+        case .hotels: "hotels"
+        case .shopping: "shopping"
+        }
+    }
+}
+
+/// A search result pinned on the map for the active category.
+struct MapPlace: Identifiable {
+    let id = UUID()
+    let mapItem: MKMapItem
+    let category: MapCategory
+
+    var coordinate: CLLocationCoordinate2D { mapItem.location.coordinate }
+    var name: String { mapItem.name ?? "Place" }
+
+    /// Stable key used to persist "saved" places across launches.
+    var saveKey: String {
+        let c = coordinate
+        return "\(name)@\(String(format: "%.4f,%.4f", c.latitude, c.longitude))"
+    }
+}
+
+/// The map screen, Wanderlog-style: a full-bleed map with floating category chips,
+/// an "Exploring:" pill + "Search this area" button while a category is active, and
+/// a compact place card at the bottom for the selected pin. Also renders places the
+/// user tapped inside a curated Explore trip via `ExploreMapModel`.
 struct MapScreen: View {
     @Environment(ExploreMapModel.self) private var mapModel
     @Binding var selectedTab: DockTab
@@ -253,6 +309,24 @@ struct MapScreen: View {
             span: MKCoordinateSpan(latitudeDelta: 0.1, longitudeDelta: 0.1)
         )
     )
+    /// The most recent visible region, captured as the camera settles, so category
+    /// searches and "Search this area" cover what the user is actually looking at.
+    @State private var visibleRegion: MKCoordinateRegion?
+
+    @State private var activeCategory: MapCategory?
+    @State private var places: [MapPlace] = []
+    @State private var selectedPlaceID: UUID?
+    @State private var isSearching = false
+    /// Shown after the camera moves away from the last searched region.
+    @State private var showsSearchThisArea = false
+    @State private var detailPlace: MapPlace?
+
+    /// "|"-separated `MapPlace.saveKey`s the user bookmarked from the place card.
+    @AppStorage("mapSavedPlaceKeys") private var savedPlaceKeys = ""
+
+    private var selectedPlace: MapPlace? {
+        places.first { $0.id == selectedPlaceID }
+    }
 
     /// A string that changes whenever the focus coordinate does, so `onChange` can
     /// recenter once the async POI search refines the city-center fallback.
@@ -262,51 +336,232 @@ struct MapScreen: View {
     }
 
     var body: some View {
-        NavigationStack {
-            Map(position: $position) {
+        Map(position: $position, selection: $selectedPlaceID) {
+            ForEach(places) { place in
+                Annotation(place.name, coordinate: place.coordinate) {
+                    CategoryPin(
+                        icon: place.category.icon,
+                        isSelected: place.id == selectedPlaceID
+                    )
+                }
+                .tag(place.id)
+            }
+            if let focus = mapModel.focus {
+                Marker(focus.title, coordinate: focus.coordinate)
+                    .tint(Color.accentColor)
+            }
+        }
+        .ignoresSafeArea(edges: .bottom)
+        .onMapCameraChange(frequency: .onEnd) { context in
+            visibleRegion = context.region
+            if activeCategory != nil, !isSearching, !places.isEmpty {
+                showsSearchThisArea = true
+            }
+        }
+        .safeAreaInset(edge: .top, spacing: 0) { topControls }
+        .overlay(alignment: .bottom) { bottomCard }
+        .sheet(item: $detailPlace) { place in
+            PlaceDetailSheet(place: place, isSaved: savedBinding(for: place))
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .onAppear(perform: recenterOnFocus)
+        .onChange(of: mapModel.navigateRequest) { recenterOnFocus() }
+        .onChange(of: coordinateKey) { recenterOnFocus() }
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: selectedPlaceID)
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: activeCategory)
+        .animation(.easeInOut(duration: 0.2), value: showsSearchThisArea)
+    }
+
+    // MARK: Floating top controls
+
+    /// Back pill (when arriving from Explore), the "Exploring:" pill, the category
+    /// chip rail, and the "Search this area" button — all floating over the map.
+    private var topControls: some View {
+        VStack(spacing: 10) {
+            HStack {
+                if mapModel.focus != nil {
+                    Button {
+                        selectedTab = mapModel.originTab
+                        mapModel.clearFocus()
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 15, weight: .semibold))
+                            .frame(width: 38, height: 38)
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.interactive(), in: .circle)
+                }
+                Spacer()
+            }
+            .overlay {
                 if let focus = mapModel.focus {
-                    Marker(focus.title, coordinate: focus.coordinate)
-                        .tint(Color.accentColor)
+                    Text("Exploring: \(focus.destination.city)")
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                        .glassEffect(.regular, in: .capsule)
                 }
             }
-            .ignoresSafeArea(edges: .bottom)
-            .navigationTitle(mapModel.focus?.destination.city ?? "Map")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                if mapModel.focus != nil {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button {
-                            selectedTab = mapModel.originTab
-                        } label: {
-                            Label("Back", systemImage: "chevron.left")
-                        }
+
+            if let category = activeCategory {
+                exploringPill(category)
+            } else {
+                categoryChips
+            }
+
+            if showsSearchThisArea, activeCategory != nil {
+                Button {
+                    Task { await runCategorySearch() }
+                } label: {
+                    Label("Search this area", systemImage: "arrow.clockwise")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(.black.opacity(0.85), in: .capsule)
+                }
+                .buttonStyle(.plain)
+                .transition(.scale.combined(with: .opacity))
+            }
+
+            if isSearching {
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text("Searching…")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .glassEffect(.regular, in: .capsule)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.top, 8)
+        .padding(.bottom, 12)
+    }
+
+    /// Wanderlog's "Exploring: Restaurants ✕" pill shown while a category is active.
+    private func exploringPill(_ category: MapCategory) -> some View {
+        HStack(spacing: 8) {
+            Text("Exploring:")
+                .font(.subheadline.weight(.bold))
+            Text(category.title)
+                .font(.subheadline)
+            Button(action: clearCategory) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 26, height: 26)
+                    .contentShape(.circle)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text("Stop exploring \(category.title)"))
+        }
+        .padding(.leading, 16)
+        .padding(.trailing, 8)
+        .padding(.vertical, 7)
+        .glassEffect(.regular, in: .capsule)
+    }
+
+    private var categoryChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(MapCategory.allCases) { category in
+                    Button {
+                        activeCategory = category
+                        Task { await runCategorySearch() }
+                    } label: {
+                        Label(category.title, systemImage: category.icon)
+                            .font(.subheadline.weight(.medium))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 9)
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.interactive(), in: .capsule)
+                }
+            }
+            .padding(.horizontal)
+        }
+        .padding(.horizontal, -16)
+    }
+
+    // MARK: Bottom card
+
+    @ViewBuilder
+    private var bottomCard: some View {
+        if let place = selectedPlace {
+            PlaceCard(
+                place: place,
+                isSaved: savedBinding(for: place),
+                onDirections: { place.mapItem.openInMaps() },
+                onDetails: { detailPlace = place },
+                onClose: { selectedPlaceID = nil }
+            )
+            .padding(.horizontal)
+            .padding(.bottom, 4) // The overlay already respects the dock's safe-area inset.
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        } else if let focus = mapModel.focus {
+            FocusPlaceCard(
+                focus: focus,
+                onDirections: { focus.routableMapItem.openInMaps() },
+                onClose: {
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+                        mapModel.clearFocus()
                     }
                 }
-            }
-            .overlay(alignment: .bottom) {
-                if let focus = mapModel.focus {
-                    LocationDetailCard(
-                        focus: focus,
-                        onOpenInMaps: { focus.routableMapItem.openInMaps() },
-                        onClose: {
-                            withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                                mapModel.clearFocus()
-                            }
-                        }
-                    )
-                    .padding()
-                    .padding(.bottom, 80) // Clearance for the floating dock.
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-            }
-            .onAppear(perform: recenter)
-            .onChange(of: mapModel.navigateRequest) { recenter() }
-            .onChange(of: coordinateKey) { recenter() }
+            )
+            .padding(.horizontal)
+            .padding(.bottom, 4)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
 
-    /// Move the camera to the current focus, zoomed to a neighborhood-level span.
-    private func recenter() {
+    // MARK: Search + saved state
+
+    /// Search the visible region for the active category and pin the results.
+    private func runCategorySearch() async {
+        guard let category = activeCategory else { return }
+        let region = visibleRegion ?? MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194),
+            span: MKCoordinateSpan(latitudeDelta: 0.1, longitudeDelta: 0.1)
+        )
+        isSearching = true
+        showsSearchThisArea = false
+        selectedPlaceID = nil
+
+        let request = MKLocalSearch.Request()
+        request.naturalLanguageQuery = category.searchQuery
+        request.region = region
+        request.resultTypes = .pointOfInterest
+        let items = (try? await MKLocalSearch(request: request).start())?.mapItems ?? []
+
+        guard category == activeCategory else { return }
+        places = items.prefix(20).map { MapPlace(mapItem: $0, category: category) }
+        isSearching = false
+    }
+
+    private func clearCategory() {
+        activeCategory = nil
+        places = []
+        selectedPlaceID = nil
+        showsSearchThisArea = false
+    }
+
+    private func savedBinding(for place: MapPlace) -> Binding<Bool> {
+        Binding(
+            get: { savedPlaceKeys.split(separator: "|").map(String.init).contains(place.saveKey) },
+            set: { isSaved in
+                var keys = Set(savedPlaceKeys.split(separator: "|").map(String.init))
+                if isSaved { keys.insert(place.saveKey) } else { keys.remove(place.saveKey) }
+                savedPlaceKeys = keys.sorted().joined(separator: "|")
+            }
+        )
+    }
+
+    /// Move the camera to the current curated focus, zoomed to a neighborhood span.
+    private func recenterOnFocus() {
         guard let focus = mapModel.focus else { return }
         withAnimation(.easeInOut) {
             position = .region(
@@ -319,34 +574,301 @@ struct MapScreen: View {
     }
 }
 
-/// An Apple Maps–style place card shown over the map: a Look Around street-level
-/// preview (falling back to the curated trip's photo), the resolved place name,
-/// category, address, and phone, the trip's own note, and quick call / website /
-/// directions actions.
-struct LocationDetailCard: View {
-    @Environment(\.openURL) private var openURL
+/// A Wanderlog-style teardrop pin: dark circle with the category icon, white ring,
+/// and a pointer tail. Grows and tints when selected.
+struct CategoryPin: View {
+    let icon: String
+    let isSelected: Bool
 
-    let focus: MapFocus
-    let onOpenInMaps: () -> Void
+    var body: some View {
+        VStack(spacing: -3) {
+            ZStack {
+                Circle()
+                    .fill(isSelected ? Color.accentColor : Color(white: 0.13))
+                Image(systemName: icon)
+                    .font(.system(size: isSelected ? 15 : 12, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+            .frame(width: isSelected ? 40 : 32, height: isSelected ? 40 : 32)
+            .overlay(Circle().strokeBorder(.white, lineWidth: 2.5))
+
+            PinTail()
+                .fill(isSelected ? Color.accentColor : Color(white: 0.13))
+                .frame(width: 12, height: isSelected ? 11 : 9)
+        }
+        .shadow(color: .black.opacity(0.3), radius: 3, y: 2)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isSelected)
+    }
+}
+
+/// The downward-pointing triangle under a `CategoryPin`.
+struct PinTail: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
+        path.closeSubpath()
+        return path
+    }
+}
+
+/// The compact bottom card for a selected search-result pin: name + category on the
+/// left, a Look Around thumbnail on the right, address below, and Save / Directions
+/// / Details actions — mirroring Wanderlog's place card.
+struct PlaceCard: View {
+    let place: MapPlace
+    @Binding var isSaved: Bool
+    let onDirections: () -> Void
+    let onDetails: () -> Void
     let onClose: () -> Void
 
-    /// Street-level imagery of the resolved place; `nil` while loading or when
-    /// Look Around has no coverage there (the destination photo is shown instead).
     @State private var lookAroundScene: MKLookAroundScene?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            header
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 7) {
+                        Image(systemName: "mappin.circle.fill")
+                            .font(.body)
+                            .foregroundStyle(.tint)
+                        Text(place.name)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                    }
+                    Text(place.category.title)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if let address = place.mapItem.address?.fullAddress {
+                        Text(address)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-            titleRow
+                thumbnail
+            }
 
-            if focus.isResolving {
-                HStack(spacing: 10) {
-                    ProgressView()
-                    Text("Finding exact location…")
+            HStack(spacing: 8) {
+                Button {
+                    isSaved.toggle()
+                } label: {
+                    Label(isSaved ? "Saved" : "Save", systemImage: isSaved ? "bookmark.fill" : "bookmark")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.tint(.accentColor).interactive(), in: .capsule)
+
+                Button(action: onDirections) {
+                    Text("Directions")
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: .capsule)
+
+                Button(action: onDetails) {
+                    Text("Details")
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: .capsule)
+
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(12)
+        .glassEffect(.regular, in: .rect(cornerRadius: 24))
+        .overlay(alignment: .topTrailing) {
+            Button(action: onClose) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .padding(10)
+        }
+        .task(id: place.id) {
+            lookAroundScene = nil
+            lookAroundScene = try? await MKLookAroundSceneRequest(mapItem: place.mapItem).scene
+        }
+    }
+
+    private var thumbnail: some View {
+        Group {
+            if let lookAroundScene {
+                LookAroundPreview(initialScene: lookAroundScene, allowsNavigation: false, badgePosition: .bottomTrailing)
+            } else {
+                ZStack {
+                    LinearGradient(colors: [.accentColor.opacity(0.7), .accentColor.opacity(0.35)],
+                                   startPoint: .topLeading, endPoint: .bottomTrailing)
+                    Image(systemName: place.category.icon)
+                        .font(.title3)
+                        .foregroundStyle(.white.opacity(0.85))
+                }
+            }
+        }
+        .frame(width: 76, height: 60)
+        .clipShape(.rect(cornerRadius: 10))
+        .padding(.trailing, 26) // Keep clear of the close button.
+    }
+}
+
+/// Full details for a search-result place, presented as a sheet from the card's
+/// "Details" button: Look Around preview, address, phone, website, and directions.
+struct PlaceDetailSheet: View {
+    @Environment(\.openURL) private var openURL
+    @Environment(\.dismiss) private var dismiss
+
+    let place: MapPlace
+    @Binding var isSaved: Bool
+
+    @State private var lookAroundScene: MKLookAroundScene?
+
+    private var phoneURL: URL? {
+        guard let phone = place.mapItem.phoneNumber else { return nil }
+        let digits = phone.filter { $0.isNumber || $0 == "+" }
+        guard !digits.isEmpty else { return nil }
+        return URL(string: "tel:\(digits)")
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if let lookAroundScene {
+                    LookAroundPreview(initialScene: lookAroundScene)
+                        .frame(height: 180)
+                        .clipShape(.rect(cornerRadius: 16))
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(place.name)
+                        .font(.title2.bold())
+                    Text(place.category.title)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
+
+                VStack(alignment: .leading, spacing: 12) {
+                    if let address = place.mapItem.address?.fullAddress {
+                        Label(address, systemImage: "mappin.and.ellipse")
+                    }
+                    if let phone = place.mapItem.phoneNumber {
+                        Label(phone, systemImage: "phone.fill")
+                    }
+                    if let website = place.mapItem.url {
+                        Label(website.absoluteString, systemImage: "safari.fill")
+                            .lineLimit(1)
+                            .onTapGesture { openURL(website) }
+                    }
+                }
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+                HStack(spacing: 10) {
+                    Button {
+                        place.mapItem.openInMaps()
+                    } label: {
+                        Label("Directions", systemImage: "arrow.triangle.turn.up.right.diamond.fill")
+                            .font(.headline)
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.tint(.accentColor).interactive(), in: .capsule)
+
+                    Button {
+                        isSaved.toggle()
+                    } label: {
+                        Image(systemName: isSaved ? "bookmark.fill" : "bookmark")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(.tint)
+                            .frame(width: 46, height: 46)
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.interactive(), in: .circle)
+
+                    if let phoneURL {
+                        Button {
+                            openURL(phoneURL)
+                        } label: {
+                            Image(systemName: "phone.fill")
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(.tint)
+                                .frame(width: 46, height: 46)
+                        }
+                        .buttonStyle(.plain)
+                        .glassEffect(.regular.interactive(), in: .circle)
+                    }
+                }
+            }
+            .padding(20)
+        }
+        .task {
+            lookAroundScene = try? await MKLookAroundSceneRequest(mapItem: place.mapItem).scene
+        }
+    }
+}
+
+/// The bottom card for a place opened from a curated Explore trip: Look Around (or
+/// the trip photo), the resolved details, the trip's own note, and quick actions.
+struct FocusPlaceCard: View {
+    @Environment(\.openURL) private var openURL
+
+    let focus: MapFocus
+    let onDirections: () -> Void
+    let onClose: () -> Void
+
+    @State private var lookAroundScene: MKLookAroundScene?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 7) {
+                        Image(systemName: "mappin.circle.fill")
+                            .font(.body)
+                            .foregroundStyle(.tint)
+                        Text(focus.title)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                    }
+                    HStack(spacing: 6) {
+                        if let category = focus.categoryText {
+                            Text(category)
+                        }
+                        Text("· \(focus.destination.city), \(focus.destination.country)")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    if focus.isResolving {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Finding exact location…")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else if let address = focus.addressText {
+                        Text(address)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                header
             }
 
             // Curated context from the trip itself.
@@ -363,19 +885,24 @@ struct LocationDetailCard: View {
                         .foregroundStyle(.secondary)
                 }
                 Text(focus.item.detail)
-                    .font(.subheadline)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            if let address = focus.addressText {
-                detailRow(icon: "mappin.and.ellipse", text: address)
+                    .lineLimit(2)
             }
 
             actions
         }
-        .padding(16)
+        .padding(12)
         .glassEffect(.regular, in: .rect(cornerRadius: 24))
+        .overlay(alignment: .topTrailing) {
+            Button(action: onClose) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .padding(10)
+        }
         .task(id: focus.mapItem) {
             lookAroundScene = nil
             guard let mapItem = focus.mapItem else { return }
@@ -383,55 +910,30 @@ struct LocationDetailCard: View {
         }
     }
 
-    /// The visual header: Look Around when available, otherwise the trip photo.
+    /// The visual thumbnail: Look Around when available, otherwise the trip photo.
     private var header: some View {
         Group {
             if let lookAroundScene {
-                LookAroundPreview(initialScene: lookAroundScene)
+                LookAroundPreview(initialScene: lookAroundScene, allowsNavigation: false, badgePosition: .bottomTrailing)
             } else {
-                DestinationPhoto(destination: focus.destination, symbolSize: 44)
+                DestinationPhoto(destination: focus.destination, symbolSize: 26)
             }
         }
-        .frame(height: 150)
-        .frame(maxWidth: .infinity)
-        .clipShape(.rect(cornerRadius: 16))
-        .overlay(alignment: .topTrailing) {
-            Button(action: onClose) {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.title2)
-                    .foregroundStyle(.white, .black.opacity(0.35))
-            }
-            .buttonStyle(.plain)
-            .padding(8)
-        }
-    }
-
-    private var titleRow: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(focus.title)
-                .font(.title3.bold())
-                .foregroundStyle(.primary)
-            HStack(spacing: 6) {
-                if let category = focus.categoryText {
-                    Text(category)
-                }
-                Text("· \(focus.destination.city), \(focus.destination.country)")
-            }
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-        }
+        .frame(width: 76, height: 60)
+        .clipShape(.rect(cornerRadius: 10))
+        .padding(.trailing, 26) // Keep clear of the close button.
     }
 
     /// Directions is always available; Call and Website appear once the POI
     /// search resolves a place that has them.
     private var actions: some View {
         HStack(spacing: 10) {
-            Button(action: onOpenInMaps) {
+            Button(action: onDirections) {
                 Label("Directions", systemImage: "arrow.triangle.turn.up.right.diamond.fill")
-                    .font(.headline)
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
+                    .padding(.vertical, 9)
             }
             .buttonStyle(.plain)
             .glassEffect(.regular.tint(.accentColor).interactive(), in: .capsule)
@@ -459,13 +961,6 @@ struct LocationDetailCard: View {
         .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: .circle)
         .accessibilityLabel(Text(label))
-    }
-
-    private func detailRow(icon: String, text: String) -> some View {
-        Label(text, systemImage: icon)
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
     }
 }
 
