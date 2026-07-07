@@ -1149,17 +1149,20 @@ extension Destination {
             id: "tokyo",
             title: "Tokyo Adventure", city: "Tokyo", country: "Japan",
             tags: ["5 days", "Urban"], planner: "Yuki Tanaka", price: "$2.5k",
-            dailyBudget: "~$500/day", stops: 10, isFeatured: true, symbol: "building.2.fill",
+            dailyBudget: "~$500/day", stops: 13, isFeatured: true, symbol: "building.2.fill",
             colors: [.pink, .purple],
             places: [
                 TravelPlanItem(name: "Asakusa & Senso-ji", detail: "Temple morning, Nakamise snacks, Sumida river walk.", cost: "Low"),
                 TravelPlanItem(name: "Shibuya + Harajuku", detail: "Crossing, Meiji Jingu, Cat Street, compact shopping loop.", cost: "Low-mid"),
                 TravelPlanItem(name: "Ueno Park", detail: "Museums, Ameyoko market, easy rainy-day backup.", cost: "Low-mid"),
-                TravelPlanItem(name: "Toyosu or Tsukiji", detail: "Market breakfast and waterfront afternoon.", cost: "Mid")
+                TravelPlanItem(name: "Toyosu or Tsukiji", detail: "Market breakfast and waterfront afternoon.", cost: "Mid"),
+                TravelPlanItem(name: "teamLab Planets", detail: "Immersive digital art in Toyosu; book a timed slot online.", cost: "Mid"),
+                TravelPlanItem(name: "Shinjuku at night", detail: "Free Metropolitan Government observatory, then Omoide Yokocho lanterns.", cost: "Low")
             ],
             restaurants: [
                 TravelPlanItem(name: "Uogashi Nihon-Ichi", detail: "Standing sushi for a fast market-style lunch.", cost: "$$"),
                 TravelPlanItem(name: "Ichiran Shibuya", detail: "Solo-booth ramen that keeps dinner predictable.", cost: "$"),
+                TravelPlanItem(name: "Afuri Harajuku", detail: "Light yuzu-shio ramen between Harajuku shopping stops.", cost: "$-$$"),
                 TravelPlanItem(name: "Tsukiji Outer Market stalls", detail: "Share grilled seafood, tamagoyaki, and onigiri.", cost: "$-$$")
             ],
             plannerNote: "Stay near Ueno, Shinjuku, or Ginza to keep train hops short."
@@ -1168,16 +1171,19 @@ extension Destination {
             id: "kyoto",
             title: "Kyoto Serenity", city: "Kyoto", country: "Japan",
             tags: ["4 days", "Culture"], planner: "Haru Sato", price: "$1.9k",
-            dailyBudget: "~$475/day", stops: 8, isFeatured: false, symbol: "leaf.fill",
+            dailyBudget: "~$475/day", stops: 11, isFeatured: false, symbol: "leaf.fill",
             colors: [.green, .teal],
             places: [
                 TravelPlanItem(name: "Fushimi Inari", detail: "Go early for the lower gates, then climb as far as energy allows.", cost: "Low"),
                 TravelPlanItem(name: "Higashiyama", detail: "Kiyomizu-dera, Sannenzaka lanes, evening Gion stroll.", cost: "Low-mid"),
                 TravelPlanItem(name: "Arashiyama", detail: "Bamboo grove, river walk, Tenryu-ji garden.", cost: "Mid"),
-                TravelPlanItem(name: "Nishiki Market", detail: "Snack crawl that doubles as lunch.", cost: "$")
+                TravelPlanItem(name: "Nishiki Market", detail: "Snack crawl that doubles as lunch.", cost: "$"),
+                TravelPlanItem(name: "Kinkaku-ji", detail: "The Golden Pavilion; pair with Ryoan-ji's rock garden nearby.", cost: "Low"),
+                TravelPlanItem(name: "Philosopher's Path", detail: "Canal-side walk linking Ginkaku-ji to Nanzen-ji's gate.", cost: "Free")
             ],
             restaurants: [
                 TravelPlanItem(name: "Omen Ginkakuji", detail: "Kyoto udon near the Philosopher's Path.", cost: "$$"),
+                TravelPlanItem(name: "Gyoza Hohei", detail: "Cult gyoza spot in Gion; go early to dodge the line.", cost: "$-$$"),
                 TravelPlanItem(name: "Honke Owariya", detail: "Historic soba for a calm lunch near central Kyoto.", cost: "$$"),
                 TravelPlanItem(name: "Nishiki Market stalls", detail: "Budget bites: skewers, tofu doughnuts, pickles.", cost: "$")
             ],
@@ -1187,16 +1193,19 @@ extension Destination {
             id: "seoul",
             title: "Seoul Nights", city: "Seoul", country: "South Korea",
             tags: ["6 days", "Foodie"], planner: "Min-jun Park", price: "$2.1k",
-            dailyBudget: "~$350/day", stops: 10, isFeatured: true, symbol: "sparkles",
+            dailyBudget: "~$350/day", stops: 13, isFeatured: true, symbol: "sparkles",
             colors: [.indigo, .blue],
             places: [
                 TravelPlanItem(name: "Gyeongbokgung + Bukchon", detail: "Palace morning, hanok alleys, tea-house break.", cost: "Low-mid"),
                 TravelPlanItem(name: "Namsan Seoul Tower", detail: "Golden-hour city views with an easy cable-car option.", cost: "Mid"),
                 TravelPlanItem(name: "Ikseon-dong", detail: "Small-lane cafes, design shops, relaxed evening stroll.", cost: "Low-mid"),
-                TravelPlanItem(name: "Gwangjang Market", detail: "Classic food market for mung bean pancakes and noodles.", cost: "$")
+                TravelPlanItem(name: "Gwangjang Market", detail: "Classic food market for mung bean pancakes and noodles.", cost: "$"),
+                TravelPlanItem(name: "Changdeokgung Secret Garden", detail: "Guided garden tour behind the prettiest palace; book ahead.", cost: "Mid"),
+                TravelPlanItem(name: "Hongdae", detail: "Street performers, vintage shops, and late-night snack streets.", cost: "Low-mid")
             ],
             restaurants: [
                 TravelPlanItem(name: "Myeongdong Kyoja", detail: "Kalguksu and mandu in a central, efficient stop.", cost: "$"),
+                TravelPlanItem(name: "Tosokchon Samgyetang", detail: "Ginseng chicken soup a short walk from Gyeongbokgung.", cost: "$$"),
                 TravelPlanItem(name: "Hadongkwan", detail: "Old-school gomtang lunch near Myeongdong.", cost: "$$"),
                 TravelPlanItem(name: "Gwangjang Market stalls", detail: "Share bindaetteok, mayak gimbap, and hotteok.", cost: "$")
             ],
@@ -1206,16 +1215,19 @@ extension Destination {
             id: "bangkok",
             title: "Bangkok Escape", city: "Bangkok", country: "Thailand",
             tags: ["5 days", "Markets"], planner: "Anong Wong", price: "$1.4k",
-            dailyBudget: "~$280/day", stops: 9, isFeatured: false, symbol: "sun.max.fill",
+            dailyBudget: "~$280/day", stops: 12, isFeatured: false, symbol: "sun.max.fill",
             colors: [.orange, .red],
             places: [
                 TravelPlanItem(name: "Grand Palace + Wat Pho", detail: "Classic old-city morning before the heat peaks.", cost: "Mid"),
                 TravelPlanItem(name: "Wat Arun", detail: "Cross-river temple stop, best paired with sunset.", cost: "Low"),
                 TravelPlanItem(name: "Jim Thompson House", detail: "Shaded culture stop near central transit.", cost: "Mid"),
-                TravelPlanItem(name: "Chatuchak Weekend Market", detail: "Half-day market crawl for gifts, clothing, and snacks.", cost: "$")
+                TravelPlanItem(name: "Chatuchak Weekend Market", detail: "Half-day market crawl for gifts, clothing, and snacks.", cost: "$"),
+                TravelPlanItem(name: "Chao Phraya at dusk", detail: "Orange-flag ferry hop past lit temples; get off at ICONSIAM.", cost: "Low"),
+                TravelPlanItem(name: "Talad Rot Fai Srinakarin", detail: "Retro night market for vintage stalls and street food.", cost: "$")
             ],
             restaurants: [
                 TravelPlanItem(name: "Thipsamai", detail: "Pad thai near the old city for a structured dinner stop.", cost: "$$"),
+                TravelPlanItem(name: "Somtum Der", detail: "Isan som tam and grilled chicken done properly.", cost: "$-$$"),
                 TravelPlanItem(name: "Polo Fried Chicken", detail: "Garlic fried chicken and som tam near Lumphini.", cost: "$"),
                 TravelPlanItem(name: "Or Tor Kor Market", detail: "Clean market grazing with fruit, curry, and sweets.", cost: "$-$$")
             ],
@@ -1225,16 +1237,19 @@ extension Destination {
             id: "singapore",
             title: "Singapore Skyline", city: "Singapore", country: "Singapore",
             tags: ["3 days", "Modern"], planner: "Wei Lim", price: "$2.8k",
-            dailyBudget: "~$930/day", stops: 7, isFeatured: true, symbol: "building.columns.fill",
+            dailyBudget: "~$930/day", stops: 10, isFeatured: true, symbol: "building.columns.fill",
             colors: [.teal, .cyan],
             places: [
                 TravelPlanItem(name: "Gardens by the Bay", detail: "Supertree Grove plus one conservatory if weather turns.", cost: "Mid"),
                 TravelPlanItem(name: "Marina Bay loop", detail: "Merlion, skyline walk, evening light show.", cost: "Low"),
                 TravelPlanItem(name: "Kampong Glam", detail: "Sultan Mosque, Haji Lane, indie shops.", cost: "Low"),
-                TravelPlanItem(name: "Singapore Botanic Gardens", detail: "Green reset and Orchid Garden add-on.", cost: "Low-mid")
+                TravelPlanItem(name: "Singapore Botanic Gardens", detail: "Green reset and Orchid Garden add-on.", cost: "Low-mid"),
+                TravelPlanItem(name: "Sentosa", detail: "Cable car in, beach afternoon, Skyline Luge if traveling with kids.", cost: "Mid"),
+                TravelPlanItem(name: "Little India", detail: "Sri Veeramakaliamman Temple, Tekka Centre, and Mustafa's aisles.", cost: "Low")
             ],
             restaurants: [
                 TravelPlanItem(name: "Maxwell Food Centre", detail: "Chicken rice, popiah, and herbal soups under one roof.", cost: "$"),
+                TravelPlanItem(name: "Song Fa Bak Kut Teh", detail: "Peppery pork-rib soup with free broth refills.", cost: "$-$$"),
                 TravelPlanItem(name: "Lau Pa Sat Satay Street", detail: "Open-air skewers after the Marina Bay walk.", cost: "$"),
                 TravelPlanItem(name: "Old Airport Road Food Centre", detail: "Local hawker dinner with broad choices.", cost: "$")
             ],
@@ -1244,20 +1259,174 @@ extension Destination {
             id: "bali",
             title: "Bali Bliss", city: "Bali", country: "Indonesia",
             tags: ["7 days", "Beach"], planner: "Kadek Putra", price: "$1.6k",
-            dailyBudget: "~$230/day", stops: 11, isFeatured: false, symbol: "beach.umbrella.fill",
+            dailyBudget: "~$230/day", stops: 14, isFeatured: false, symbol: "beach.umbrella.fill",
             colors: [.mint, .green],
             places: [
                 TravelPlanItem(name: "Ubud", detail: "Monkey Forest, art market, rice-field walks.", cost: "Low-mid"),
                 TravelPlanItem(name: "Tirta Empul", detail: "Temple visit with respectful timing and dress.", cost: "Low"),
                 TravelPlanItem(name: "Tegallalang", detail: "Rice terraces and cafe viewpoints.", cost: "Low-mid"),
-                TravelPlanItem(name: "Uluwatu", detail: "Clifftop temple, beaches, sunset kecak performance.", cost: "Mid")
+                TravelPlanItem(name: "Uluwatu", detail: "Clifftop temple, beaches, sunset kecak performance.", cost: "Mid"),
+                TravelPlanItem(name: "Nusa Penida day trip", detail: "Fast boat to Kelingking cliff and Crystal Bay snorkeling.", cost: "Mid-high"),
+                TravelPlanItem(name: "Canggu", detail: "Beginner surf lessons, beach clubs, and sunset at Batu Bolong.", cost: "Mid")
             ],
             restaurants: [
                 TravelPlanItem(name: "Warung Biah Biah", detail: "Balinese small plates in Ubud.", cost: "$"),
+                TravelPlanItem(name: "Milk & Madu", detail: "Reliable brunch stop between Canggu beach sessions.", cost: "$$"),
                 TravelPlanItem(name: "Nasi Ayam Kedewatan Ibu Mangku", detail: "Classic chicken rice plate.", cost: "$"),
                 TravelPlanItem(name: "Warung Nia", detail: "Satay and Balinese staples near Seminyak.", cost: "$-$$")
             ],
             plannerNote: "Do Ubud first, then finish near the coast so beach days absorb any weather delays."
+        ),
+
+        Destination(
+            id: "osaka",
+            title: "Osaka Appetite", city: "Osaka", country: "Japan",
+            tags: ["3 days", "Foodie"], planner: "Ren Nakamura", price: "$1.5k",
+            dailyBudget: "~$500/day", stops: 9, isFeatured: true, symbol: "fork.knife",
+            colors: [.red, .pink],
+            places: [
+                TravelPlanItem(name: "Dotonbori + Namba", detail: "Neon canal, the Glico sign, and street snacks every ten steps.", cost: "Low"),
+                TravelPlanItem(name: "Osaka Castle", detail: "Park grounds are the highlight; the museum inside is optional.", cost: "Low-mid"),
+                TravelPlanItem(name: "Kuromon Ichiba Market", detail: "Grazing breakfast of scallops, tuna, and fresh fruit.", cost: "$-$$"),
+                TravelPlanItem(name: "Shinsekai", detail: "Retro Tsutenkaku tower district and kushikatsu alleys.", cost: "Low"),
+                TravelPlanItem(name: "Umeda Sky Building", detail: "Open-air rooftop ring for sunset over the city grid.", cost: "Mid")
+            ],
+            restaurants: [
+                TravelPlanItem(name: "Mizuno", detail: "Michelin-listed okonomiyaki worth the Dotonbori queue.", cost: "$$"),
+                TravelPlanItem(name: "Takoyaki Wanaka", detail: "Textbook takoyaki from a Namba institution.", cost: "$"),
+                TravelPlanItem(name: "Daruma Shinsekai", detail: "The original kushikatsu — no double-dipping the sauce.", cost: "$-$$"),
+                TravelPlanItem(name: "Kuromon Market stalls", detail: "Wagyu skewers and sea urchin straight off the ice.", cost: "$$")
+            ],
+            plannerNote: "Osaka is a food city first — plan the sights around meals, not the other way around."
+        ),
+        Destination(
+            id: "taipei",
+            title: "Taipei Lights", city: "Taipei", country: "Taiwan",
+            tags: ["4 days", "Night markets"], planner: "Wei-Ting Chen", price: "$1.3k",
+            dailyBudget: "~$325/day", stops: 10, isFeatured: false, symbol: "moon.stars.fill",
+            colors: [.teal, .green],
+            places: [
+                TravelPlanItem(name: "Taipei 101 + Xinyi", detail: "Observatory views, then mall-district people watching.", cost: "Mid"),
+                TravelPlanItem(name: "Elephant Mountain", detail: "Short stair hike for the classic skyline shot at sunset.", cost: "Free"),
+                TravelPlanItem(name: "National Palace Museum", detail: "Imperial treasures; two focused hours beat a full day.", cost: "Mid"),
+                TravelPlanItem(name: "Beitou Hot Springs", detail: "Thermal valley and public baths at the end of the metro line.", cost: "Low-mid"),
+                TravelPlanItem(name: "Jiufen day trip", detail: "Lantern-lined teahouse lanes in the hills; go on a weekday.", cost: "Low-mid")
+            ],
+            restaurants: [
+                TravelPlanItem(name: "Din Tai Fung Xinyi", detail: "The original xiao long bao flagship; queue moves fast.", cost: "$$"),
+                TravelPlanItem(name: "Raohe Night Market", detail: "Start with the pepper buns at the temple-side entrance.", cost: "$"),
+                TravelPlanItem(name: "Yongkang Beef Noodle", detail: "Braised beef noodle soup benchmark near Dongmen.", cost: "$"),
+                TravelPlanItem(name: "Shilin Night Market", detail: "Fried chicken cutlets, stinky tofu, and bubble tea rounds.", cost: "$")
+            ],
+            plannerNote: "Grab an EasyCard on arrival — the MRT plus night markets keep days cheap and evenings full."
+        ),
+
+        // Europe
+        Destination(
+            id: "paris",
+            title: "Paris Icons", city: "Paris", country: "France",
+            tags: ["5 days", "Romantic"], planner: "Camille Laurent", price: "$3.0k",
+            dailyBudget: "~$600/day", stops: 11, isFeatured: true, symbol: "sparkles",
+            colors: [.blue, .purple],
+            places: [
+                TravelPlanItem(name: "Eiffel Tower + Trocadéro", detail: "Cross the river for the classic view, then picnic on the Champ de Mars.", cost: "Mid"),
+                TravelPlanItem(name: "Louvre + Tuileries", detail: "Book a timed entry, pick one wing, and exit through the gardens.", cost: "Mid"),
+                TravelPlanItem(name: "Montmartre", detail: "Sacré-Cœur steps, artist square, and winding back lanes.", cost: "Low"),
+                TravelPlanItem(name: "Le Marais", detail: "Place des Vosges, boutiques, and falafel on Rue des Rosiers.", cost: "Low-mid"),
+                TravelPlanItem(name: "Seine at sunset", detail: "Walk Pont Neuf to Pont Alexandre III as the lights come on.", cost: "Free"),
+                TravelPlanItem(name: "Musée d'Orsay", detail: "Impressionists in a Beaux-Arts train station; quieter than the Louvre.", cost: "Mid")
+            ],
+            restaurants: [
+                TravelPlanItem(name: "L'As du Fallafel", detail: "The Marais falafel line that moves faster than it looks.", cost: "$"),
+                TravelPlanItem(name: "Bouillon Chartier", detail: "1896 dining hall with white tablecloths at canteen prices.", cost: "$$"),
+                TravelPlanItem(name: "Breizh Café", detail: "Buckwheat galettes and salted-caramel crêpes.", cost: "$$"),
+                TravelPlanItem(name: "Boulangerie picnic", detail: "Baguette, cheese, and fruit — the best lunch deal in Paris.", cost: "$")
+            ],
+            plannerNote: "Cluster days by arrondissement and buy museum tickets online — queues cost more than the metro ever will."
+        ),
+        Destination(
+            id: "rome",
+            title: "Roman Holiday", city: "Rome", country: "Italy",
+            tags: ["4 days", "History"], planner: "Giulia Conti", price: "$2.2k",
+            dailyBudget: "~$550/day", stops: 10, isFeatured: false, symbol: "building.columns.fill",
+            colors: [.orange, .red],
+            places: [
+                TravelPlanItem(name: "Colosseum + Forum", detail: "One combined ticket covers both plus Palatine Hill; go at opening.", cost: "Mid"),
+                TravelPlanItem(name: "Pantheon + Piazza Navona", detail: "Free dome wonder, then fountains and evening passeggiata.", cost: "Low"),
+                TravelPlanItem(name: "Vatican Museums", detail: "Early-entry slot for the Sistine Chapel, then St. Peter's.", cost: "Mid-high"),
+                TravelPlanItem(name: "Trastevere", detail: "Cobbled lanes and trattorie across the river; best after dark.", cost: "Low"),
+                TravelPlanItem(name: "Trevi + Spanish Steps", detail: "Do the famous fountains before 8am or after midnight.", cost: "Free")
+            ],
+            restaurants: [
+                TravelPlanItem(name: "Trapizzino", detail: "Pizza-pocket street food filled with Roman stews.", cost: "$"),
+                TravelPlanItem(name: "Pizzarium Bonci", detail: "Cult pizza al taglio near the Vatican, sold by weight.", cost: "$"),
+                TravelPlanItem(name: "Tonnarello", detail: "Cacio e pepe and carbonara staples in Trastevere.", cost: "$$"),
+                TravelPlanItem(name: "Giolitti", detail: "Historic gelato counter near the Pantheon.", cost: "$")
+            ],
+            plannerNote: "Walk the center, book the Vatican and Colosseum ahead, and eat dinner late like the locals."
+        ),
+        Destination(
+            id: "barcelona",
+            title: "Barcelona Color", city: "Barcelona", country: "Spain",
+            tags: ["4 days", "Design"], planner: "Marta Vidal", price: "$2.0k",
+            dailyBudget: "~$500/day", stops: 10, isFeatured: false, symbol: "paintpalette.fill",
+            colors: [.yellow, .orange],
+            places: [
+                TravelPlanItem(name: "Sagrada Família", detail: "Book a timed slot with tower access; mornings get the best light.", cost: "Mid"),
+                TravelPlanItem(name: "Gothic Quarter + El Born", detail: "Cathedral cloister, Roman walls, and tapas alleys.", cost: "Low"),
+                TravelPlanItem(name: "Park Güell", detail: "Gaudí's mosaic terrace over the city; reserve the monumental zone.", cost: "Low-mid"),
+                TravelPlanItem(name: "Barceloneta", detail: "Beachfront promenade ending in seafood and vermouth.", cost: "Free"),
+                TravelPlanItem(name: "Montjuïc", detail: "Cable car up for castle views, gardens, and the Magic Fountain.", cost: "Low-mid")
+            ],
+            restaurants: [
+                TravelPlanItem(name: "La Cova Fumada", detail: "The Barceloneta counter that invented the bomba.", cost: "$-$$"),
+                TravelPlanItem(name: "Bar del Pla", detail: "Modern tapas near the Picasso Museum.", cost: "$$"),
+                TravelPlanItem(name: "La Boqueria stalls", detail: "Market juice, jamón cones, and counter seafood off La Rambla.", cost: "$-$$"),
+                TravelPlanItem(name: "Bo de B", detail: "Legendary cheap sandwich stop near the marina.", cost: "$")
+            ],
+            plannerNote: "Book the Gaudí sites days ahead; everything else works best as unplanned neighborhood wandering."
+        ),
+        Destination(
+            id: "london",
+            title: "London Classics", city: "London", country: "UK",
+            tags: ["5 days", "Classic"], planner: "James Whitfield", price: "$3.1k",
+            dailyBudget: "~$620/day", stops: 11, isFeatured: false, symbol: "crown.fill",
+            colors: [.indigo, .purple],
+            places: [
+                TravelPlanItem(name: "Westminster + South Bank", detail: "Big Ben, the Eye, and a riverside walk to the Globe.", cost: "Low"),
+                TravelPlanItem(name: "British Museum", detail: "Rosetta Stone and the Parthenon rooms — completely free.", cost: "Free"),
+                TravelPlanItem(name: "Tower of London + Tower Bridge", detail: "Crown Jewels early, then the bridge's glass walkway.", cost: "Mid-high"),
+                TravelPlanItem(name: "Borough Market + Bankside", detail: "Graze the market, then Tate Modern's free viewing level.", cost: "$-$$"),
+                TravelPlanItem(name: "Notting Hill", detail: "Pastel terraces and Portobello Road's Saturday antiques.", cost: "Low")
+            ],
+            restaurants: [
+                TravelPlanItem(name: "Dishoom", detail: "Bombay café classics; walk-ins move quickly before noon.", cost: "$$"),
+                TravelPlanItem(name: "Borough Market stalls", detail: "Toasted cheese, oysters, and curry pots under the arches.", cost: "$-$$"),
+                TravelPlanItem(name: "Padella", detail: "Fresh pasta by London Bridge at pub prices.", cost: "$$"),
+                TravelPlanItem(name: "The Regency Café", detail: "Full English at a 1946 caff institution.", cost: "$")
+            ],
+            plannerNote: "The big museums are free — spend the savings on one paid icon and a West End night."
+        ),
+        Destination(
+            id: "lisbon",
+            title: "Lisbon Hills", city: "Lisbon", country: "Portugal",
+            tags: ["4 days", "Coastal"], planner: "Inês Ferreira", price: "$1.7k",
+            dailyBudget: "~$425/day", stops: 10, isFeatured: false, symbol: "tram.fill",
+            colors: [.cyan, .blue],
+            places: [
+                TravelPlanItem(name: "Alfama + Tram 28", detail: "Ride the vintage tram early, then wander down from the castle.", cost: "Low"),
+                TravelPlanItem(name: "Belém", detail: "Tower, Jerónimos Monastery, and the original pastéis bakery.", cost: "Low-mid"),
+                TravelPlanItem(name: "Bairro Alto miradouros", detail: "Sunset viewpoint crawl with kiosk drinks between terraces.", cost: "Free"),
+                TravelPlanItem(name: "LX Factory", detail: "Industrial complex of bookshops, murals, and brunch spots.", cost: "Low-mid"),
+                TravelPlanItem(name: "Sintra day trip", detail: "Pena Palace and Quinta da Regaleira; give it a full day.", cost: "Mid")
+            ],
+            restaurants: [
+                TravelPlanItem(name: "Pastéis de Belém", detail: "The 1837 custard-tart original, still warm with cinnamon.", cost: "$"),
+                TravelPlanItem(name: "Time Out Market", detail: "Lisbon's best-of food hall under one roof.", cost: "$$"),
+                TravelPlanItem(name: "Taberna da Rua das Flores", detail: "Chalkboard petiscos in a tiny Chiado tavern.", cost: "$$"),
+                TravelPlanItem(name: "Cervejaria Ramiro", detail: "Garlic prawns and beer at the famous seafood hall.", cost: "$$")
+            ],
+            plannerNote: "Wear real shoes for the hills, ride Tram 28 before the crowds, and save Sintra for a clear day."
         ),
 
         // North America
@@ -1265,16 +1434,19 @@ extension Destination {
             id: "new-york",
             title: "New York Buzz", city: "New York", country: "USA",
             tags: ["5 days", "Urban"], planner: "Olivia Brooks", price: "$3.2k",
-            dailyBudget: "~$640/day", stops: 14, isFeatured: true, symbol: "building.2.fill",
+            dailyBudget: "~$640/day", stops: 17, isFeatured: true, symbol: "building.2.fill",
             colors: [.blue, .indigo],
             places: [
                 TravelPlanItem(name: "Central Park + The Met", detail: "Classic uptown day with picnic flexibility.", cost: "Low-mid"),
                 TravelPlanItem(name: "Staten Island Ferry", detail: "Free skyline and harbor view.", cost: "Free"),
                 TravelPlanItem(name: "Brooklyn Bridge + DUMBO", detail: "Walk the bridge, then waterfront views.", cost: "Low"),
-                TravelPlanItem(name: "High Line + Chelsea Market", detail: "Easy west-side afternoon with food options.", cost: "Low-mid")
+                TravelPlanItem(name: "High Line + Chelsea Market", detail: "Easy west-side afternoon with food options.", cost: "Low-mid"),
+                TravelPlanItem(name: "Lower Manhattan", detail: "9/11 Memorial, the Oculus, and Stone Street's pub lane.", cost: "Low-mid"),
+                TravelPlanItem(name: "Williamsburg", detail: "Waterfront skyline views, vintage shops, weekend Smorgasburg.", cost: "Low-mid")
             ],
             restaurants: [
                 TravelPlanItem(name: "Xi'an Famous Foods", detail: "Hand-ripped noodles and cumin lamb for a quick meal.", cost: "$"),
+                TravelPlanItem(name: "Joe's Pizza", detail: "The Greenwich Village slice benchmark, open late.", cost: "$"),
                 TravelPlanItem(name: "Los Tacos No. 1", detail: "Reliable taco stop near Chelsea or Times Square.", cost: "$"),
                 TravelPlanItem(name: "Mamoun's Falafel", detail: "Late-night Greenwich Village budget classic.", cost: "$")
             ],
@@ -1284,16 +1456,19 @@ extension Destination {
             id: "san-francisco",
             title: "Golden Gate Days", city: "San Francisco", country: "USA",
             tags: ["4 days", "Coastal"], planner: "Liam Carter", price: "$2.7k",
-            dailyBudget: "~$675/day", stops: 9, isFeatured: false, symbol: "water.waves",
+            dailyBudget: "~$675/day", stops: 12, isFeatured: false, symbol: "water.waves",
             colors: [.orange, .pink],
             places: [
                 TravelPlanItem(name: "Golden Gate Bridge + Presidio", detail: "Bridge views, Tunnel Tops, Crissy Field.", cost: "Low"),
                 TravelPlanItem(name: "Ferry Building", detail: "Waterfront walk and local food hall grazing.", cost: "$-$$"),
                 TravelPlanItem(name: "Mission District", detail: "Murals, Dolores Park, taqueria crawl.", cost: "Low"),
-                TravelPlanItem(name: "Lands End", detail: "Coastal trail, Sutro Baths, ocean views.", cost: "Free")
+                TravelPlanItem(name: "Lands End", detail: "Coastal trail, Sutro Baths, ocean views.", cost: "Free"),
+                TravelPlanItem(name: "Alcatraz", detail: "Book the ferry weeks ahead; the audio tour is the best part.", cost: "Mid"),
+                TravelPlanItem(name: "Golden Gate Park", detail: "de Young tower views, Japanese Tea Garden, bison paddock.", cost: "Low-mid")
             ],
             restaurants: [
                 TravelPlanItem(name: "Good Mong Kok Bakery", detail: "Chinatown dim sum picnic box.", cost: "$"),
+                TravelPlanItem(name: "Burma Superstar", detail: "Tea-leaf salad and garlic noodles in the Richmond.", cost: "$$"),
                 TravelPlanItem(name: "Taqueria Cancun", detail: "Mission burritos that keep dinner inexpensive.", cost: "$"),
                 TravelPlanItem(name: "Tadu Ethiopian Kitchen", detail: "Generous Ethiopian plates near downtown.", cost: "$-$$")
             ],
@@ -1303,16 +1478,19 @@ extension Destination {
             id: "vancouver",
             title: "Vancouver Wild", city: "Vancouver", country: "Canada",
             tags: ["6 days", "Nature"], planner: "Emma Wilson", price: "$2.3k",
-            dailyBudget: "~$385/day", stops: 10, isFeatured: true, symbol: "mountain.2.fill",
+            dailyBudget: "~$385/day", stops: 13, isFeatured: true, symbol: "mountain.2.fill",
             colors: [.green, .blue],
             places: [
                 TravelPlanItem(name: "Stanley Park Seawall", detail: "Bike or walk the waterfront loop.", cost: "Low"),
                 TravelPlanItem(name: "Granville Island", detail: "Public Market lunch and waterfront ferries.", cost: "$-$$"),
                 TravelPlanItem(name: "Lynn Canyon", detail: "Forest trails and suspension bridge alternative.", cost: "Low"),
-                TravelPlanItem(name: "Gastown + Chinatown", detail: "Historic streets, coffee stops, evening food.", cost: "Low-mid")
+                TravelPlanItem(name: "Gastown + Chinatown", detail: "Historic streets, coffee stops, evening food.", cost: "Low-mid"),
+                TravelPlanItem(name: "Grouse Mountain", detail: "Skyride up for city-to-ocean views; hike the Grind if fit.", cost: "Mid-high"),
+                TravelPlanItem(name: "Kitsilano Beach", detail: "Sunset beach with mountain backdrop and a heated saltwater pool.", cost: "Low")
             ],
             restaurants: [
                 TravelPlanItem(name: "Japadog", detail: "Fast Vancouver street-food classic.", cost: "$"),
+                TravelPlanItem(name: "Phnom Penh", detail: "Butter beef and famous chicken wings in Chinatown.", cost: "$$"),
                 TravelPlanItem(name: "Meat & Bread", detail: "Simple sandwiches near downtown sights.", cost: "$"),
                 TravelPlanItem(name: "Granville Island Public Market", detail: "Shareable stalls for lunch variety.", cost: "$-$$")
             ],
@@ -1322,16 +1500,19 @@ extension Destination {
             id: "las-vegas",
             title: "Vegas Lights", city: "Las Vegas", country: "USA",
             tags: ["3 days", "Nightlife"], planner: "Noah Reed", price: "$2.0k",
-            dailyBudget: "~$665/day", stops: 6, isFeatured: false, symbol: "sparkles",
+            dailyBudget: "~$665/day", stops: 9, isFeatured: false, symbol: "sparkles",
             colors: [.purple, .pink],
             places: [
                 TravelPlanItem(name: "Bellagio Fountains + Strip walk", detail: "Free classic Vegas loop after sunset.", cost: "Free"),
                 TravelPlanItem(name: "Neon Museum", detail: "Design-heavy history stop; book ahead.", cost: "Mid"),
                 TravelPlanItem(name: "Fremont Street", detail: "Downtown lights, street performers, cheaper drinks.", cost: "Low-mid"),
-                TravelPlanItem(name: "Red Rock Canyon", detail: "Half-day nature reset by car or tour.", cost: "Mid")
+                TravelPlanItem(name: "Red Rock Canyon", detail: "Half-day nature reset by car or tour.", cost: "Mid"),
+                TravelPlanItem(name: "Sphere", detail: "The immersive venue is worth one splurge show or Experience.", cost: "Mid-high"),
+                TravelPlanItem(name: "Hoover Dam", detail: "Classic half-day drive; walk the top for free canyon views.", cost: "Low-mid")
             ],
             restaurants: [
                 TravelPlanItem(name: "Tacos El Gordo", detail: "Fast adobada tacos near the north Strip.", cost: "$"),
+                TravelPlanItem(name: "Shang Artisan Noodle", detail: "Hand-pulled noodles that beat any buffet for the price.", cost: "$"),
                 TravelPlanItem(name: "Ellis Island BBQ", detail: "Off-Strip comfort food and local beer.", cost: "$-$$"),
                 TravelPlanItem(name: "Lotus of Siam", detail: "Northern Thai lunch or shared dinner.", cost: "$$")
             ],
@@ -1341,20 +1522,44 @@ extension Destination {
             id: "mexico-city",
             title: "Mexico City Soul", city: "Mexico City", country: "Mexico",
             tags: ["5 days", "Culture"], planner: "Sofía Ramírez", price: "$1.5k",
-            dailyBudget: "~$300/day", stops: 11, isFeatured: false, symbol: "sun.max.fill",
+            dailyBudget: "~$300/day", stops: 14, isFeatured: false, symbol: "sun.max.fill",
             colors: [.red, .orange],
             places: [
                 TravelPlanItem(name: "Centro Histórico", detail: "Zocalo, cathedral, Palacio de Bellas Artes.", cost: "Low"),
                 TravelPlanItem(name: "Chapultepec", detail: "Castle, park, Anthropology Museum.", cost: "Low-mid"),
                 TravelPlanItem(name: "Coyoacan", detail: "Plazas, markets, Frida Kahlo Museum area.", cost: "Mid"),
-                TravelPlanItem(name: "Roma + Condesa", detail: "Parks, galleries, cafes, dinner walk.", cost: "Low-mid")
+                TravelPlanItem(name: "Roma + Condesa", detail: "Parks, galleries, cafes, dinner walk.", cost: "Low-mid"),
+                TravelPlanItem(name: "Teotihuacan", detail: "Pyramid day trip; leave early and beat the midday sun.", cost: "Mid"),
+                TravelPlanItem(name: "Xochimilco", detail: "Trajinera boat party through the canals — best with a group.", cost: "Low-mid")
             ],
             restaurants: [
                 TravelPlanItem(name: "Taqueria Orinoco", detail: "Tacos norteños for an easy Roma/Condesa dinner.", cost: "$"),
+                TravelPlanItem(name: "Churrería El Moro", detail: "Churros and hot chocolate, open around the clock downtown.", cost: "$"),
                 TravelPlanItem(name: "El Huequito", detail: "Al pastor classic near central sightseeing.", cost: "$"),
                 TravelPlanItem(name: "Tostadas Coyoacan", detail: "Market tostadas before or after museum time.", cost: "$")
             ],
             plannerNote: "Use rideshare at night, keep museum days early, and leave room for spontaneous taco stops."
+        ),
+        Destination(
+            id: "honolulu",
+            title: "Honolulu Waves", city: "Honolulu", country: "USA",
+            tags: ["6 days", "Beach"], planner: "Malia Kealoha", price: "$3.4k",
+            dailyBudget: "~$570/day", stops: 9, isFeatured: true, symbol: "beach.umbrella.fill",
+            colors: [.cyan, .blue],
+            places: [
+                TravelPlanItem(name: "Waikiki Beach", detail: "Gentle rollers made for a first surf lesson or outrigger ride.", cost: "Low-mid"),
+                TravelPlanItem(name: "Diamond Head", detail: "Crater-rim sunrise hike; out-of-state visitors reserve online.", cost: "Low"),
+                TravelPlanItem(name: "Pearl Harbor", detail: "Free timed tickets for the Arizona Memorial go fast — book early.", cost: "Low-mid"),
+                TravelPlanItem(name: "Hanauma Bay", detail: "Best beginner snorkeling on Oahu; reservations open two days out.", cost: "Mid"),
+                TravelPlanItem(name: "North Shore day trip", detail: "Haleiwa town, turtle beaches, and winter big-wave watching.", cost: "Mid")
+            ],
+            restaurants: [
+                TravelPlanItem(name: "Ono Seafood", detail: "Made-to-order poke bowls worth the walk from Waikiki.", cost: "$"),
+                TravelPlanItem(name: "Marukame Udon", detail: "Fresh-pulled udon line that moves fast on Kuhio Ave.", cost: "$"),
+                TravelPlanItem(name: "Helena's Hawaiian Food", detail: "James Beard-winning kalua pig and pipikaula since 1946.", cost: "$$"),
+                TravelPlanItem(name: "Leonard's Bakery", detail: "Hot malasadas — order the haupia filling.", cost: "$")
+            ],
+            plannerNote: "Reserve Hanauma Bay and Diamond Head online days ahead — both sell out, and mornings beat the crowds."
         ),
     ]
 }
@@ -1374,6 +1579,14 @@ extension Destination {
         case "vancouver": "Mountains, seawall, and rainforest inside city limits — Vancouver mixes outdoor days with a serious food scene."
         case "las-vegas": "Beyond the Strip's lights are neon museums, downtown Fremont, and red-rock desert an easy half-day away."
         case "mexico-city": "Aztec ruins, world-class museums, leafy plazas, and tacos on every corner — CDMX runs deep on culture and flavor."
+        case "osaka": "Neon canals, castle grounds, and Japan's best street food — Osaka is Tokyo's louder, hungrier sibling."
+        case "taipei": "Night markets, mountain trails inside the city, and hot springs a metro ride away — Taipei packs a lot into a small, friendly grid."
+        case "paris": "Café terraces, riverside museums, and a skyline stitched together by the Eiffel Tower — Paris makes every walk feel like the main event."
+        case "rome": "Ancient ruins share sidewalks with espresso bars and trattorie — Rome layers two thousand years of history into a very walkable center."
+        case "barcelona": "Gaudí's spires, Gothic lanes, and a city beach at the end of the metro — Barcelona mixes architecture, tapas, and sea air."
+        case "london": "Royal parks, free world-class museums, and markets from Borough to Portobello — London rewards long walks and theatre nights."
+        case "lisbon": "Tiled facades, viewpoint terraces, and custard tarts still warm from the oven — Lisbon climbs its seven hills at an easy pace."
+        case "honolulu": "Waikiki surf mornings, volcanic crater hikes, and plate-lunch afternoons — Honolulu blends big-city ease with island pace."
         default: "A curated plan with hand-picked places to visit and eat."
         }
     }
@@ -1393,6 +1606,14 @@ extension Destination {
         case "vancouver": CLLocationCoordinate2D(latitude: 49.2827, longitude: -123.1207)
         case "las-vegas": CLLocationCoordinate2D(latitude: 36.1699, longitude: -115.1398)
         case "mexico-city": CLLocationCoordinate2D(latitude: 19.4326, longitude: -99.1332)
+        case "osaka": CLLocationCoordinate2D(latitude: 34.6937, longitude: 135.5023)
+        case "taipei": CLLocationCoordinate2D(latitude: 25.0330, longitude: 121.5654)
+        case "paris": CLLocationCoordinate2D(latitude: 48.8566, longitude: 2.3522)
+        case "rome": CLLocationCoordinate2D(latitude: 41.9028, longitude: 12.4964)
+        case "barcelona": CLLocationCoordinate2D(latitude: 41.3874, longitude: 2.1686)
+        case "london": CLLocationCoordinate2D(latitude: 51.5074, longitude: -0.1278)
+        case "lisbon": CLLocationCoordinate2D(latitude: 38.7223, longitude: -9.1393)
+        case "honolulu": CLLocationCoordinate2D(latitude: 21.3069, longitude: -157.8583)
         default: CLLocationCoordinate2D(latitude: 0, longitude: 0)
         }
     }
