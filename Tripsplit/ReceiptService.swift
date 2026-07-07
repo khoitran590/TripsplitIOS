@@ -869,6 +869,9 @@ actor ReceiptStorage {
                 ?? "Receipt upload failed (HTTP \(http.statusCode)).",
                 statusCode: http.statusCode)
         }
+        // Uploads overwrite objects in place (x-upsert), so drop any cached copy of this
+        // path — the uploader should see their new photo immediately, not the stale one.
+        await ImageCache.shared.evict(path)
         return path
     }
 
@@ -927,5 +930,129 @@ actor ReceiptStorage {
             }
         }
         return value
+    }
+}
+
+// MARK: - Image cache (memory + disk, keyed by storage path)
+
+/// Two-level cache for private-bucket images, keyed by the stable *storage path* rather
+/// than the signed URL. Signed URLs rotate every ~50 minutes and embed a per-session
+/// token, so `URLCache` (keyed by URL) misses on every relaunch and re-downloads every
+/// avatar, cover, and receipt. Caching by path survives URL rotation and works offline.
+///
+/// Staleness: several paths are overwritten in place on the server (`profile.jpg`,
+/// `cover-<tripID>.jpg`, `<expenseID>.jpg`), so a cached copy can go stale when another
+/// member changes a photo. `needsRefresh` therefore reports true once per path per
+/// launch — callers show the cached image instantly, then re-download in the background
+/// and swap only if it changed. The device that uploads a new photo evicts its own path
+/// (see `ReceiptStorage.upload`), so its change shows immediately.
+actor ImageCache {
+    static let shared = ImageCache()
+
+    private let memory = NSCache<NSString, UIImage>()
+    /// Paths already re-downloaded this launch (no need to revalidate again).
+    private var refreshedPaths: Set<String> = []
+    private let directory: URL
+
+    init() {
+        memory.countLimit = 150
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        directory = caches.appendingPathComponent("StorageImages", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+
+    /// One flat file per object: paths reaching here already passed
+    /// `BackendSecurity.isSafeStoragePath`, so flattening "/" cannot collide or escape.
+    private func fileURL(for path: String) -> URL {
+        directory.appendingPathComponent(path.replacingOccurrences(of: "/", with: "_"))
+    }
+
+    /// The cached image for a path — memory first, then disk (promoting to memory).
+    func image(for path: String) -> UIImage? {
+        if let hit = memory.object(forKey: path as NSString) { return hit }
+        guard let data = try? Data(contentsOf: fileURL(for: path)),
+              let image = UIImage(data: data) else { return nil }
+        memory.setObject(image, forKey: path as NSString)
+        return image
+    }
+
+    /// Whether a cached path should be revalidated (true at most once per launch).
+    func needsRefresh(_ path: String) -> Bool { !refreshedPaths.contains(path) }
+
+    /// Downloads the object at `url` and caches it under `path`. Returns nil on any
+    /// network/decode failure so callers keep whatever they were already showing.
+    func download(from url: URL, for path: String) async -> UIImage? {
+        guard let (data, response) = try? await BackendSecurity.secureSession.data(from: url),
+              let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+              let image = UIImage(data: data) else { return nil }
+        refreshedPaths.insert(path)
+        memory.setObject(image, forKey: path as NSString)
+        try? data.write(to: fileURL(for: path), options: .atomic)
+        return image
+    }
+
+    /// Drops a path's cached copies so the next view re-downloads the current object.
+    func evict(_ path: String) {
+        memory.removeObject(forKey: path as NSString)
+        refreshedPaths.remove(path)
+        try? FileManager.default.removeItem(at: fileURL(for: path))
+    }
+}
+
+/// Replacement for the old AsyncImage-over-signed-URL pattern: renders a storage path
+/// through `ImageCache`, so repeat views are instant (and work offline), then silently
+/// revalidates once per launch. Mirrors `AsyncImagePhase`-style rendering so call sites
+/// keep their loading/failure placeholders.
+enum StorageImagePhase {
+    case loading
+    case success(Image)
+    case failure
+}
+
+struct CachedStorageImage<Content: View>: View {
+    // Not nested in this struct: a type nested in a generic is parameterized by the
+    // generic argument, which makes `Content` inference at call sites circular.
+    typealias Phase = StorageImagePhase
+
+    @Environment(TripStore.self) private var store
+    let path: String
+    let content: (Phase) -> Content
+
+    @State private var phase: Phase = .loading
+
+    init(path: String, @ViewBuilder content: @escaping (Phase) -> Content) {
+        self.path = path
+        self.content = content
+    }
+
+    var body: some View {
+        content(phase)
+            .task(id: path) { await load() }
+    }
+
+    private func load() async {
+        let normalized = ReceiptStorage.storagePath(from: path)
+        guard !normalized.isEmpty else {
+            phase = .failure
+            return
+        }
+        let cached = await ImageCache.shared.image(for: normalized)
+        if let cached {
+            phase = .success(Image(uiImage: cached))
+            // Fresh enough for this launch — skip the network entirely.
+            guard await ImageCache.shared.needsRefresh(normalized) else { return }
+        } else {
+            phase = .loading
+        }
+        guard let url = await store.signedImageURL(for: normalized) else {
+            // Offline or signed out: keep the cached image if we had one.
+            if cached == nil { phase = .failure }
+            return
+        }
+        if let fresh = await ImageCache.shared.download(from: url, for: normalized) {
+            phase = .success(Image(uiImage: fresh))
+        } else if cached == nil {
+            phase = .failure
+        }
     }
 }

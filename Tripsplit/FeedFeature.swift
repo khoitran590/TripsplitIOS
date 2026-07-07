@@ -391,8 +391,12 @@ struct TripFeedView: View {
                 }
                 .buttonStyle(.plain)
             }
-            ForEach(posts) { post in
-                FeedPostCard(tripID: tripID, post: post)
+            // Lazy so long feeds build post cards (and kick off their photo loads)
+            // only as they scroll into view. Spacing matches the enclosing detail VStack.
+            LazyVStack(spacing: 18) {
+                ForEach(posts) { post in
+                    FeedPostCard(tripID: tripID, post: post)
+                }
             }
         }
 
@@ -720,21 +724,18 @@ private struct FeedPostCard: View {
 /// A feed photo loaded from its private-bucket storage path via a signed URL,
 /// mirroring `TripCoverView` / `AvatarView`.
 private struct FeedPhotoView: View {
-    @Environment(TripStore.self) private var store
     let path: String
-
-    @State private var resolvedURL: URL?
 
     var body: some View {
         Theme.fieldBackground
             .overlay {
-                AsyncImage(url: resolvedURL) { phase in
+                CachedStorageImage(path: path) { phase in
                     switch phase {
                     case .success(let image):
                         image.resizable().scaledToFill()
-                    case .empty:
+                    case .loading:
                         ProgressView()
-                    default:
+                    case .failure:
                         Image(systemName: "photo")
                             .font(.title2)
                             .foregroundStyle(.secondary)
@@ -742,6 +743,5 @@ private struct FeedPhotoView: View {
                 }
             }
             .clipped()
-            .task(id: path) { resolvedURL = await store.signedImageURL(for: path) }
     }
 }

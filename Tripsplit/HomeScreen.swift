@@ -360,7 +360,9 @@ struct HomeScreen: View {
                 .glassEffect(.regular, in: .rect(cornerRadius: 20))
             } else {
                 GlassEffectContainer(spacing: 12) {
-                    VStack(spacing: 12) {
+                    // Lazy for "See All": only the rows scrolled into view are built,
+                    // instead of every transaction across every trip at once.
+                    LazyVStack(spacing: 12) {
                         ForEach(transactions) { transaction in
                             if isSelectingTransactions {
                                 TransactionRow(

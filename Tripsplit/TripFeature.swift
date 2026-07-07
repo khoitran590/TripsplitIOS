@@ -603,6 +603,48 @@ final class TripStore {
         UserDefaults.standard.set(pendingDeletions.map(\.uuidString), forKey: Self.pendingDeletionsKey)
     }
 
+    // MARK: Local trips cache (instant/offline launch)
+
+    /// On-disk snapshot of the signed-in user's trips so a relaunch paints real data
+    /// immediately (including offline) instead of an empty list while `loadFromCloud`
+    /// round-trips. Keyed by user UUID so accounts on the same device never see each
+    /// other's trips. Lives in Caches: losing it only costs the instant first paint —
+    /// Supabase stays the source of truth.
+    nonisolated private static func tripsCacheURL(for userID: UUID) -> URL {
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        return caches.appendingPathComponent("trips-\(userID.uuidString.lowercased()).json")
+    }
+
+    /// Snapshots the current trips and writes them to the local cache off the main actor.
+    private func cacheTripsLocally() {
+        let snapshot = trips
+        let userID = currentUser.id
+        Task.detached(priority: .utility) {
+            guard let data = try? JSONEncoder().encode(snapshot) else { return }
+            try? data.write(to: Self.tripsCacheURL(for: userID), options: .atomic)
+        }
+    }
+
+    nonisolated private static func loadCachedTrips(for userID: UUID) -> [Trip]? {
+        guard let data = try? Data(contentsOf: tripsCacheURL(for: userID)) else { return nil }
+        return try? JSONDecoder().decode([Trip].self, from: data)
+    }
+
+    /// Fills an empty trips list from the local cache while the cloud fetch is in flight.
+    /// Only ever *fills* — if `loadFromCloud` lands first (or the user switched accounts
+    /// mid-read), the cached copy is discarded so it can never clobber fresher data.
+    private func restoreCachedTrips(for userID: UUID) {
+        guard trips.isEmpty else { return }
+        Task {
+            let cached = await Task.detached(priority: .userInitiated) {
+                Self.loadCachedTrips(for: userID)
+            }.value
+            guard let cached, !cached.isEmpty,
+                  self.trips.isEmpty, self.currentUser.id == userID else { return }
+            self.trips = cached.filter { !self.pendingDeletions.contains($0.id) }
+        }
+    }
+
     /// Updates the signed-in user's display name and photo, persisting both so they
     /// survive across launches. Also pushes the updated name into every trip immediately.
     func updateProfile(name: String, imageData: Data?) {
@@ -985,6 +1027,7 @@ final class TripStore {
         trips.removeAll { $0.id == tripID }
         pendingDeletions.insert(tripID)
         savePendingDeletions()
+        cacheTripsLocally()
 
         beginSyncActivity()
         Task {
@@ -1052,6 +1095,9 @@ final class TripStore {
         userProfile.dateOfBirth = stored?.dateOfBirth
         userProfile.bio = stored?.bio ?? ""
         userProfile.visitedPlaces = stored?.visitedPlaces ?? []
+        // Paint this user's locally cached trips right away; loadFromCloud replaces them
+        // with the authoritative copy as soon as the network round-trip finishes.
+        restoreCachedTrips(for: uuid)
     }
 
     /// Decodes a JWT's payload (its middle segment) into a claims dictionary.
@@ -1131,12 +1177,16 @@ final class TripStore {
             healed.append(anchored)
         }
         await MainActor.run { self.trips = healed }
+        cacheTripsLocally()
         for trip in healed where toPersist.contains(trip.id) { persist(trip) }
     }
 
     /// Pushes a single shared trip (members, budgets, and expenses) to Supabase, updating
     /// `syncState` so the UI can show progress and surface failures.
     private func persist(_ trip: Trip) {
+        // Every local mutation funnels through here, so this keeps the offline snapshot
+        // current even when the cloud save below fails or the user is offline.
+        cacheTripsLocally()
         beginSyncActivity()
         Task {
             do {
@@ -2861,7 +2911,9 @@ struct TripDetailView: View {
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 8)
             } else {
-                VStack(spacing: 8) {
+                // Lazy so a trip with hundreds of expenses only builds the rows that
+                // scroll into view, instead of all of them on the first body pass.
+                LazyVStack(spacing: 8) {
                     ForEach(trip.expenses) { expense in
                         let link = NavigationLink {
                             ExpenseDetailView(tripID: tripID, expense: expense)
@@ -4547,10 +4599,7 @@ struct LocationField: View {
 /// trip looks distinct even before a photo is added. Used by the home cards and the
 /// trip detail hero header.
 struct TripCoverView: View {
-    @Environment(TripStore.self) private var store
     let trip: Trip
-
-    @State private var resolvedURL: URL?
 
     /// Curated cover gradients; one is chosen deterministically per trip.
     private static let palettes: [[UInt32]] = [
@@ -4591,17 +4640,16 @@ struct TripCoverView: View {
     @ViewBuilder
     private var photoOrGlyph: some View {
         if let stored = trip.coverImageURL, !stored.isEmpty {
-            AsyncImage(url: resolvedURL) { phase in
+            CachedStorageImage(path: stored) { phase in
                 switch phase {
                 case .success(let image):
                     image.resizable().scaledToFill()
-                case .empty:
+                case .loading:
                     ProgressView().tint(.white)
-                default:
+                case .failure:
                     glyph
                 }
             }
-            .task(id: stored) { resolvedURL = await store.signedImageURL(for: stored) }
         } else {
             glyph
         }
@@ -4626,12 +4674,9 @@ private func avatar(_ person: Person, size: CGFloat) -> some View {
 /// Avatar that shows a real photo when available.
 /// Priority: local `imageData` (current user) → remote `person.avatarURL` → colored initials.
 struct AvatarView: View {
-    @Environment(TripStore.self) private var store
     let person: Person
     var imageData: Data? = nil
     let size: CGFloat
-
-    @State private var resolvedURL: URL?
 
     var body: some View {
         Group {
@@ -4642,17 +4687,15 @@ struct AvatarView: View {
                     .frame(width: size, height: size)
                     .clipShape(.circle)
             } else if let stored = person.avatarURL, !stored.isEmpty {
-                AsyncImage(url: resolvedURL) { phase in
-                    switch phase {
-                    case .success(let image):
+                CachedStorageImage(path: stored) { phase in
+                    if case .success(let image) = phase {
                         image.resizable().scaledToFill()
                             .frame(width: size, height: size)
                             .clipShape(.circle)
-                    default:
+                    } else {
                         initialsCircle
                     }
                 }
-                .task(id: stored) { resolvedURL = await store.signedImageURL(for: stored) }
             } else {
                 initialsCircle
             }

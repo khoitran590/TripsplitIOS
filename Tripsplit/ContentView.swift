@@ -5,16 +5,10 @@ import PhotosUI
 import UIKit
 
 @main struct MyApp: App {
-    init() {
-        // AsyncImage loads covers/avatars/receipts/feed photos through URLSession.shared,
-        // whose default cache is tiny (512 KB memory). Signed storage URLs stay stable for
-        // ~50 minutes (TripStore.signedURLCache), so a properly sized shared URLCache turns
-        // repeat views of the same image into instant cache hits instead of re-downloads.
-        URLCache.shared = URLCache(
-            memoryCapacity: 64 * 1024 * 1024,
-            diskCapacity: 256 * 1024 * 1024
-        )
-    }
+    // Covers/avatars/receipts/feed photos load through `ImageCache` (memory + disk,
+    // keyed by stable storage path), which replaced the old oversized URLCache: that
+    // cache keyed on signed URLs, which rotate every ~50 minutes, so it missed on every
+    // relaunch and re-downloaded every image.
 
     var body: some Scene {
         WindowGroup {
