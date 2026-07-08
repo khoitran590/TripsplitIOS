@@ -451,6 +451,7 @@ struct HomeScreen: View {
 struct BalanceCard: View {
     @Environment(TripStore.self) private var store
     @State private var showConverter = false
+    @State private var showBudgetInfo = false
 
     var body: some View {
         ZStack {
@@ -492,6 +493,21 @@ struct BalanceCard: View {
             HStack {
                 Text("Budget")
                     .font(.title3.weight(.bold))
+                Button {
+                    showBudgetInfo = true
+                } label: {
+                    Image(systemName: "info.circle")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 28, height: 28)
+                        .contentShape(.circle)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("How your budget is calculated")
+                .popover(isPresented: $showBudgetInfo) {
+                    budgetInfoPopover
+                        .presentationCompactAdaptation(.popover)
+                }
                 if hasBudget {
                     Text(LocalizedStringKey(statusText))
                         .font(.caption.weight(.semibold))
@@ -566,6 +582,29 @@ struct BalanceCard: View {
         .glassEffect(.regular, in: .rect(cornerRadius: 34))
     }
 
+    /// Explains where the headline budget figure comes from: only budgets the user has
+    /// explicitly set on their trips count, each converted to USD, and $0 means none set.
+    private var budgetInfoPopover: some View {
+        let me = store.currentUser.id
+        let budgetedTrips = store.myTrips.filter { $0.budget(for: me) > 0 }.count
+        let totalTrips = store.myTrips.count
+
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("How your budget adds up")
+                .font(.subheadline.weight(.bold))
+            if budgetedTrips > 0 {
+                Text("This total is the sum of the budgets you set yourself in each trip, converted to USD. Right now \(budgetedTrips) of your \(totalTrips) trips have a budget set — trips without one add nothing.")
+            } else {
+                Text("It shows $0 because you haven't set a budget in any of your trips yet. Set a budget inside a trip and it will be added to this total, converted to USD.")
+            }
+        }
+        .font(.footnote)
+        .foregroundStyle(.primary)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(14)
+        .frame(width: 290, alignment: .leading)
+    }
+
     /// A caption/value pair anchored under an end of the progress bar.
     private func barLabel(_ label: String, _ value: String, trailing: Bool = false) -> some View {
         VStack(alignment: trailing ? .trailing : .leading, spacing: 1) {
@@ -583,27 +622,28 @@ struct BalanceCard: View {
 
     /// A simple, Cash App–style tile for the owe / owed figures under the ring.
     private func oweTile(icon: String, label: String, value: String, tint: Color) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             Image(systemName: icon)
-                .font(.system(size: 14, weight: .bold))
+                .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(tint)
-                .frame(width: 30, height: 30)
+                .frame(width: 36, height: 36)
                 .background(tint.opacity(0.15), in: .circle)
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(LocalizedStringKey(label))
-                    .font(.caption)
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
                 Text(value)
-                    .font(.subheadline.weight(.bold))
+                    .font(.title3.weight(.bold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
             }
             Spacer(minLength: 0)
         }
-        .padding(10)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(tint.opacity(0.08), in: .rect(cornerRadius: 14))
+        .background(tint.opacity(0.08), in: .rect(cornerRadius: 16))
     }
 }
 
