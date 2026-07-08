@@ -1835,7 +1835,7 @@ struct AddTripView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Plan a new trip")
-                .font(.system(.largeTitle, design: .rounded).weight(.bold))
+                .font(.system(.largeTitle).weight(.bold))
             Text("Name it, pick a place, and bring your crew.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
@@ -2637,7 +2637,7 @@ struct TripDetailView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Total Budget").font(.caption).foregroundStyle(.secondary)
                 Text(money(budget, trip.currencyCode))
-                    .font(.system(size: 30, weight: .bold, design: .rounded))
+                    .font(.system(size: 30, weight: .bold))
             }
 
             if budget > 0 {
@@ -3278,7 +3278,7 @@ struct ExpenseDetailView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(money(exp.amount, trip?.currencyCode ?? "USD"))
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
+                        .font(.system(size: 28, weight: .bold))
                     Text(exp.date.formatted(date: .long, time: .omitted))
                         .font(.subheadline)
                         .foregroundStyle(.secondary)

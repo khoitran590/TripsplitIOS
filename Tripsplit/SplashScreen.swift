@@ -57,7 +57,7 @@ struct SplashScreen: View {
 
                 VStack(spacing: 6) {
                     Text("TripSplit")
-                        .font(.system(size: 34, weight: .bold, design: .rounded))
+                        .font(.system(size: 34, weight: .bold))
                         .foregroundStyle(
                             LinearGradient(
                                 colors: [Color(hex: 0xF59E0B), Color(hex: 0xEC4899)],

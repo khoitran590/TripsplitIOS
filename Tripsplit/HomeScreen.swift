@@ -516,7 +516,6 @@ struct BalanceCard: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(heroValue)
                     .font(.largeTitle.weight(.bold))
-                    .fontDesign(.rounded)
                     .foregroundStyle(isOver ? ringColor : .primary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
@@ -837,7 +836,6 @@ struct CurrencyConverterCard: View {
                 TextField("0", text: $amountText)
                     .keyboardType(.decimalPad)
                     .font(.title2.weight(.semibold))
-                    .fontDesign(.rounded)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
                     .background(.secondary.opacity(0.12), in: .rect(cornerRadius: 12))
@@ -862,7 +860,6 @@ struct CurrencyConverterCard: View {
                 HStack(alignment: .firstTextBaseline) {
                     Text(converted.map { String(format: "%.2f", $0) } ?? "—")
                         .font(.title.weight(.bold))
-                        .fontDesign(.rounded)
                     Text(to)
                         .font(.headline)
                         .foregroundStyle(.secondary)

@@ -372,7 +372,7 @@ struct SplitView: View {
             HStack(spacing: 2) {
                 Text(currencySymbol(currencyCode)).font(.title.weight(.semibold)).foregroundStyle(.secondary)
                 TextField("0.00", text: $amountText)
-                    .font(.system(size: 40, weight: .bold, design: .rounded))
+                    .font(.system(size: 40, weight: .bold))
                     .keyboardType(.decimalPad)
                     .multilineTextAlignment(.center)
                     .fixedSize()
