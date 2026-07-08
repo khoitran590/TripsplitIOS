@@ -22,7 +22,6 @@ enum DockTab: String, CaseIterable, Identifiable {
     case home = "Home"
     case map = "Map"
     case rec = "Explore"
-    case settings = "Settings"
 
     var id: Self { self }
 
@@ -31,7 +30,6 @@ enum DockTab: String, CaseIterable, Identifiable {
         case .home: "house.fill"
         case .map: "map.fill"
         case .rec: "globe"
-        case .settings: "gearshape.fill"
         }
     }
 }
@@ -72,9 +70,8 @@ struct ContentView: View {
                 .padding(.bottom, 8)
         }
         .onChange(of: selectedTab) { _, tab in visitedTabs.insert(tab) }
-        // Sign-in happens on the Settings tab (it hosts `AuthView` when signed out);
-        // once authentication succeeds, land the user on Home instead of leaving
-        // them parked on Settings.
+        // Sign-in happens in the profile sheet (it hosts `AuthView` when signed out);
+        // once authentication succeeds, land the user on Home.
         .onChange(of: auth.isAuthenticated) { _, isAuthenticated in
             if isAuthenticated { selectedTab = .home }
         }
@@ -112,13 +109,57 @@ struct ContentView: View {
         switch tab {
         case .home: HomeScreen()
         case .map: MapScreen(selectedTab: $selectedTab)
-        case .rec: RecScreen()
-        case .settings: SettingsScreen()
+        case .rec:
+            if auth.isAuthenticated {
+                RecScreen()
+            } else {
+                LockedExploreScreen(selectedTab: $selectedTab)
+            }
         }
     }
 }
 
 // MARK: - Screens
+
+/// Shown in place of the Explore tab while signed out: explains the tab is
+/// account-only and opens the sign-in sheet (`SettingsScreen` hosts `AuthView`
+/// when signed out).
+struct LockedExploreScreen: View {
+    @Binding var selectedTab: DockTab
+    @State private var showSignIn = false
+
+    var body: some View {
+        ZStack {
+            AppBackground()
+            VStack(spacing: 16) {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 40))
+                    .foregroundStyle(.secondary)
+                Text("Explore is for members")
+                    .font(.title3.weight(.semibold))
+                Text("Sign in to browse curated trips and destinations.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                Button {
+                    showSignIn = true
+                } label: {
+                    Text("Sign In")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 12)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+            }
+            .padding(.horizontal, 32)
+        }
+        .sheet(isPresented: $showSignIn) {
+            SettingsScreen()
+        }
+    }
+}
 
 /// A place the Map tab should focus on, chosen from a curated trip in the Explore
 /// tab. Carries both the curated context (the trip's own blurb + cost) and the

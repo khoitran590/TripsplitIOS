@@ -4,8 +4,11 @@ import SwiftUI
 /// and recent transactions.
 struct HomeScreen: View {
     @Environment(TripStore.self) private var store
+    @Environment(AuthStore.self) private var auth
     @AppStorage("appearancePreference") private var appearance: AppearancePreference = .system
     @State private var showAddTrip = false
+    @State private var showSettings = false
+    @State private var showSignInAlert = false
     @State private var selectedTrip: Trip?
 
     /// The quick action a user tapped, awaiting a trip choice.
@@ -46,17 +49,26 @@ struct HomeScreen: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     HStack(spacing: 8) {
                         appearanceToggle
-                        ProfileAvatar(
-                            imageData: store.profileImageData,
-                            initials: store.currentUser.initials,
-                            size: 34
-                        )
+                        Button {
+                            showSettings = true
+                        } label: {
+                            ProfileAvatar(
+                                imageData: store.profileImageData,
+                                initials: store.currentUser.initials,
+                                size: 34
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(Text("Profile & settings"))
                     }
                 }
             }
         }
         .sheet(isPresented: $showAddTrip) {
             AddTripView()
+        }
+        .sheet(isPresented: $showSettings) {
+            SettingsScreen()
         }
         .sheet(item: $selectedTrip) { trip in
             TripDetailView(tripID: trip.id)
@@ -91,6 +103,7 @@ struct HomeScreen: View {
         } message: {
             Text(tripToDelete.map { "“\($0.name)” and its expenses will be removed from your synced trips." } ?? "")
         }
+        .signInRequiredAlert(isPresented: $showSignInAlert)
         .task {
             // Load USD exchange rates so the balance card can normalize every trip's currency.
             await store.refreshRates()
@@ -99,6 +112,10 @@ struct HomeScreen: View {
 
     /// Starts a quick action by asking which trip to use (or prompting to create one).
     private func startQuickAction(_ action: QuickAction) {
+        guard auth.isAuthenticated else {
+            showSignInAlert = true
+            return
+        }
         guard !store.myTrips.isEmpty else {
             showAddTrip = true
             return
@@ -128,7 +145,7 @@ struct HomeScreen: View {
                     .padding(.leading, 4)
                 Spacer()
                 Button {
-                    showAddTrip = true
+                    if auth.isAuthenticated { showAddTrip = true } else { showSignInAlert = true }
                 } label: {
                     Label("Add Trip", systemImage: "plus")
                         .font(.subheadline.weight(.semibold))

@@ -253,12 +253,17 @@ enum SplitEngine {
     /// settles every net balance. (TripSplit settles manually; this is a helper.)
     static func settleUp(net: [Person.ID: Double], people: [Person]) -> [Settlement] {
         let lookup = Dictionary(uniqueKeysWithValues: people.map { ($0.id, $0) })
-        var creditors = net.filter { $0.value > 0.005 }
-            .map { (id: $0.key, amount: $0.value) }
-            .sorted { $0.amount > $1.amount }
-        var debtors = net.filter { $0.value < -0.005 }
-            .map { (id: $0.key, amount: -$0.value) }
-            .sorted { $0.amount > $1.amount }
+        // Walk in `people` order (not dictionary order) and tie-break equal amounts by
+        // that order, so the same balances always produce the same transfer pairs —
+        // recorded payments are keyed by pair and must survive relaunches.
+        let ordered = people.enumerated().compactMap { index, person in
+            net[person.id].map { (id: person.id, amount: $0, order: index) }
+        }
+        var creditors = ordered.filter { $0.amount > 0.005 }
+            .sorted { $0.amount != $1.amount ? $0.amount > $1.amount : $0.order < $1.order }
+        var debtors = ordered.filter { $0.amount < -0.005 }
+            .map { (id: $0.id, amount: -$0.amount, order: $0.order) }
+            .sorted { $0.amount != $1.amount ? $0.amount > $1.amount : $0.order < $1.order }
 
         var settlements: [Settlement] = []
         var ci = 0, di = 0
@@ -628,11 +633,7 @@ struct SplitView: View {
     }
 
     private func avatar(_ person: Person) -> some View {
-        Text(person.initials)
-            .font(.caption.weight(.bold))
-            .foregroundStyle(.white)
-            .frame(width: 32, height: 32)
-            .background(person.color, in: .circle)
+        InitialsAvatar(person: person, size: 32)
     }
 
     private func currency(_ value: Double) -> String {
@@ -975,11 +976,7 @@ struct SettleView: View {
     }
 
     private func avatar(_ person: Person) -> some View {
-        Text(person.initials)
-            .font(.caption.weight(.bold))
-            .foregroundStyle(.white)
-            .frame(width: 28, height: 28)
-            .background(person.color, in: .circle)
+        InitialsAvatar(person: person, size: 28)
     }
 
     private func currency(_ value: Double) -> String {

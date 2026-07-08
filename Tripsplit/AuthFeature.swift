@@ -763,3 +763,18 @@ struct ChangePasswordView: View {
         }
     }
 }
+
+// MARK: - Sign-in gating
+
+/// Standard alert shown when a signed-out user taps a feature that needs an
+/// account (creating trips, adding expenses, editing trips). Sign-in itself
+/// lives on the Settings tab, so the alert points there.
+extension View {
+    func signInRequiredAlert(isPresented: Binding<Bool>) -> some View {
+        alert("Sign In Required", isPresented: isPresented) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Sign in from the Settings tab to create trips, add expenses, and edit trips.")
+        }
+    }
+}

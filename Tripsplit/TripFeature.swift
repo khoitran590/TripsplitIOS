@@ -359,41 +359,15 @@ extension Trip {
         return net
     }
 
-    /// The transfers that settle the trip, computed pair-by-pair from the actual shared
-    /// expenses. Unlike a greedy "minimize the number of transactions" pass, this never
-    /// reroutes a debt through a third person: you only ever owe someone whose expenses you
-    /// shared in, for exactly your share. For each pair the two directions are netted into a
-    /// single transfer. (Greedy minimization would bundle, say, your share of B's dinner into
-    /// a larger payment to A just because A is the biggest creditor — which misreports who
-    /// you actually owe.)
+    /// The transfers that settle the trip: greedy debt simplification over each member's
+    /// net balance (`SplitEngine.settleUp`), so most debtors clear their whole balance
+    /// with one payment instead of paying every payer separately. A debt may be routed
+    /// to a creditor whose expenses the debtor didn't share in — the per-pair "who
+    /// actually owes whom" detail lives on each expense; this list is the cheapest way
+    /// to zero everyone out. The engine walks members in list order, so the same
+    /// balances always produce the same pairs (recorded payments are keyed by pair).
     func settlements() -> [Settlement] {
-        // gross[debtor][creditor] = what `debtor` owes `creditor`, i.e. the debtor's share of
-        // every expense the creditor paid, summed across the trip.
-        var gross: [Person.ID: [Person.ID: Double]] = [:]
-        for expense in expenses {
-            let payer = expense.payerID
-            for member in members where member.id != payer {
-                let owed = share(for: member.id, in: expense)
-                guard owed > 0 else { continue }
-                gross[member.id, default: [:]][payer, default: 0] += owed
-            }
-        }
-
-        // Net each unordered pair once, walking in member-list order for stable output.
-        var settlements: [Settlement] = []
-        for (index, a) in members.enumerated() {
-            for b in members[(index + 1)...] {
-                let aOwesB = gross[a.id]?[b.id] ?? 0
-                let bOwesA = gross[b.id]?[a.id] ?? 0
-                let net = SplitEngine.roundToTwo(aOwesB - bOwesA)
-                if net > 0.005 {
-                    settlements.append(Settlement(from: a, to: b, amount: net))
-                } else if net < -0.005 {
-                    settlements.append(Settlement(from: b, to: a, amount: -net))
-                }
-            }
-        }
-        return settlements
+        SplitEngine.settleUp(net: netBalances(), people: members)
     }
 
     /// Amount this user still owes others after subtracting confirmed settlement payments.
@@ -1075,9 +1049,12 @@ final class TripStore {
     /// the access token's `sub` claim.
     func bindIdentity(accessToken: String?) {
         guard let accessToken, let uuid = Self.userID(fromJWT: accessToken) else {
-            // Signed out — clear in-memory profile so the next user starts blank.
+            // Signed out — clear in-memory profile and trips so nothing from the
+            // previous account stays on screen. The per-user disk cache is kept, so
+            // signing back in repaints instantly via `restoreCachedTrips`.
             resetProfile()
             feedPostsByTrip = [:]
+            trips = []
             return
         }
         // Identity changed: drop cached feeds so a different account never sees the
@@ -1647,7 +1624,10 @@ func currencySymbol(_ code: String) -> String {
 let supportedCurrencies = ["USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CNY", "KRW", "THB", "SGD", "VND", "INR"]
 
 /// Colors assigned to newly added trip members, in rotation.
-let memberPalette: [UInt32] = [0x10B981, 0xF59E0B, 0xEC4899, 0x3B82F6, 0x8B5CF6, 0xEF4444, 0x14B8A6, 0xF97316]
+/// Muted, harmonized hues for member avatars — distinguishable but calm, since a
+/// trip screen can show a dozen avatars at once (rendered as soft tints by
+/// `InitialsAvatar`, which is what keeps existing saturated stored colors calm too).
+let memberPalette: [UInt32] = [0x5B8DBE, 0x5FA98C, 0xC0895E, 0x9282C0, 0xC07B85, 0x5FA3B0, 0x8FA05E, 0xB08FC0]
 
 /// Prepares user-picked images for upload/display without keeping full-resolution originals
 /// around in SwiftUI state. ImageIO thumbnails avoid a large decode for camera-roll photos.
@@ -2337,12 +2317,16 @@ struct EditTripView: View {
 struct TripDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(TripStore.self) private var store
+    @Environment(AuthStore.self) private var auth
     let tripID: Trip.ID
 
     @State private var showAddExpense = false
     @State private var showEditTrip = false
+    @State private var showSignInAlert = false
     @State private var scrollToSettle = false
     @State private var activeSettlement: Settlement?
+    @State private var expandedCreditors: Set<Person.ID> = []
+    @State private var showSettleInfo = false
     @State private var manualMemberName = ""
     @State private var inviteEmail = ""
     @State private var inviteName = ""
@@ -2406,11 +2390,15 @@ struct TripDetailView: View {
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
+            .signInRequiredAlert(isPresented: $showSignInAlert)
             .sheet(isPresented: $showAddExpense) {
                 AddExpenseView(tripID: tripID)
             }
             .sheet(isPresented: $showEditTrip) {
                 EditTripView(tripID: tripID)
+            }
+            .sheet(isPresented: $showSettleInfo) {
+                SettleMathInfoView()
             }
             .sheet(item: $activeSettlement) { settlement in
                 SettleView(
@@ -2495,9 +2483,13 @@ struct TripDetailView: View {
 
     private func heroActions(_ trip: Trip) -> some View {
         HStack(spacing: 10) {
-            heroButton("Add Expense", icon: "plus") { showAddExpense = true }
+            heroButton("Add Expense", icon: "plus") {
+                if auth.isAuthenticated { showAddExpense = true } else { showSignInAlert = true }
+            }
             if store.isCreator(of: trip) {
-                heroButton("Edit Trip", icon: "calendar") { showEditTrip = true }
+                heroButton("Edit Trip", icon: "calendar") {
+                    if auth.isAuthenticated { showEditTrip = true } else { showSignInAlert = true }
+                }
             }
             heroButton("Settle Up", icon: "person.2.fill") { scrollToSettle = true }
         }
@@ -2595,7 +2587,9 @@ struct TripDetailView: View {
                 Label("Budget Overview", systemImage: "wallet.bifold.fill").font(.headline)
                 Spacer()
                 if store.isCreator(of: trip) {
-                    Button { showEditTrip = true } label: {
+                    Button {
+                        if auth.isAuthenticated { showEditTrip = true } else { showSignInAlert = true }
+                    } label: {
                         Text("Edit Budget")
                             .font(.caption.weight(.semibold))
                             .padding(.horizontal, 12).padding(.vertical, 6)
@@ -2695,35 +2689,102 @@ struct TripDetailView: View {
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 8)
             } else {
-                Text("Tap a transfer to record a payment.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                ForEach(settlements) { settlement in
+                HStack(spacing: 6) {
+                    Text("Tap a person to see who owes them.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Spacer()
                     Button {
-                        activeSettlement = settlement
+                        showSettleInfo = true
                     } label: {
-                        settleRow(trip, settlement)
+                        Image(systemName: "info.circle")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel(Text("How settle up is calculated"))
+                }
+                let groups = creditorGroups(settlements)
+                ForEach(groups, id: \.creditor.id) { group in
+                    creditorRow(trip, group)
+                    if expandedCreditors.contains(group.creditor.id) {
+                        ForEach(group.settlements) { settlement in
+                            Button {
+                                activeSettlement = settlement
+                            } label: {
+                                settleRow(trip, settlement)
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.leading, 24)
+                        }
+                    }
                 }
             }
         }
     }
 
+    private func creditorGroups(_ settlements: [Settlement]) -> [(creditor: Person, settlements: [Settlement])] {
+        var order: [Person.ID] = []
+        var byCreditor: [Person.ID: (creditor: Person, settlements: [Settlement])] = [:]
+        for settlement in settlements {
+            if byCreditor[settlement.to.id] == nil {
+                order.append(settlement.to.id)
+                byCreditor[settlement.to.id] = (settlement.to, [])
+            }
+            byCreditor[settlement.to.id]?.settlements.append(settlement)
+        }
+        return order.compactMap { byCreditor[$0] }
+    }
+
+    private func creditorRow(_ trip: Trip, _ group: (creditor: Person, settlements: [Settlement])) -> some View {
+        let me = store.currentUser.id
+        let name = group.creditor.id == me ? "You" : group.creditor.name
+        let totalRemaining = group.settlements.reduce(0) { $0 + store.remaining(tripID: tripID, for: $1) }
+        let isExpanded = expandedCreditors.contains(group.creditor.id)
+        return Button {
+            withAnimation(.snappy) {
+                if isExpanded {
+                    expandedCreditors.remove(group.creditor.id)
+                } else {
+                    expandedCreditors.insert(group.creditor.id)
+                }
+            }
+        } label: {
+            HStack(spacing: 8) {
+                avatar(group.creditor, size: 30)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(LocalizedStringKey(name))
+                        .font(.subheadline).fontWeight(.semibold)
+                    Text("Owed by \(group.settlements.count) \(group.settlements.count == 1 ? "person" : "people")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if totalRemaining <= 0 {
+                    Image(systemName: "checkmark.seal.fill").foregroundStyle(Color(hex: 0x10B981))
+                } else {
+                    Text(money(totalRemaining, trip.currencyCode))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color(hex: 0x10B981))
+                }
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+            }
+            .contentShape(.rect)
+            .padding(.vertical, 4)
+        }
+        .buttonStyle(.plain)
+    }
+
     private func settleRow(_ trip: Trip, _ settlement: Settlement) -> some View {
         let me = store.currentUser.id
         let fromLabel = settlement.from.id == me ? "You" : settlement.from.name
-        let toLabel = settlement.to.id == me ? "you" : settlement.to.name
         return HStack(spacing: 8) {
-            avatar(settlement.from, size: 30)
+            avatar(settlement.from, size: 26)
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
-                    Text(LocalizedStringKey(fromLabel)).fontWeight(.semibold)
-                    Image(systemName: "arrow.right")
-                        .font(.caption2.weight(.bold)).foregroundStyle(.secondary)
-                    Text(LocalizedStringKey(toLabel)).fontWeight(.semibold)
-                }
-                .font(.subheadline)
+                Text(LocalizedStringKey(fromLabel))
+                    .font(.subheadline).fontWeight(.semibold)
                 if store.isFullySettled(tripID: tripID, settlement) {
                     Text("Settled").font(.caption).foregroundStyle(Color(hex: 0x10B981))
                 }
@@ -2743,6 +2804,64 @@ struct TripDetailView: View {
         .padding(.vertical, 4)
     }
 
+    private struct SettleMathInfoView: View {
+        @Environment(\.dismiss) private var dismiss
+
+        var body: some View {
+            NavigationStack {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        step(number: 1, icon: "creditcard.fill",
+                             title: "Add up what each person paid",
+                             detail: "Every expense counts fully toward the person who fronted the money.")
+                        step(number: 2, icon: "chart.pie.fill",
+                             title: "Work out each person's share",
+                             detail: "Each expense is divided using its own split settings — equally, by percentage, by exact amounts, or assigned to one person.")
+                        step(number: 3, icon: "scalemass.fill",
+                             title: "Net it out",
+                             detail: "Balance = paid − share. A positive balance means the group owes you; a negative one means you owe the group.")
+                        step(number: 4, icon: "arrow.triangle.swap",
+                             title: "Settle with the fewest payments",
+                             detail: "The biggest debtor pays the biggest creditor until both hit zero, then the next pair, and so on. You might pay someone who didn't cover your expense — but everyone ends up paid back exactly what they're owed.")
+                    }
+                    .padding(20)
+                }
+                .navigationTitle("How Settle Up works")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button { dismiss() } label: {
+                            Image(systemName: "xmark")
+                        }
+                    }
+                }
+            }
+            .presentationDetents([.medium, .large])
+        }
+
+        private func step(number: Int, icon: String, title: LocalizedStringKey, detail: LocalizedStringKey) -> some View {
+            HStack(alignment: .top, spacing: 14) {
+                Image(systemName: icon)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 34, height: 34)
+                    .background(Theme.accent, in: .circle)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Step \(number)")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.secondary)
+                        .textCase(.uppercase)
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
+                    Text(detail)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
     private func membersCard(_ trip: Trip) -> some View {
         TripCard(title: "Members (\(trip.members.count))", icon: "person.2.fill") {
             ScrollView(.horizontal, showsIndicators: false) {
@@ -2757,8 +2876,16 @@ struct TripDetailView: View {
                             Text(LocalizedStringKey(member.id == store.currentUser.id ? "You" : member.name))
                                 .font(.caption)
                                 .lineLimit(1)
+                            if member.id == trip.creatorID {
+                                Text("Organizer")
+                                    .font(.system(size: 9, weight: .semibold))
+                                    .foregroundStyle(Theme.accent)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Theme.accent.opacity(0.14), in: .capsule)
+                            }
                         }
-                        .frame(width: 64)
+                        .frame(width: 74)
                     }
                 }
             }
@@ -2994,42 +3121,51 @@ struct TripDetailView: View {
         let payer = trip.members.first { $0.id == expense.payerID }
         let me = store.currentUser.id
         let yourShare = trip.share(for: me, in: expense)
-        return VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(expense.title).font(.subheadline.weight(.semibold))
-                    Text("Paid by \(payer.map { $0.id == me ? "you" : $0.name } ?? "—") • \(expense.date.formatted(date: .abbreviated, time: .omitted))")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Text(money(expense.amount, trip.currencyCode))
-                    .font(.subheadline.weight(.semibold))
-                Image(systemName: "chevron.right")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.tertiary)
+        return HStack(alignment: .top, spacing: 12) {
+            if let payer {
+                AvatarView(
+                    person: payer,
+                    imageData: payer.id == me ? store.profileImageData : nil,
+                    size: 34
+                )
             }
-            if expense.participantIDs.contains(me) {
-                Text("Your share: \(money(yourShare, trip.currencyCode))")
-                    .font(.caption)
-                    .foregroundStyle(expense.payerID == me ? Theme.positive : Theme.negative)
-            }
-            HStack(spacing: 10) {
-                if expense.receiptURL != nil || !expense.items.isEmpty {
-                    HStack(spacing: 4) {
-                        Image(systemName: "doc.text.viewfinder")
-                        Text(expense.items.isEmpty ? "Receipt" : "Receipt • \(expense.items.count) item\(expense.items.count == 1 ? "" : "s")")
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(expense.title).font(.subheadline.weight(.semibold))
+                        Text("Paid by \(payer.map { $0.id == me ? "you" : $0.name } ?? "—") • \(expense.date.formatted(date: .abbreviated, time: .omitted))")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.secondary)
+                    Spacer()
+                    Text(money(expense.amount, trip.currencyCode))
+                        .font(.subheadline.weight(.semibold))
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.tertiary)
                 }
-                let commentCount = trip.comments[expense.id.uuidString]?.count ?? 0
-                if commentCount > 0 {
-                    HStack(spacing: 4) {
-                        Image(systemName: "bubble.left.fill")
-                        Text("\(commentCount)")
+                if expense.participantIDs.contains(me) {
+                    Text("Your share: \(money(yourShare, trip.currencyCode))")
+                        .font(.caption)
+                        .foregroundStyle(expense.payerID == me ? Theme.positive : Theme.negative)
+                }
+                HStack(spacing: 10) {
+                    if expense.receiptURL != nil || !expense.items.isEmpty {
+                        HStack(spacing: 4) {
+                            Image(systemName: "doc.text.viewfinder")
+                            Text(expense.items.isEmpty ? "Receipt" : "Receipt • \(expense.items.count) item\(expense.items.count == 1 ? "" : "s")")
+                        }
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
                     }
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.secondary)
+                    let commentCount = trip.comments[expense.id.uuidString]?.count ?? 0
+                    if commentCount > 0 {
+                        HStack(spacing: 4) {
+                            Image(systemName: "bubble.left.fill")
+                            Text("\(commentCount)")
+                        }
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    }
                 }
             }
         }
@@ -3392,9 +3528,9 @@ struct AddExpenseView: View {
                 if let trip {
                     ScrollView {
                         VStack(spacing: 18) {
-                            receiptCard(trip)
                             amountCard(trip)
                             payerCard(trip)
+                            receiptCard(trip)
                             if items.isEmpty {
                                 splitCard(trip)
                             } else {
@@ -3423,6 +3559,11 @@ struct AddExpenseView: View {
                 }
             }
             .onAppear(perform: configureDefaults)
+            // In itemized mode the expense total is item prices + tax + tip; keep the
+            // amount field in lockstep instead of asking the user to copy it over.
+            .onChange(of: grandTotal) {
+                if !items.isEmpty { amountText = formatted(grandTotal) }
+            }
             .onChange(of: receiptPick) { _, newValue in
                 guard let newValue else { return }
                 Task { await handlePickedReceipt(newValue) }
@@ -3455,7 +3596,12 @@ struct AddExpenseView: View {
     // MARK: Receipt
 
     private func receiptCard(_ trip: Trip) -> some View {
-        TripCard(title: "Receipt", icon: "doc.text.viewfinder") {
+        TripCard(title: "Receipt & Items", icon: "doc.text.viewfinder") {
+            if receiptImage == nil && items.isEmpty && removedItems.isEmpty {
+                Text("Scan a receipt to fill in the items and total for you.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             if let receiptImage {
                 Image(uiImage: receiptImage)
                     .resizable().scaledToFill()
@@ -3515,6 +3661,19 @@ struct AddExpenseView: View {
             } else if receiptImage != nil && !isScanning {
                 Text("No items detected — enter the amount manually below.")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+
+            // Quiet entry point into itemized mode without a scan: one tap adds a first
+            // blank line and the editor (plus tax/tip and per-item splits) appears.
+            if items.isEmpty && removedItems.isEmpty && !isScanning {
+                Button {
+                    withAnimation(.snappy) { addBlankItem(trip) }
+                } label: {
+                    Label("Or add items manually", systemImage: "plus.circle")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.accent)
+                }
+                .buttonStyle(.plain)
             }
         }
     }
@@ -3582,14 +3741,6 @@ struct AddExpenseView: View {
                 }
             }
 
-            Button {
-                amountText = formatted(itemsTotal)
-            } label: {
-                Text("Use items total (\(money(itemsTotal, trip.currencyCode)))")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Theme.accent)
-            }
-            .buttonStyle(.plain)
         }
     }
 
@@ -3733,10 +3884,17 @@ struct AddExpenseView: View {
                 Text(currencySymbol(trip.currencyCode)).foregroundStyle(.secondary)
                 TextField("0.00", text: $amountText)
                     .keyboardType(.decimalPad)
+                    .disabled(!items.isEmpty)
             }
             .font(.title3.weight(.semibold))
             .padding(.horizontal, 14).padding(.vertical, 12)
             .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+
+            if !items.isEmpty {
+                Text("Total is calculated from the items, tax, and tip below.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
             DatePicker("Date", selection: $date, displayedComponents: .date)
                 .font(.subheadline)
@@ -4664,11 +4822,24 @@ struct TripCoverView: View {
 
 /// A colored initials avatar for a person (no image — initials only).
 private func avatar(_ person: Person, size: CGFloat) -> some View {
-    Text(person.initials)
-        .font(.system(size: size * 0.4, weight: .bold))
-        .foregroundStyle(.white)
-        .frame(width: size, height: size)
-        .background(person.color, in: .circle)
+    InitialsAvatar(person: person, size: size)
+}
+
+/// Soft-tinted initials circle: the member's color as a light wash with tinted
+/// initials, instead of a fully saturated disc. Lists full of members read much
+/// calmer this way while each person keeps their identifying hue.
+struct InitialsAvatar: View {
+    let person: Person
+    let size: CGFloat
+
+    var body: some View {
+        Text(person.initials)
+            .font(.system(size: size * 0.4, weight: .bold))
+            .foregroundStyle(person.color)
+            .frame(width: size, height: size)
+            .background(person.color.opacity(0.16), in: .circle)
+            .overlay(Circle().strokeBorder(person.color.opacity(0.28), lineWidth: 1))
+    }
 }
 
 /// Avatar that shows a real photo when available.
@@ -4703,11 +4874,7 @@ struct AvatarView: View {
     }
 
     private var initialsCircle: some View {
-        Text(person.initials)
-            .font(.system(size: size * 0.4, weight: .bold))
-            .foregroundStyle(.white)
-            .frame(width: size, height: size)
-            .background(person.color, in: .circle)
+        InitialsAvatar(person: person, size: size)
     }
 }
 
