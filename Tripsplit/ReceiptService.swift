@@ -952,6 +952,7 @@ actor ImageCache {
     private let memory = NSCache<NSString, UIImage>()
     /// Paths already re-downloaded this launch (no need to revalidate again).
     private var refreshedPaths: Set<String> = []
+    private var downloadTasks: [String: Task<Data?, Never>] = [:]
     private let directory: URL
 
     init() {
@@ -971,7 +972,7 @@ actor ImageCache {
     func image(for path: String) -> UIImage? {
         if let hit = memory.object(forKey: path as NSString) { return hit }
         guard let data = try? Data(contentsOf: fileURL(for: path)),
-              let image = UIImage(data: data) else { return nil }
+              let image = Self.decodedImage(from: data) else { return nil }
         memory.setObject(image, forKey: path as NSString)
         return image
     }
@@ -982,10 +983,23 @@ actor ImageCache {
     /// Downloads the object at `url` and caches it under `path`. Returns nil on any
     /// network/decode failure so callers keep whatever they were already showing.
     func download(from url: URL, for path: String) async -> UIImage? {
-        guard let (data, response) = try? await BackendSecurity.secureSession.data(from: url),
-              let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
-              let image = UIImage(data: data) else { return nil }
+        let data: Data?
+        if let task = downloadTasks[path] {
+            data = await task.value
+        } else {
+            let task = Task<Data?, Never> {
+                guard let (data, response) = try? await BackendSecurity.secureSession.data(from: url),
+                      let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                    return nil
+                }
+                return data
+            }
+            downloadTasks[path] = task
+            data = await task.value
+            downloadTasks[path] = nil
+        }
         refreshedPaths.insert(path)
+        guard let data, let image = Self.decodedImage(from: data) else { return nil }
         memory.setObject(image, forKey: path as NSString)
         try? data.write(to: fileURL(for: path), options: .atomic)
         return image
@@ -995,7 +1009,14 @@ actor ImageCache {
     func evict(_ path: String) {
         memory.removeObject(forKey: path as NSString)
         refreshedPaths.remove(path)
+        downloadTasks[path]?.cancel()
+        downloadTasks[path] = nil
         try? FileManager.default.removeItem(at: fileURL(for: path))
+    }
+
+    nonisolated private static func decodedImage(from data: Data) -> UIImage? {
+        guard let image = UIImage(data: data) else { return nil }
+        return image.preparingForDisplay() ?? image
     }
 }
 

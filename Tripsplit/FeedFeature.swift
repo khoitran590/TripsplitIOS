@@ -503,8 +503,12 @@ private struct FeedComposerCard: View {
         var images: [UIImage] = []
         for item in items {
             if let data = try? await item.loadTransferable(type: Data.self),
-               let image = UIImage(data: data) {
-                images.append(image)
+               let prepared = await UploadImagePreparation.preparedImage(
+                from: data,
+                maxPixelSize: 2_200,
+                compressionQuality: 0.82
+               ) {
+                images.append(prepared.image)
             }
         }
         previews = images

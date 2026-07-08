@@ -762,7 +762,9 @@ final class TripStore {
     /// Loads USD-based rates so the home card can normalize every trip's currency.
     func refreshRates() async {
         if let rates = try? await CurrencyService.shared.rates(base: Self.baseCurrency) {
-            usdRates = rates
+            if rates != usdRates {
+                usdRates = rates
+            }
         }
     }
 
@@ -1054,12 +1056,16 @@ final class TripStore {
             // signing back in repaints instantly via `restoreCachedTrips`.
             resetProfile()
             feedPostsByTrip = [:]
+            resetSignedImageURLs()
             trips = []
             return
         }
         // Identity changed: drop cached feeds so a different account never sees the
         // previous user's loaded posts.
-        if currentUser.id != uuid { feedPostsByTrip = [:] }
+        if currentUser.id != uuid {
+            feedPostsByTrip = [:]
+            resetSignedImageURLs()
+        }
         currentUser.id = uuid
         // Load this specific user's saved profile (name, photo, avatarURL) keyed to their UUID.
         let stored = Self.loadProfile(for: uuid)
@@ -1230,6 +1236,7 @@ final class TripStore {
     /// Signed image URLs keyed by storage path, with the time they should be refreshed
     /// (kept under the server-side expiry so a cached URL never hands back an expired link).
     @ObservationIgnored private var signedURLCache: [String: (url: URL, refreshAfter: Date)] = [:]
+    @ObservationIgnored private var signedURLTasks: [String: Task<URL?, Never>] = [:]
 
     /// Resolves a stored image reference (a storage path, or a legacy public/signed URL)
     /// into a currently-valid signed URL for display. Cached in-memory so repeated views of
@@ -1241,17 +1248,36 @@ final class TripStore {
         if let cached = signedURLCache[path], cached.refreshAfter > Date() {
             return cached.url
         }
-        guard let accessToken = try? await authorizedAccessToken() else { return nil }
-        do {
-            let url = try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
-                try await ReceiptStorage.shared.signedURL(path: path, expiresIn: 3600, accessToken: token)
-            }
-            // Refresh a little before the 1-hour expiry so an in-flight load never 400s.
-            signedURLCache[path] = (url, Date().addingTimeInterval(50 * 60))
-            return url
-        } catch {
-            return nil
+        if let task = signedURLTasks[path] {
+            return await task.value
         }
+        let task = Task<URL?, Never> {
+            guard let accessToken = try? await self.authorizedAccessToken() else { return nil }
+            do {
+                let url = try await self.withFreshTokenIfNeeded(initialToken: accessToken) { token in
+                    try await ReceiptStorage.shared.signedURL(path: path, expiresIn: 3600, accessToken: token)
+                }
+                await MainActor.run {
+                    // Refresh a little before the 1-hour expiry so an in-flight load never 400s.
+                    self.signedURLCache[path] = (url, Date().addingTimeInterval(50 * 60))
+                }
+                return url
+            } catch {
+                return nil
+            }
+        }
+        signedURLTasks[path] = task
+        let url = await task.value
+        signedURLTasks[path] = nil
+        return url
+    }
+
+    /// Clears expired signed URL entries and completed coalescing tasks when the account
+    /// changes, so a new user never waits on or reuses another account's image signing.
+    private func resetSignedImageURLs() {
+        signedURLCache = [:]
+        signedURLTasks.values.forEach { $0.cancel() }
+        signedURLTasks = [:]
     }
 
     // Internal (not private): the trip-feed extension in FeedFeature.swift runs its

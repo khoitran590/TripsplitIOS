@@ -108,7 +108,7 @@ struct ContentView: View {
     private func screen(for tab: DockTab) -> some View {
         switch tab {
         case .home: HomeScreen()
-        case .map: MapScreen(selectedTab: $selectedTab)
+        case .map: MapScreen(selectedTab: $selectedTab, isActive: tab == selectedTab)
         case .rec:
             if auth.isAuthenticated {
                 RecScreen()
@@ -337,6 +337,7 @@ struct MapPlace: Identifiable {
 struct MapScreen: View {
     @Environment(ExploreMapModel.self) private var mapModel
     @Binding var selectedTab: DockTab
+    let isActive: Bool
 
     @State private var position: MapCameraPosition = .region(
         MKCoordinateRegion(
@@ -373,6 +374,34 @@ struct MapScreen: View {
     }
 
     var body: some View {
+        Group {
+            if isActive {
+                mapSurface
+            } else {
+                Color.clear
+                    .ignoresSafeArea()
+            }
+        }
+        .sheet(item: $detailPlace) { place in
+            PlaceDetailSheet(place: place, isSaved: savedBinding(for: place))
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showsFocusDetail) {
+            FocusDetailSheet { item, destination in
+                mapModel.showOnMap(item, in: destination)
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
+        .onChange(of: mapModel.navigateRequest) { recenterOnFocus() }
+        .onChange(of: coordinateKey) { recenterOnFocus() }
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: selectedPlaceID)
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: activeCategory)
+        .animation(.easeInOut(duration: 0.2), value: showsSearchThisArea)
+    }
+
+    private var mapSurface: some View {
         Map(position: $position, selection: $selectedPlaceID) {
             ForEach(places) { place in
                 Annotation(place.name, coordinate: place.coordinate) {
@@ -397,24 +426,7 @@ struct MapScreen: View {
         }
         .safeAreaInset(edge: .top, spacing: 0) { topControls }
         .overlay(alignment: .bottom) { bottomCard }
-        .sheet(item: $detailPlace) { place in
-            PlaceDetailSheet(place: place, isSaved: savedBinding(for: place))
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-        }
-        .sheet(isPresented: $showsFocusDetail) {
-            FocusDetailSheet { item, destination in
-                mapModel.showOnMap(item, in: destination)
-            }
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
-        }
         .onAppear(perform: recenterOnFocus)
-        .onChange(of: mapModel.navigateRequest) { recenterOnFocus() }
-        .onChange(of: coordinateKey) { recenterOnFocus() }
-        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: selectedPlaceID)
-        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: activeCategory)
-        .animation(.easeInOut(duration: 0.2), value: showsSearchThisArea)
     }
 
     // MARK: Floating top controls
