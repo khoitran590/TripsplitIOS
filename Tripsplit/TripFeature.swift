@@ -2329,7 +2329,6 @@ struct TripDetailView: View {
     @State private var showSettleInfo = false
     @State private var manualMemberName = ""
     @State private var inviteEmail = ""
-    @State private var inviteName = ""
     @State private var inviteMessage: String?
     @State private var inviteLink: URL?
     @State private var isInviting = false
@@ -2373,8 +2372,18 @@ struct TripDetailView: View {
                                     }
                                 }
                                 .padding()
-                                .padding(.top, 6)
+                                .padding(.top, 18)
                                 .padding(.bottom, 24)
+                                .background(
+                                    LinearGradient(
+                                        colors: Theme.sheetGradient,
+                                        startPoint: .top, endPoint: .bottom
+                                    ),
+                                    in: .rect(topLeadingRadius: 28, topTrailingRadius: 28)
+                                )
+                                // Pull the content sheet up over the photo's bottom so the
+                                // cover fades under a rounded card edge instead of a hard cut.
+                                .padding(.top, -28)
                             }
                         }
                         .ignoresSafeArea(edges: .top)
@@ -2416,7 +2425,7 @@ struct TripDetailView: View {
     private func heroHeader(_ trip: Trip) -> some View {
         ZStack(alignment: .bottomLeading) {
             TripCoverView(trip: trip)
-                .frame(height: 380)
+                .frame(height: 440)
                 .frame(maxWidth: .infinity)
                 .clipped()
                 .overlay {
@@ -2447,7 +2456,7 @@ struct TripDetailView: View {
                 heroActions(trip)
             }
             .padding(20)
-            .padding(.bottom, 14)
+            .padding(.bottom, 40)
         }
         .overlay(alignment: .topTrailing) {
             Button { dismiss() } label: {
@@ -2919,12 +2928,6 @@ struct TripDetailView: View {
                         .padding(.vertical, 10)
                         .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
 
-                    TextField("Display name (optional)", text: $inviteName)
-                        .font(.subheadline)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
-
                     Button { invite(trip) } label: {
                         HStack(spacing: 8) {
                             if isInviting { ProgressView().tint(.white) }
@@ -3001,12 +3004,10 @@ struct TripDetailView: View {
         inviteMessage = nil
         isInviting = true
         let email = inviteEmail
-        let name = inviteName
         Task {
             do {
-                try await store.inviteMember(email: email, displayName: name, to: trip.id)
+                try await store.inviteMember(email: email, displayName: "", to: trip.id)
                 inviteEmail = ""
-                inviteName = ""
                 inviteMessage = String(localized: "Member invited and added to this trip.")
             } catch {
                 inviteMessage = (error as? AuthError)?.message ?? error.localizedDescription

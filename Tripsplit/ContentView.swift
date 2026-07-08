@@ -1239,6 +1239,14 @@ struct RecScreen: View {
     @State private var searchText = ""
     @AppStorage("exploreSavedDestinationIDs") private var savedDestinationIDs = ""
 
+    // Filters
+    @State private var showFilterSheet = false
+    @State private var tripLength: TripLengthFilter = .any
+    @State private var selectedContinent: String?
+    @State private var maxBudget: Double = Self.budgetCap
+    /// Slider ceiling; at the cap the budget filter is treated as "no limit".
+    static let budgetCap: Double = 3500
+
     private var savedIDs: Set<String> { idSet(from: savedDestinationIDs) }
 
     private var searchResults: [Destination] {
@@ -1263,8 +1271,44 @@ struct RecScreen: View {
     }
 
     private var adventures: [Destination] { Destination.all.filter(\.isFeatured) }
-    private var trending: [Destination] { Destination.all.filter { !$0.isFeatured } }
     private var saved: [Destination] { Destination.all.filter { savedIDs.contains($0.id) } }
+
+    private var isFiltering: Bool {
+        tripLength != .any || selectedContinent != nil || maxBudget < Self.budgetCap
+    }
+
+    private var activeFilterCount: Int {
+        (tripLength != .any ? 1 : 0)
+            + (selectedContinent != nil ? 1 : 0)
+            + (maxBudget < Self.budgetCap ? 1 : 0)
+    }
+
+    private var filteredDestinations: [Destination] {
+        Destination.all.filter { destination in
+            tripLength.matches(destination.days)
+                && (selectedContinent == nil || destination.continent == selectedContinent)
+                && (maxBudget >= Self.budgetCap || destination.budgetValue <= maxBudget)
+        }
+    }
+
+    /// Curated trips grouped by country, ordered by continent then country name,
+    /// so the browse view reads as a tidy destination directory.
+    private var countrySections: [(country: String, destinations: [Destination])] {
+        let grouped = Dictionary(grouping: filteredDestinations, by: \.country)
+        return grouped
+            .map { (country: $0.key, destinations: $0.value) }
+            .sorted {
+                let lhs = Destination.continents.firstIndex(of: $0.destinations[0].continent) ?? .max
+                let rhs = Destination.continents.firstIndex(of: $1.destinations[0].continent) ?? .max
+                return lhs == rhs ? $0.country < $1.country : lhs < rhs
+            }
+    }
+
+    private func resetFilters() {
+        tripLength = .any
+        selectedContinent = nil
+        maxBudget = Self.budgetCap
+    }
 
     var body: some View {
         NavigationStack {
@@ -1275,45 +1319,93 @@ struct RecScreen: View {
                     if !searchText.trimmingCharacters(in: .whitespaces).isEmpty {
                         searchResultsList
                     } else {
-                        sectionHeader("Plan your next adventure")
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 14) {
-                                ForEach(adventures) { destination in
-                                    NavigationLink(value: destination.id) {
-                                        AdventureCard(
-                                            destination: destination,
-                                            isSaved: savedIDs.contains(destination.id),
-                                            onToggleSave: { toggleSaved(destination.id) }
-                                        )
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                            .scrollTargetLayout()
-                            .padding(.horizontal)
-                        }
-                        .scrollTargetBehavior(.viewAligned)
-                        .padding(.horizontal, -16)
+                        filterBar
 
-                        sectionHeader("Trending with travelers")
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 14) {
-                                ForEach(trending) { destination in
-                                    NavigationLink(value: destination.id) {
-                                        TrendingCard(
-                                            destination: destination,
-                                            isSaved: savedIDs.contains(destination.id),
-                                            onToggleSave: { toggleSaved(destination.id) }
-                                        )
+                        if !isFiltering {
+                            sectionHeader("Plan your next adventure")
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 14) {
+                                    ForEach(adventures) { destination in
+                                        NavigationLink(value: destination.id) {
+                                            AdventureCard(
+                                                destination: destination,
+                                                isSaved: savedIDs.contains(destination.id),
+                                                onToggleSave: { toggleSaved(destination.id) }
+                                            )
+                                        }
+                                        .buttonStyle(.plain)
                                     }
+                                }
+                                .scrollTargetLayout()
+                                .padding(.horizontal)
+                            }
+                            .scrollTargetBehavior(.viewAligned)
+                            .padding(.horizontal, -16)
+                        } else {
+                            HStack {
+                                Text("\(filteredDestinations.count) trip\(filteredDestinations.count == 1 ? "" : "s") match")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Button("Reset") { resetFilters() }
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(Theme.accent)
                                     .buttonStyle(.plain)
+                            }
+                        }
+
+                        if filteredDestinations.isEmpty {
+                            VStack(spacing: 10) {
+                                Image(systemName: "line.3.horizontal.decrease.circle")
+                                    .font(.system(size: 32))
+                                    .foregroundStyle(.tertiary)
+                                Text("No trips match these filters")
+                                    .font(.subheadline.weight(.medium))
+                                Text("Try a longer trip length or a higher budget.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 28)
+                            .glassEffect(.regular, in: .rect(cornerRadius: 20))
+                        } else {
+                            ForEach(countrySections, id: \.country) { section in
+                                VStack(alignment: .leading, spacing: 12) {
+                                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                        sectionHeader(LocalizedStringKey(section.country))
+                                        Text(section.destinations[0].continent.uppercased())
+                                            .font(.caption2.weight(.bold))
+                                            .tracking(1)
+                                            .foregroundStyle(.secondary)
+                                        Spacer()
+                                        Text("\(section.destinations.count) trip\(section.destinations.count == 1 ? "" : "s")")
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(.secondary)
+                                            .padding(.horizontal, 10)
+                                            .padding(.vertical, 5)
+                                            .glassEffect(.regular, in: .capsule)
+                                    }
+                                    ScrollView(.horizontal, showsIndicators: false) {
+                                        HStack(spacing: 14) {
+                                            ForEach(section.destinations) { destination in
+                                                NavigationLink(value: destination.id) {
+                                                    CountryTripCard(
+                                                        destination: destination,
+                                                        isSaved: savedIDs.contains(destination.id),
+                                                        onToggleSave: { toggleSaved(destination.id) }
+                                                    )
+                                                }
+                                                .buttonStyle(.plain)
+                                            }
+                                        }
+                                        .scrollTargetLayout()
+                                        .padding(.horizontal)
+                                    }
+                                    .scrollTargetBehavior(.viewAligned)
+                                    .padding(.horizontal, -16)
                                 }
                             }
-                            .scrollTargetLayout()
-                            .padding(.horizontal)
                         }
-                        .scrollTargetBehavior(.viewAligned)
-                        .padding(.horizontal, -16)
 
                         if saved.isEmpty {
                             HStack(spacing: 10) {
@@ -1353,7 +1445,64 @@ struct RecScreen: View {
                     )
                 }
             }
+            .sheet(isPresented: $showFilterSheet) {
+                ExploreFilterSheet(
+                    tripLength: $tripLength,
+                    selectedContinent: $selectedContinent,
+                    maxBudget: $maxBudget,
+                    budgetCap: Self.budgetCap,
+                    onReset: resetFilters
+                )
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+            }
         }
+    }
+
+    /// Horizontal chip row: the Filters button (with active count), then one chip
+    /// per continent for the most common narrowing in a single tap.
+    private var filterBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                Button {
+                    showFilterSheet = true
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "line.3.horizontal.decrease")
+                        Text(activeFilterCount > 0 ? "Filters · \(activeFilterCount)" : "Filters")
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(activeFilterCount > 0 ? .white : .primary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(
+                    activeFilterCount > 0 ? .regular.tint(Theme.accent).interactive() : .regular.interactive(),
+                    in: .capsule
+                )
+
+                ForEach(Destination.continents, id: \.self) { continent in
+                    let isOn = selectedContinent == continent
+                    Button {
+                        selectedContinent = isOn ? nil : continent
+                    } label: {
+                        Text(continent)
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(isOn ? .white : .primary)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 9)
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(
+                        isOn ? .regular.tint(Theme.accent).interactive() : .regular.interactive(),
+                        in: .capsule
+                    )
+                }
+            }
+            .padding(.horizontal)
+        }
+        .padding(.horizontal, -16)
     }
 
     private var searchBar: some View {
@@ -1428,6 +1577,119 @@ struct RecScreen: View {
             set.insert(id)
         }
         savedDestinationIDs = set.sorted().joined(separator: "|")
+    }
+}
+
+/// Trip-length buckets for the Explore filter.
+enum TripLengthFilter: String, CaseIterable, Identifiable {
+    case any = "Any"
+    case short = "1–3 days"
+    case medium = "4–5 days"
+    case long = "6+ days"
+
+    var id: Self { self }
+
+    func matches(_ days: Int) -> Bool {
+        switch self {
+        case .any: true
+        case .short: days <= 3
+        case .medium: (4...5).contains(days)
+        case .long: days >= 6
+        }
+    }
+}
+
+/// The Explore tab's filter sheet: trip length, continent, and a max-budget slider.
+struct ExploreFilterSheet: View {
+    @Binding var tripLength: TripLengthFilter
+    @Binding var selectedContinent: String?
+    @Binding var maxBudget: Double
+    let budgetCap: Double
+    let onReset: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Trip length")
+                            .font(.headline)
+                        Picker("Trip length", selection: $tripLength) {
+                            ForEach(TripLengthFilter.allCases) { length in
+                                Text(length.rawValue).tag(length)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Continent")
+                            .font(.headline)
+                        FlowingContinentPicker(selectedContinent: $selectedContinent)
+                    }
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Text("Total budget")
+                                .font(.headline)
+                            Spacer()
+                            Text(maxBudget >= budgetCap ? "No limit" : "Up to $\(Int(maxBudget))")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Theme.accent)
+                                .monospacedDigit()
+                        }
+                        Slider(value: $maxBudget, in: 500...budgetCap, step: 100)
+                            .tint(Theme.accent)
+                        HStack {
+                            Text("$500").font(.caption).foregroundStyle(.secondary)
+                            Spacer()
+                            Text("No limit").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .padding(20)
+            }
+            .background { AppBackground() }
+            .navigationTitle("Filter trips")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Reset", action: onReset)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                        .fontWeight(.semibold)
+                }
+            }
+        }
+    }
+}
+
+/// Wrapping grid of continent chips for the filter sheet.
+private struct FlowingContinentPicker: View {
+    @Binding var selectedContinent: String?
+
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 8)], spacing: 8) {
+            ForEach(Destination.continents, id: \.self) { continent in
+                let isOn = selectedContinent == continent
+                Button {
+                    selectedContinent = isOn ? nil : continent
+                } label: {
+                    Text(continent)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(isOn ? .white : .primary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(
+                            isOn ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Theme.fieldBackground),
+                            in: .capsule
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+        }
     }
 }
 
@@ -1877,6 +2139,134 @@ extension Destination {
             ],
             plannerNote: "Reserve Hanauma Bay and Diamond Head online days ahead — both sell out, and mornings beat the crowds."
         ),
+
+        // Oceania, South America, Middle East & Africa
+        Destination(
+            id: "sydney",
+            title: "Sydney Shores", city: "Sydney", country: "Australia",
+            tags: ["6 days", "Coastal"], planner: "Charlotte Nguyen", price: "$2.9k",
+            dailyBudget: "~$485/day", stops: 11, isFeatured: true, symbol: "sailboat.fill",
+            colors: [.blue, .cyan],
+            places: [
+                TravelPlanItem(name: "Opera House + Circular Quay", detail: "Harbour icons, Botanic Garden loop, and Mrs Macquarie's Chair views.", cost: "Low"),
+                TravelPlanItem(name: "Bondi to Coogee walk", detail: "Clifftop coastal path linking beaches, pools, and lookout points.", cost: "Free"),
+                TravelPlanItem(name: "Manly ferry", detail: "The classic harbour crossing; beach afternoon on the other side.", cost: "Low"),
+                TravelPlanItem(name: "The Rocks", detail: "Weekend markets, colonial lanes, and harbour-view pubs under the bridge.", cost: "Low-mid"),
+                TravelPlanItem(name: "Blue Mountains day trip", detail: "Three Sisters lookout, Scenic World, and eucalyptus valley trails.", cost: "Mid")
+            ],
+            restaurants: [
+                TravelPlanItem(name: "Sydney Fish Market", detail: "Pick-and-grill seafood by the wharf.", cost: "$$"),
+                TravelPlanItem(name: "Chat Thai", detail: "Late-night Thai institution in Haymarket.", cost: "$-$$"),
+                TravelPlanItem(name: "Bourke Street Bakery", detail: "Sausage rolls and ginger brûlée tarts.", cost: "$"),
+                TravelPlanItem(name: "The Grounds of Alexandria", detail: "Garden-set brunch worth the ride south.", cost: "$$")
+            ],
+            plannerNote: "Ferries double as sightseeing — use an Opal card and ride them instead of booking harbour cruises."
+        ),
+        Destination(
+            id: "rio-de-janeiro",
+            title: "Rio Rhythms", city: "Rio de Janeiro", country: "Brazil",
+            tags: ["5 days", "Beach"], planner: "Lucas Almeida", price: "$1.8k",
+            dailyBudget: "~$360/day", stops: 10, isFeatured: true, symbol: "figure.surfing",
+            colors: [.green, .yellow],
+            places: [
+                TravelPlanItem(name: "Christ the Redeemer", detail: "Cog train up Corcovado early, before the clouds and crowds roll in.", cost: "Mid"),
+                TravelPlanItem(name: "Sugarloaf cable car", detail: "Two-stage ride timed for sunset over Guanabara Bay.", cost: "Mid"),
+                TravelPlanItem(name: "Copacabana + Ipanema", detail: "Beach mornings, calçadão strolls, and coconut-water breaks.", cost: "Low"),
+                TravelPlanItem(name: "Santa Teresa + Selarón Steps", detail: "Hilltop art district and the famous tiled staircase.", cost: "Low"),
+                TravelPlanItem(name: "Tijuca Forest", detail: "Waterfalls and viewpoints in the world's largest urban rainforest.", cost: "Low-mid")
+            ],
+            restaurants: [
+                TravelPlanItem(name: "Confeitaria Colombo", detail: "Belle-époque café for pastéis de nata and people-watching.", cost: "$$"),
+                TravelPlanItem(name: "Cervantes", detail: "Late-night roast pork and pineapple sandwiches in Copacabana.", cost: "$"),
+                TravelPlanItem(name: "Churrascaria Palace", detail: "Classic all-you-can-eat rodízio near the beach.", cost: "$$$"),
+                TravelPlanItem(name: "Beach kiosks", detail: "Grilled cheese skewers, açaí bowls, and caipirinhas on the sand.", cost: "$")
+            ],
+            plannerNote: "Do the big viewpoints on the clearest day of the forecast and keep beach days flexible."
+        ),
+        Destination(
+            id: "istanbul",
+            title: "Istanbul Crossroads", city: "Istanbul", country: "Turkey",
+            tags: ["5 days", "Culture"], planner: "Elif Demir", price: "$1.6k",
+            dailyBudget: "~$320/day", stops: 12, isFeatured: false, symbol: "moon.stars.fill",
+            colors: [.teal, .indigo],
+            places: [
+                TravelPlanItem(name: "Hagia Sophia + Blue Mosque", detail: "The two Sultanahmet giants face each other across a park.", cost: "Low-mid"),
+                TravelPlanItem(name: "Topkapi Palace", detail: "Ottoman courtyards, the Harem, and Bosphorus terrace views.", cost: "Mid"),
+                TravelPlanItem(name: "Grand Bazaar + Spice Bazaar", detail: "4,000 shops of carpets, lamps, lokum, and haggling practice.", cost: "Low"),
+                TravelPlanItem(name: "Bosphorus ferry", detail: "Commuter boat between continents for the price of a coffee.", cost: "Low"),
+                TravelPlanItem(name: "Galata + Karaköy", detail: "Tower views, steep café lanes, and the city's best baklava.", cost: "Low-mid")
+            ],
+            restaurants: [
+                TravelPlanItem(name: "Çiya Sofrası", detail: "Anatolian home cooking worth the ferry to Kadıköy.", cost: "$$"),
+                TravelPlanItem(name: "Karaköy Güllüoğlu", detail: "The baklava benchmark since 1949.", cost: "$"),
+                TravelPlanItem(name: "Sultanahmet Köftecisi", detail: "Grilled meatballs steps from the old-city sights.", cost: "$"),
+                TravelPlanItem(name: "Balık ekmek boats", detail: "Grilled fish sandwiches off the Eminönü waterfront.", cost: "$")
+            ],
+            plannerNote: "Stay in Sultanahmet or Karaköy, buy an Istanbulkart, and let the ferries be your sightseeing cruises."
+        ),
+        Destination(
+            id: "amsterdam",
+            title: "Amsterdam Canals", city: "Amsterdam", country: "Netherlands",
+            tags: ["3 days", "Design"], planner: "Daan de Vries", price: "$2.1k",
+            dailyBudget: "~$700/day", stops: 9, isFeatured: false, symbol: "bicycle",
+            colors: [.orange, .blue],
+            places: [
+                TravelPlanItem(name: "Canal Ring walk", detail: "Golden-age gables along Herengracht and Prinsengracht at dusk.", cost: "Free"),
+                TravelPlanItem(name: "Rijksmuseum", detail: "Rembrandt's Night Watch and the Vermeer room; book a slot.", cost: "Mid"),
+                TravelPlanItem(name: "Van Gogh Museum", detail: "Timed-entry only — reserve days ahead.", cost: "Mid"),
+                TravelPlanItem(name: "Jordaan", detail: "Hofjes courtyards, brown cafés, and the Noordermarkt on Saturdays.", cost: "Low"),
+                TravelPlanItem(name: "Vondelpark by bike", detail: "Rent a bike and loop the park like a local.", cost: "Low")
+            ],
+            restaurants: [
+                TravelPlanItem(name: "Foodhallen", detail: "Indoor food hall for bitterballen and worldwide small plates.", cost: "$$"),
+                TravelPlanItem(name: "Winkel 43", detail: "The famous appeltaart with whipped cream.", cost: "$"),
+                TravelPlanItem(name: "The Pancake Bakery", detail: "Dutch pancakes in a canal-house cellar.", cost: "$$"),
+                TravelPlanItem(name: "Herring stands", detail: "Raw herring with onions — the true local snack.", cost: "$")
+            ],
+            plannerNote: "Book both big museums before you fly; everything else is best discovered on foot or by bike."
+        ),
+        Destination(
+            id: "dubai",
+            title: "Dubai Heights", city: "Dubai", country: "UAE",
+            tags: ["4 days", "Modern"], planner: "Aisha Al Mansoori", price: "$2.6k",
+            dailyBudget: "~$650/day", stops: 8, isFeatured: false, symbol: "building.fill",
+            colors: [.yellow, .orange],
+            places: [
+                TravelPlanItem(name: "Burj Khalifa + Dubai Mall", detail: "At the Top at sunset, then the fountain show below.", cost: "Mid-high"),
+                TravelPlanItem(name: "Old Dubai + abra ride", detail: "Al Fahidi lanes, gold and spice souks, one-dirham creek crossing.", cost: "Low"),
+                TravelPlanItem(name: "Desert safari", detail: "Dune drive, camel stop, and barbecue camp at sundown.", cost: "Mid-high"),
+                TravelPlanItem(name: "Dubai Marina walk", detail: "Skyscraper promenade with beach access at JBR.", cost: "Free"),
+                TravelPlanItem(name: "Jumeirah Mosque", detail: "The one mosque open to non-Muslim visitors, via guided tour.", cost: "Low")
+            ],
+            restaurants: [
+                TravelPlanItem(name: "Ravi Restaurant", detail: "Legendary Pakistani canteen in Satwa.", cost: "$"),
+                TravelPlanItem(name: "Al Ustad Special Kabab", detail: "Photo-covered Iranian grill running since 1978.", cost: "$"),
+                TravelPlanItem(name: "Arabian Tea House", detail: "Emirati breakfast in an Al Fahidi courtyard.", cost: "$$"),
+                TravelPlanItem(name: "Bu Qtair", detail: "Grilled fish shack by the Jumeirah fishing harbour.", cost: "$-$$")
+            ],
+            plannerNote: "Split days between old and new Dubai — the creek side costs almost nothing and balances the splurges."
+        ),
+        Destination(
+            id: "cairo",
+            title: "Cairo Wonders", city: "Cairo", country: "Egypt",
+            tags: ["4 days", "History"], planner: "Omar Hassan", price: "$1.2k",
+            dailyBudget: "~$300/day", stops: 9, isFeatured: false, symbol: "sun.dust.fill",
+            colors: [.orange, .yellow],
+            places: [
+                TravelPlanItem(name: "Giza Pyramids + Sphinx", detail: "Arrive at opening, walk the plateau, and skip the camel hustle.", cost: "Mid"),
+                TravelPlanItem(name: "Grand Egyptian Museum", detail: "Tutankhamun's treasures beside the plateau; give it half a day.", cost: "Mid"),
+                TravelPlanItem(name: "Khan el-Khalili", detail: "Medieval bazaar lanes and mint tea at El Fishawy café.", cost: "Low"),
+                TravelPlanItem(name: "Coptic Cairo", detail: "Hanging Church, early monasteries, and Roman fortress walls.", cost: "Low"),
+                TravelPlanItem(name: "Nile felucca at sunset", detail: "An hour under sail as the city lights come on.", cost: "Low")
+            ],
+            restaurants: [
+                TravelPlanItem(name: "Koshary Abou Tarek", detail: "The definitive plate of Egypt's national comfort food.", cost: "$"),
+                TravelPlanItem(name: "Zooba", detail: "Modern takes on taameya and hawawshi.", cost: "$"),
+                TravelPlanItem(name: "Abou El Sid", detail: "Classic Egyptian dishes in an old-Cairo dining room.", cost: "$$"),
+                TravelPlanItem(name: "El Fishawy", detail: "Mint tea and shisha at a 250-year-old bazaar café.", cost: "$")
+            ],
+            plannerNote: "Hire a driver or use ride apps between sites, and put the pyramids first before the heat builds."
+        ),
     ]
 }
 
@@ -1903,6 +2293,12 @@ extension Destination {
         case "london": "Royal parks, free world-class museums, and markets from Borough to Portobello — London rewards long walks and theatre nights."
         case "lisbon": "Tiled facades, viewpoint terraces, and custard tarts still warm from the oven — Lisbon climbs its seven hills at an easy pace."
         case "honolulu": "Waikiki surf mornings, volcanic crater hikes, and plate-lunch afternoons — Honolulu blends big-city ease with island pace."
+        case "sydney": "Harbour ferries, clifftop beach walks, and an opera house that earns the postcards — Sydney lives outdoors."
+        case "rio-de-janeiro": "Beaches framed by granite peaks, samba spilling out of botecos, and a rainforest inside the city — Rio moves to its own rhythm."
+        case "istanbul": "Minarets over the Bosphorus, bazaars that have run for five centuries, and ferries that commute between continents — Istanbul is layered like nowhere else."
+        case "amsterdam": "Gabled canals, world-class art in walkable doses, and bikes outnumbering people — Amsterdam is a compact golden-age city built for wandering."
+        case "dubai": "Record-breaking towers on one side of the creek and century-old souks on the other — Dubai does spectacle and tradition in the same day."
+        case "cairo": "The pyramids at the edge of the city, treasure-filled museums, and bazaar lanes older than most countries — Cairo is history at full volume."
         default: "A curated plan with hand-picked places to visit and eat."
         }
     }
@@ -1930,6 +2326,12 @@ extension Destination {
         case "london": CLLocationCoordinate2D(latitude: 51.5074, longitude: -0.1278)
         case "lisbon": CLLocationCoordinate2D(latitude: 38.7223, longitude: -9.1393)
         case "honolulu": CLLocationCoordinate2D(latitude: 21.3069, longitude: -157.8583)
+        case "sydney": CLLocationCoordinate2D(latitude: -33.8688, longitude: 151.2093)
+        case "rio-de-janeiro": CLLocationCoordinate2D(latitude: -22.9068, longitude: -43.1729)
+        case "istanbul": CLLocationCoordinate2D(latitude: 41.0082, longitude: 28.9784)
+        case "amsterdam": CLLocationCoordinate2D(latitude: 52.3676, longitude: 4.9041)
+        case "dubai": CLLocationCoordinate2D(latitude: 25.2048, longitude: 55.2708)
+        case "cairo": CLLocationCoordinate2D(latitude: 30.0444, longitude: 31.2357)
         default: CLLocationCoordinate2D(latitude: 0, longitude: 0)
         }
     }
@@ -1938,6 +2340,42 @@ extension Destination {
 extension Destination {
     /// Asset-catalog name of the bundled photo for this curated trip.
     var imageName: String { "explore-\(id)" }
+}
+
+// MARK: Filterable facets (derived, so curated entries stay single-source)
+
+extension Destination {
+    /// Trip length in days, parsed from the first tag ("5 days" → 5).
+    var days: Int {
+        tags.first.flatMap { Int($0.split(separator: " ").first ?? "") } ?? 0
+    }
+
+    /// Numeric total budget, parsed from `price` ("$2.5k" → 2500).
+    var budgetValue: Double {
+        let trimmed = price.trimmingCharacters(in: CharacterSet(charactersIn: "$"))
+        if trimmed.hasSuffix("k"), let value = Double(trimmed.dropLast()) { return value * 1000 }
+        return Double(trimmed) ?? 0
+    }
+
+    /// Continent bucket for the filter, keyed off the country.
+    var continent: String {
+        switch country {
+        case "Japan", "South Korea", "Thailand", "Singapore", "Indonesia", "Taiwan": "Asia"
+        case "France", "Italy", "Spain", "UK", "Portugal", "Netherlands", "Turkey": "Europe"
+        case "USA", "Canada", "Mexico": "North America"
+        case "Brazil": "South America"
+        case "UAE", "Egypt": "Middle East & Africa"
+        case "Australia": "Oceania"
+        default: "Other"
+        }
+    }
+
+    /// Continents in display order, limited to ones that actually have trips.
+    static var continents: [String] {
+        let order = ["Asia", "Europe", "North America", "South America", "Middle East & Africa", "Oceania", "Other"]
+        let present = Set(all.map(\.continent))
+        return order.filter(present.contains)
+    }
 }
 
 /// The destination's bundled photo, cropped to fill whatever frame it's given.
@@ -2021,34 +2459,64 @@ struct AdventureCard: View {
     }
 }
 
-/// A smaller square card for the "Trending with travelers" rail.
-struct TrendingCard: View {
+/// Photo-forward card for the country rails: full-bleed image, glass tag chips,
+/// city name over a bottom scrim, and a glass price pill — Tripadvisor/Viator style.
+struct CountryTripCard: View {
     let destination: Destination
     let isSaved: Bool
     let onToggleSave: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            DestinationPhoto(destination: destination)
-                .frame(width: 170, height: 130)
-            .overlay(alignment: .topTrailing) {
-                HeartButton(isSaved: isSaved, action: onToggleSave)
-                    .padding(8)
-            }
-            .clipShape(.rect(cornerRadius: 16))
+        ZStack(alignment: .bottomLeading) {
+            DestinationPhoto(destination: destination, symbolSize: 64)
 
-            VStack(alignment: .leading, spacing: 2) {
+            LinearGradient(
+                colors: [.black.opacity(0.25), .clear, .clear, .black.opacity(0.72)],
+                startPoint: .top, endPoint: .bottom
+            )
+
+            VStack(alignment: .leading, spacing: 6) {
                 Text(destination.city)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                Text("\(destination.country) · \(destination.tags.joined(separator: " · "))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.title2.bold())
+                    .foregroundStyle(.white)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Text("\(destination.dailyBudget) · \(destination.stops) stops")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.85))
+                HStack(spacing: 6) {
+                    Text(destination.price)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .glassEffect(.regular.tint(Theme.accent.opacity(0.7)), in: .capsule)
+                    Text(destination.tags.last ?? "")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .glassEffect(.regular, in: .capsule)
+                }
+                .padding(.top, 2)
             }
-            .padding(.horizontal, 2)
+            .padding(14)
         }
-        .frame(width: 170, alignment: .leading)
+        .frame(width: 240, height: 300)
+        .overlay(alignment: .topLeading) {
+            Text("\(destination.days) days")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .glassEffect(.regular, in: .capsule)
+                .padding(10)
+        }
+        .overlay(alignment: .topTrailing) {
+            HeartButton(isSaved: isSaved, action: onToggleSave)
+                .padding(10)
+        }
+        .clipShape(.rect(cornerRadius: 22))
     }
 }
 

@@ -63,12 +63,14 @@ enum SplitMethod: String, CaseIterable, Identifiable, Codable {
         }
     }
 
+    /// Menu icons: consistent-weight, instantly readable metaphors — everyone,
+    /// a checked subset, one person, a proportional pie, and exact dollars.
     var icon: String {
         switch self {
         case .equalAll: "person.3.fill"
-        case .equalSelected: "person.crop.circle.badge.checkmark"
-        case .noSplit: "person.fill"
-        case .percentage: "percent"
+        case .equalSelected: "checkmark.circle.fill"
+        case .noSplit: "person.circle.fill"
+        case .percentage: "chart.pie.fill"
         case .amount: "dollarsign.circle.fill"
         }
     }
