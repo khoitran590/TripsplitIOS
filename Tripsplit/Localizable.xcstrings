@@ -2901,6 +2901,7 @@
 
     },
     "Quick Actions" : {
+      "extractionState" : "stale",
       "localizations" : {
         "es" : {
           "stringUnit" : {

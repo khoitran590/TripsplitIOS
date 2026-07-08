@@ -27,7 +27,7 @@ struct HomeScreen: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 20) {
                     syncBanner
                     BalanceCard()
                     quickActions
@@ -46,21 +46,19 @@ struct HomeScreen: View {
                 await store.refreshRates()
             }
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    HStack(spacing: 8) {
-                        appearanceToggle
-                        Button {
-                            showSettings = true
-                        } label: {
-                            ProfileAvatar(
-                                imageData: store.profileImageData,
-                                initials: store.currentUser.initials,
-                                size: 34
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(Text("Profile & settings"))
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    appearanceToggle
+                    Button {
+                        showSettings = true
+                    } label: {
+                        ProfileAvatar(
+                            imageData: store.profileImageData,
+                            initials: store.currentUser.initials,
+                            size: 34
+                        )
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Text("Profile & settings"))
                 }
             }
         }
@@ -160,7 +158,7 @@ struct HomeScreen: View {
             if store.myTrips.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "suitcase")
-                        .font(.system(size: 32))
+                        .font(.largeTitle)
                         .foregroundStyle(.tertiary)
                     Text("No trips yet")
                         .font(.subheadline.weight(.medium))
@@ -257,24 +255,20 @@ struct HomeScreen: View {
     }
 
     private var quickActions: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Quick Actions")
-                .font(.headline)
-                .padding(.leading, 4)
+        // No section header: two labeled buttons explain themselves, and dropping
+        // the header keeps the balance card + actions + trips above the fold.
+        HStack(spacing: 12) {
+            QuickActionButton(
+                title: "Split",
+                icon: "divide.circle.fill",
+                colors: [Color(hex: 0x818CF8), Color(hex: 0x4F46E5)]
+            ) { startQuickAction(.split) }
 
-            HStack(spacing: 12) {
-                QuickActionButton(
-                    title: "Split",
-                    icon: "divide.circle.fill",
-                    colors: [Color(hex: 0x818CF8), Color(hex: 0x4F46E5)]
-                ) { startQuickAction(.split) }
-
-                QuickActionButton(
-                    title: "Add Expense",
-                    icon: "plus.circle.fill",
-                    colors: [Color(hex: 0x34D399), Color(hex: 0x059669)]
-                ) { startQuickAction(.addExpense) }
-            }
+            QuickActionButton(
+                title: "Add Expense",
+                icon: "plus.circle.fill",
+                colors: [Color(hex: 0x34D399), Color(hex: 0x059669)]
+            ) { startQuickAction(.addExpense) }
         }
     }
 
@@ -362,7 +356,7 @@ struct HomeScreen: View {
             if all.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "tray")
-                        .font(.system(size: 32))
+                        .font(.largeTitle)
                         .foregroundStyle(.tertiary)
                     Text("No transactions yet")
                         .font(.subheadline.weight(.medium))
@@ -511,7 +505,7 @@ struct BalanceCard: View {
                     Image(systemName: "arrow.left.arrow.right")
                         .font(.footnote.weight(.bold))
                         .foregroundStyle(.primary)
-                        .frame(width: 32, height: 32)
+                        .frame(width: 44, height: 44)
                 }
                 .buttonStyle(.plain)
                 .glassEffect(.regular.interactive(), in: .circle)
@@ -521,7 +515,8 @@ struct BalanceCard: View {
             // Hero figure: the one number that answers "how am I doing?"
             VStack(alignment: .leading, spacing: 2) {
                 Text(heroValue)
-                    .font(.system(size: 34, weight: .bold, design: .rounded))
+                    .font(.largeTitle.weight(.bold))
+                    .fontDesign(.rounded)
                     .foregroundStyle(isOver ? ringColor : .primary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
@@ -708,9 +703,9 @@ struct TripRow: View {
     private var healthBadge: some View {
         HStack(spacing: 4) {
             Image(systemName: isOver ? "exclamationmark.triangle.fill" : "gauge.high")
-                .font(.system(size: 10, weight: .bold))
+                .font(.caption2.weight(.bold))
             Text(isOver ? "Over budget" : "Near limit")
-                .font(.system(size: 11, weight: .bold))
+                .font(.caption2.weight(.bold))
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 9).padding(.vertical, 5)
@@ -724,7 +719,7 @@ struct TripRow: View {
             Text(trip.name).font(.headline.weight(.bold)).lineLimit(1)
             Spacer(minLength: 6)
             HStack(spacing: 4) {
-                Image(systemName: "person.2.fill").font(.system(size: 11))
+                Image(systemName: "person.2.fill").font(.caption2)
                 Text("\(trip.members.count)").font(.caption.weight(.semibold))
             }
             .foregroundStyle(.secondary)
@@ -760,7 +755,7 @@ struct TripRow: View {
     private func statBox(label: String, value: String, valueColor: Color, background: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(LocalizedStringKey(label))
-                .font(.system(size: 10, weight: .semibold)).tracking(0.5)
+                .font(.caption2.weight(.semibold)).tracking(0.5)
                 .foregroundStyle(.secondary)
             Text(value)
                 .font(.subheadline.weight(.bold)).foregroundStyle(valueColor)
@@ -830,7 +825,7 @@ struct CurrencyConverterCard: View {
                         Image(systemName: "arrow.uturn.backward")
                             .font(.subheadline.weight(.bold))
                             .foregroundStyle(.primary)
-                            .frame(width: 34, height: 34)
+                            .frame(width: 44, height: 44)
                     }
                     .buttonStyle(.plain)
                     .glassEffect(.regular.interactive(), in: .circle)
@@ -841,7 +836,8 @@ struct CurrencyConverterCard: View {
             HStack(spacing: 12) {
                 TextField("0", text: $amountText)
                     .keyboardType(.decimalPad)
-                    .font(.system(size: 22, weight: .semibold, design: .rounded))
+                    .font(.title2.weight(.semibold))
+                    .fontDesign(.rounded)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
                     .background(.secondary.opacity(0.12), in: .rect(cornerRadius: 12))
@@ -865,7 +861,8 @@ struct CurrencyConverterCard: View {
             } else {
                 HStack(alignment: .firstTextBaseline) {
                     Text(converted.map { String(format: "%.2f", $0) } ?? "—")
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
+                        .font(.title.weight(.bold))
+                        .fontDesign(.rounded)
                     Text(to)
                         .font(.headline)
                         .foregroundStyle(.secondary)
@@ -925,7 +922,7 @@ struct QuickActionButton: View {
         Button(action: action) {
             HStack(spacing: 10) {
                 Image(systemName: icon)
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.body.weight(.semibold))
                     .foregroundStyle(.white)
                     .frame(width: 34, height: 34)
                     .background(
@@ -1063,6 +1060,7 @@ struct TransactionRow: View {
             Spacer()
             Text(money(transaction.amount, transaction.currencyCode))
                 .font(.subheadline.weight(.semibold))
+                .monospacedDigit()
                 .foregroundStyle(.primary)
         }
         .padding(14)
