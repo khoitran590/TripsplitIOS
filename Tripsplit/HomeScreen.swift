@@ -329,10 +329,8 @@ struct HomeScreen: View {
                     .buttonStyle(.plain)
 
                     Button("Cancel") {
-                        withAnimation(.snappy) {
-                            isSelectingTransactions = false
-                            selectedTransactionIDs.removeAll()
-                        }
+                        isSelectingTransactions = false
+                        selectedTransactionIDs.removeAll()
                     }
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
@@ -341,7 +339,7 @@ struct HomeScreen: View {
                 } else {
                     if all.count > 5 {
                         Button {
-                            withAnimation(.snappy) { showAllTransactions.toggle() }
+                            showAllTransactions.toggle()
                         } label: {
                             Text(showAllTransactions ? "Show Less" : "See All")
                                 .font(.subheadline.weight(.semibold))
@@ -351,7 +349,7 @@ struct HomeScreen: View {
                     }
                     if !visibleDeletableTransactions.isEmpty {
                         Button("Select") {
-                            withAnimation(.snappy) { isSelectingTransactions = true }
+                            isSelectingTransactions = true
                         }
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Theme.accent)
@@ -448,7 +446,7 @@ struct HomeScreen: View {
             store.deleteExpenses(Set(tripTransactions.map(\.expenseID)), from: tripID)
         }
         selectedTransactionIDs.removeAll()
-        withAnimation(.snappy) { isSelectingTransactions = false }
+        isSelectingTransactions = false
     }
 }
 

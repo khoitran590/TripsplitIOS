@@ -80,26 +80,27 @@ enum AppTheme: String, CaseIterable, Identifiable {
     }
 
     /// Primary accent used for buttons, badges, and the healthy budget ring.
+    /// Deliberately desaturated so tinted glass materials stay legible over it.
     var accent: Color {
         switch self {
-        case .classic: Color(hex: 0x6366F1)
-        case .matcha: Color(hex: 0x5F8D4E)
-        case .butter: Color(hex: 0xD9A404)
-        case .chocolate: Color(hex: 0x8B5E3C)
-        case .gothic: Color(hex: 0x64748B)
-        case .y2k: Color(hex: 0x8B7CF6)
+        case .classic: Color(hex: 0x6D70C9)
+        case .matcha: Color(hex: 0x6F9163)
+        case .butter: Color(hex: 0xC29B3E)
+        case .chocolate: Color(hex: 0x96755A)
+        case .gothic: Color(hex: 0x6B7688)
+        case .y2k: Color(hex: 0x9C92DE)
         }
     }
 
     /// Companion accent used where the design pairs two hues in a gradient.
     var accentSecondary: Color {
         switch self {
-        case .classic: Color(hex: 0x8B5CF6)
-        case .matcha: Color(hex: 0x8FBC5A)
-        case .butter: Color(hex: 0xF2C14E)
-        case .chocolate: Color(hex: 0xB08968)
-        case .gothic: Color(hex: 0x94A3B8)
-        case .y2k: Color(hex: 0xF472B6)
+        case .classic: Color(hex: 0x9789D4)
+        case .matcha: Color(hex: 0x9DB884)
+        case .butter: Color(hex: 0xDCC17E)
+        case .chocolate: Color(hex: 0xB39B84)
+        case .gothic: Color(hex: 0x9AA5B4)
+        case .y2k: Color(hex: 0xDBA3C3)
         }
     }
 
@@ -110,39 +111,39 @@ enum AppTheme: String, CaseIterable, Identifiable {
         switch self {
         case .classic:
             [
-                Color(light: 0xDCE7FF, dark: 0x151A2E),
-                Color(light: 0xEDF1FD, dark: 0x0F1220),
-                Color(light: 0xF8F8FC, dark: 0x0A0B12),
+                Color(light: 0xE9EEFA, dark: 0x14161F),
+                Color(light: 0xF3F5FC, dark: 0x0F1017),
+                Color(light: 0xFAFAFC, dark: 0x0B0B10),
             ]
         case .matcha:
             [
-                Color(light: 0xDEEBD2, dark: 0x17220F),
-                Color(light: 0xEDF3E3, dark: 0x10160B),
-                Color(light: 0xF8F9F3, dark: 0x0A0D07),
+                Color(light: 0xEAF1E2, dark: 0x151B11),
+                Color(light: 0xF3F7ED, dark: 0x0F130C),
+                Color(light: 0xFAFBF7, dark: 0x0B0D09),
             ]
         case .butter:
             [
-                Color(light: 0xFBEBC4, dark: 0x241C0A),
-                Color(light: 0xFDF4DD, dark: 0x181307),
-                Color(light: 0xFDFAF1, dark: 0x0D0B05),
+                Color(light: 0xFAF1DC, dark: 0x1D1810),
+                Color(light: 0xFCF6E9, dark: 0x14110B),
+                Color(light: 0xFDFBF5, dark: 0x0D0C08),
             ]
         case .chocolate:
             [
-                Color(light: 0xF0E1D0, dark: 0x241910),
-                Color(light: 0xF6ECDF, dark: 0x18110B),
-                Color(light: 0xFBF7F1, dark: 0x0D0906),
+                Color(light: 0xF3E9DE, dark: 0x1D1610),
+                Color(light: 0xF8F1E9, dark: 0x14100B),
+                Color(light: 0xFCF9F5, dark: 0x0D0B08),
             ]
         case .gothic:
             [
-                Color(light: 0xDCE2EA, dark: 0x161C29),
-                Color(light: 0xE9EDF2, dark: 0x0F131C),
-                Color(light: 0xF5F6F9, dark: 0x0A0C11),
+                Color(light: 0xE6EAF0, dark: 0x141821),
+                Color(light: 0xEFF2F6, dark: 0x0F1218),
+                Color(light: 0xF8F9FB, dark: 0x0B0C10),
             ]
         case .y2k:
             [
-                Color(light: 0xE5DEFF, dark: 0x1E1636),
-                Color(light: 0xF3E4F8, dark: 0x140F25),
-                Color(light: 0xFCF1F7, dark: 0x0C0916),
+                Color(light: 0xEEE9FA, dark: 0x181425),
+                Color(light: 0xF6EFF8, dark: 0x110F1B),
+                Color(light: 0xFCF7FA, dark: 0x0C0B12),
             ]
         }
     }
@@ -159,8 +160,9 @@ struct AppBackground: View {
 
     var body: some View {
         let theme = ThemeManager.shared.selection
-        // Glows sit brighter over the dark wash than the light one.
-        let glowOpacity = colorScheme == .dark ? 0.16 : 0.22
+        // Kept faint so glass materials layered on top refract a hint of the
+        // theme instead of a saturated blob.
+        let glowOpacity = colorScheme == .dark ? 0.08 : 0.10
         LinearGradient(colors: theme.homeGradient, startPoint: .top, endPoint: .bottom)
             .overlay(alignment: .topLeading) {
                 glow(theme.accent, opacity: glowOpacity)
@@ -176,8 +178,8 @@ struct AppBackground: View {
     private func glow(_ color: Color, opacity: Double) -> some View {
         Circle()
             .fill(color.opacity(opacity))
-            .frame(width: 320, height: 320)
-            .blur(radius: 90)
+            .frame(width: 340, height: 340)
+            .blur(radius: 110)
     }
 }
 
