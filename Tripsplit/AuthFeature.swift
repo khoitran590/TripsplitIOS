@@ -525,11 +525,11 @@ struct AuthView: View {
                 brandHeader
 
                 card
+                    .animation(.snappy, value: mode)
             }
             .padding()
             .padding(.top, 24)
             .padding(.bottom, 80) // Clearance for the floating dock.
-            .animation(.snappy, value: mode)
         }
     }
 

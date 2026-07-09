@@ -553,6 +553,8 @@ final class TripStore {
         var dateOfBirth: Date?
         var bio: String?
         var visitedPlaces: [String]?
+        var savedPlaceKeys: [String]?
+        var savedDestinationIDs: [String]?
     }
 
     /// Returns a UserDefaults key scoped to the given user UUID, so different accounts
@@ -677,7 +679,9 @@ final class TripStore {
             avatarURL: currentUser.avatarURL,
             dateOfBirth: userProfile.dateOfBirth,
             bio: userProfile.bio,
-            visitedPlaces: userProfile.visitedPlaces
+            visitedPlaces: userProfile.visitedPlaces,
+            savedPlaceKeys: userProfile.savedPlaceKeys,
+            savedDestinationIDs: userProfile.savedDestinationIDs
         )
         if let data = try? JSONEncoder().encode(stored) {
             UserDefaults.standard.set(data, forKey: Self.profileKey(for: currentUser.id))
@@ -687,18 +691,33 @@ final class TripStore {
     /// Saves an edited profile: applies it locally (and to every trip via the display
     /// name), uploads a new avatar when the photo changed, then upserts the row in
     /// `public.profiles` so the profile follows the account to other devices.
-    func saveProfile(_ profile: UserProfile, imageData: Data?) async {
+    ///
+    /// `imageData == nil` means "no new photo picked", not "remove" — after a reinstall
+    /// the local JPEG cache is empty while the cloud avatar still exists, and treating
+    /// nil as removal wiped it. Removal is explicit via `removePhoto`.
+    func saveProfile(_ profile: UserProfile, imageData: Data?, removePhoto: Bool = false) async {
         userProfile = profile
         userProfile.avatarPath = currentUser.avatarURL
-        updateProfile(name: profile.displayName, imageData: imageData)
-        if let imageData, imageData != profileImageData || currentUser.avatarURL == nil {
+        let previousImageData = profileImageData
+        updateProfile(name: profile.displayName,
+                      imageData: removePhoto ? nil : (imageData ?? profileImageData))
+        if let imageData, !removePhoto, imageData != previousImageData || currentUser.avatarURL == nil {
             await uploadAndSetAvatar(imageData)
-        } else if imageData == nil {
+        } else if removePhoto {
             currentUser.avatarURL = nil
             userProfile.avatarPath = nil
             persistLocalProfile()
         }
         await pushProfileToCloud()
+    }
+
+    /// Updates the cloud-backed bookmark lists (map places and/or Explore destinations),
+    /// persisting locally and upserting `public.profiles` so they survive reinstalls.
+    func updateSavedPlaces(mapKeys: [String]? = nil, destinationIDs: [String]? = nil) {
+        if let mapKeys { userProfile.savedPlaceKeys = mapKeys }
+        if let destinationIDs { userProfile.savedDestinationIDs = destinationIDs }
+        persistLocalProfile()
+        Task { await pushProfileToCloud() }
     }
 
     /// Loads the account's profile row from Supabase, replacing the local cache. When
@@ -716,12 +735,24 @@ final class TripStore {
             await pushProfileToCloud()
             return
         }
+        // Bookmarks saved on this device before the cloud fetch (e.g. while offline, or
+        // made before bookmarks became cloud-backed) are merged in rather than clobbered.
+        let localPlaceKeys = userProfile.savedPlaceKeys
+        let localDestinationIDs = userProfile.savedDestinationIDs
         userProfile = fetched
+        userProfile.savedPlaceKeys = fetched.savedPlaceKeys
+            + localPlaceKeys.filter { !fetched.savedPlaceKeys.contains($0) }
+        userProfile.savedDestinationIDs = fetched.savedDestinationIDs
+            + localDestinationIDs.filter { !fetched.savedDestinationIDs.contains($0) }
         currentUser.name = fetched.displayName
         if let path = fetched.avatarPath, !path.isEmpty {
             currentUser.avatarURL = path
         }
         persistLocalProfile()
+        if userProfile.savedPlaceKeys != fetched.savedPlaceKeys
+            || userProfile.savedDestinationIDs != fetched.savedDestinationIDs {
+            await pushProfileToCloud()
+        }
     }
 
     /// Upserts the in-memory profile into `public.profiles`. Best-effort: failures are
@@ -1078,9 +1109,18 @@ final class TripStore {
         userProfile.dateOfBirth = stored?.dateOfBirth
         userProfile.bio = stored?.bio ?? ""
         userProfile.visitedPlaces = stored?.visitedPlaces ?? []
+        userProfile.savedPlaceKeys = stored?.savedPlaceKeys ?? Self.legacySavedList("mapSavedPlaceKeys")
+        userProfile.savedDestinationIDs = stored?.savedDestinationIDs ?? Self.legacySavedList("exploreSavedDestinationIDs")
         // Paint this user's locally cached trips right away; loadFromCloud replaces them
         // with the authoritative copy as soon as the network round-trip finishes.
         restoreCachedTrips(for: uuid)
+    }
+
+    /// Reads a bookmark list saved by pre-cloud versions as a "|"-joined @AppStorage
+    /// string, so existing bookmarks are carried into the cloud-backed profile.
+    private static func legacySavedList(_ key: String) -> [String] {
+        (UserDefaults.standard.string(forKey: key) ?? "")
+            .split(separator: "|").map(String.init)
     }
 
     /// Decodes a JWT's payload (its middle segment) into a claims dictionary.

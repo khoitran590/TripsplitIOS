@@ -29,6 +29,8 @@ struct HomeScreen: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     syncBanner
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .animation(.snappy, value: store.syncState)
                     BalanceCard()
                     quickActions
                     tripsSection
@@ -36,8 +38,6 @@ struct HomeScreen: View {
                 }
                 .padding(.horizontal)
                 .padding(.bottom, 110)
-                // Animate the sync banner in/out instead of snapping the whole layout.
-                .animation(.snappy, value: store.syncState)
             }
             .background { AppBackground() }
             .navigationTitle("Hi, \(greetingName)")

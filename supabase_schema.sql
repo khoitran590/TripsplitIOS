@@ -34,6 +34,9 @@ alter table public.profiles add column if not exists date_of_birth  date;
 alter table public.profiles add column if not exists bio            text;
 alter table public.profiles add column if not exists avatar_path    text;
 alter table public.profiles add column if not exists visited_places jsonb not null default '[]'::jsonb;
+-- Bookmarks that must survive reinstalls: map-place save keys and Explore destination ids.
+alter table public.profiles add column if not exists saved_place_keys      jsonb not null default '[]'::jsonb;
+alter table public.profiles add column if not exists saved_destination_ids jsonb not null default '[]'::jsonb;
 
 create table if not exists public.trip_members (
     trip_id    uuid not null references public.trips (id) on delete cascade,

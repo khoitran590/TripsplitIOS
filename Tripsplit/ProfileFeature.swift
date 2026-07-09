@@ -17,6 +17,10 @@ struct UserProfile: Codable, Equatable {
     var avatarPath: String?
     /// Places the user has been, shown as chips on their profile page.
     var visitedPlaces: [String] = []
+    /// `MapPlace.saveKey`s bookmarked on the map screen.
+    var savedPlaceKeys: [String] = []
+    /// `Destination.id`s saved on the Explore screen.
+    var savedDestinationIDs: [String] = []
 
     enum CodingKeys: String, CodingKey {
         case displayName = "display_name"
@@ -24,6 +28,8 @@ struct UserProfile: Codable, Equatable {
         case bio
         case avatarPath = "avatar_path"
         case visitedPlaces = "visited_places"
+        case savedPlaceKeys = "saved_place_keys"
+        case savedDestinationIDs = "saved_destination_ids"
     }
 
     /// Postgres `date` columns round-trip as plain "yyyy-MM-dd" strings.
@@ -46,6 +52,8 @@ struct UserProfile: Codable, Equatable {
         bio = try c.decodeIfPresent(String.self, forKey: .bio) ?? ""
         avatarPath = try c.decodeIfPresent(String.self, forKey: .avatarPath)
         visitedPlaces = try c.decodeIfPresent([String].self, forKey: .visitedPlaces) ?? []
+        savedPlaceKeys = try c.decodeIfPresent([String].self, forKey: .savedPlaceKeys) ?? []
+        savedDestinationIDs = try c.decodeIfPresent([String].self, forKey: .savedDestinationIDs) ?? []
     }
 
     func encode(to encoder: Encoder) throws {
@@ -55,6 +63,8 @@ struct UserProfile: Codable, Equatable {
         try c.encode(bio, forKey: .bio)
         try c.encode(avatarPath, forKey: .avatarPath)
         try c.encode(visitedPlaces, forKey: .visitedPlaces)
+        try c.encode(savedPlaceKeys, forKey: .savedPlaceKeys)
+        try c.encode(savedDestinationIDs, forKey: .savedDestinationIDs)
     }
 }
 
@@ -67,7 +77,7 @@ actor ProfilesRepository {
     static let shared = ProfilesRepository()
     private let session = BackendSecurity.secureSession
 
-    private static let columns = "display_name,date_of_birth,bio,avatar_path,visited_places"
+    private static let columns = "display_name,date_of_birth,bio,avatar_path,visited_places,saved_place_keys,saved_destination_ids"
 
     func fetch(userID: UUID, accessToken: String) async throws -> UserProfile? {
         let path = "/rest/v1/profiles?user_id=eq.\(userID.uuidString.lowercased())&select=\(Self.columns)"
@@ -321,7 +331,16 @@ struct EditProfileView: View {
     @State private var newPlace = ""
     @State private var photoItem: PhotosPickerItem?
     @State private var imageData: Data?
+    /// True once the user taps "Remove Photo" — the only action that deletes the cloud
+    /// avatar. `imageData == nil` alone just means no local copy (e.g. after reinstall).
+    @State private var photoRemoved = false
     @State private var isSaving = false
+
+    /// Whether the account has an avatar this sheet can show/remove: a locally picked
+    /// photo, or the cloud avatar (still present after reinstalls).
+    private var hasPhoto: Bool {
+        imageData != nil || (!photoRemoved && store.currentUser.avatarURL != nil)
+    }
 
     private var initials: String {
         let parts = name.split(separator: " ")
@@ -375,6 +394,7 @@ struct EditProfileView: View {
                 Task {
                     guard let data = try? await newItem?.loadTransferable(type: Data.self) else { return }
                     imageData = Self.downsized(data) ?? data
+                    photoRemoved = false
                 }
             }
         }
@@ -385,14 +405,20 @@ struct EditProfileView: View {
             HStack {
                 Spacer()
                 VStack(spacing: 12) {
-                    ProfileAvatar(imageData: imageData, initials: initials, size: 96)
-                    PhotosPicker(selection: $photoItem, matching: .images) {
-                        Text(imageData == nil ? "Add Photo" : "Change Photo")
+                    if imageData == nil && hasPhoto {
+                        // No local copy (fresh install) but the cloud avatar exists.
+                        AvatarView(person: store.currentUser, size: 96)
+                    } else {
+                        ProfileAvatar(imageData: imageData, initials: initials, size: 96)
                     }
-                    if imageData != nil {
+                    PhotosPicker(selection: $photoItem, matching: .images) {
+                        Text(hasPhoto ? "Change Photo" : "Add Photo")
+                    }
+                    if hasPhoto {
                         Button("Remove Photo", role: .destructive) {
                             imageData = nil
                             photoItem = nil
+                            photoRemoved = true
                         }
                     }
                 }
@@ -451,7 +477,7 @@ struct EditProfileView: View {
         profile.visitedPlaces = places
         isSaving = true
         Task {
-            await store.saveProfile(profile, imageData: imageData)
+            await store.saveProfile(profile, imageData: imageData, removePhoto: photoRemoved)
             isSaving = false
             dismiss()
         }

@@ -302,18 +302,14 @@ final class ExploreMapModel {
     }
 
     /// Resolve the precise coordinate and place details using MapKit local search,
-    /// biased to the destination city. Keeps the city-center fallback if nothing
-    /// matches, and ignores its result if a newer request has replaced the focus.
+    /// biased to the destination city. Keeps the city-center fallback if no
+    /// plausible local match is found, and ignores its result if a newer request
+    /// has replaced the focus.
     private func refine(token: Int) async {
         guard let focus else { return }
-        let request = MKLocalSearch.Request()
-        request.naturalLanguageQuery = "\(focus.item.name), \(focus.destination.city), \(focus.destination.country)"
-        request.region = MKCoordinateRegion(
-            center: focus.destination.coordinate,
-            latitudinalMeters: 40_000,
-            longitudinalMeters: 40_000
-        )
-        let match = (try? await MKLocalSearch(request: request).start())?.mapItems.first
+        let isRestaurant = focus.destination.restaurants.contains { $0.id == focus.item.id }
+        let match = await bestMapMatch(for: focus, isRestaurant: isRestaurant)
+
         guard token == navigateRequest else { return }
         self.focus?.isResolving = false
         if let match {
@@ -322,9 +318,193 @@ final class ExploreMapModel {
         }
     }
 
+    private func bestMapMatch(for focus: MapFocus, isRestaurant: Bool) async -> MKMapItem? {
+        var scoredResults: [(score: Double, item: MKMapItem)] = []
+        for (queryIndex, query) in searchQueries(for: focus, isRestaurant: isRestaurant).enumerated() {
+            let request = MKLocalSearch.Request()
+            request.naturalLanguageQuery = query
+            request.region = MKCoordinateRegion(
+                center: focus.destination.coordinate,
+                latitudinalMeters: searchRadius(for: focus),
+                longitudinalMeters: searchRadius(for: focus)
+            )
+            if isRestaurant {
+                request.resultTypes = .pointOfInterest
+            }
+            let items = (try? await MKLocalSearch(request: request).start())?.mapItems ?? []
+            scoredResults += items.map {
+                (score: matchScore($0, for: focus, queryIndex: queryIndex, isRestaurant: isRestaurant), item: $0)
+            }
+        }
+
+        let best = scoredResults.max { $0.score < $1.score }
+        guard let best, best.score >= 58 else { return nil }
+        return best.item
+    }
+
+    private func searchQueries(for focus: MapFocus, isRestaurant: Bool) -> [String] {
+        let cityContext = "\(focus.destination.city), \(focus.destination.country)"
+        var queries = [
+            "\(focus.item.name), \(cityContext)",
+            "\(focus.item.name) \(isRestaurant ? "restaurant" : "attraction"), \(cityContext)"
+        ]
+
+        for fragment in nameFragments(from: focus.item.name) where fragment != focus.item.name {
+            queries.append("\(fragment), \(cityContext)")
+        }
+
+        if focus.item.nameLikelyNeedsContext {
+            queries.append("\(focus.item.name) \(focus.item.detail), \(cityContext)")
+        }
+
+        var seen: Set<String> = []
+        return queries.filter { seen.insert($0.normalizedForSearch).inserted }
+    }
+
+    private func nameFragments(from name: String) -> [String] {
+        let separators = [" + ", " & ", " or ", " / "]
+        var fragments = [name]
+        for separator in separators {
+            fragments += name
+                .components(separatedBy: separator)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        }
+        return fragments
+    }
+
+    private func searchRadius(for focus: MapFocus) -> CLLocationDistance {
+        focus.item.nameLikelyNeedsWiderSearch ? 140_000 : 55_000
+    }
+
+    private func matchScore(
+        _ mapItem: MKMapItem,
+        for focus: MapFocus,
+        queryIndex: Int,
+        isRestaurant: Bool
+    ) -> Double {
+        let candidateName = mapItem.name ?? ""
+        let itemName = focus.item.name
+        let city = focus.destination.city.normalizedForSearch
+        let country = focus.destination.country.normalizedForSearch
+        let address = (mapItem.address?.fullAddress ?? "").normalizedForSearch
+
+        var score = 12 - Double(queryIndex * 2)
+        score += nameMatchScore(candidateName, itemName: itemName)
+
+        if isRestaurant, let rawCategory = mapItem.pointOfInterestCategory?.rawValue.normalizedForSearch {
+            if rawCategory.contains("restaurant")
+                || rawCategory.contains("food")
+                || rawCategory.contains("bakery")
+                || rawCategory.contains("cafe") {
+                score += 18
+            }
+        }
+
+        if !city.isEmpty, address.contains(city) { score += 16 }
+        if !country.isEmpty, address.contains(country) { score += 8 }
+
+        let cityCenter = CLLocation(
+            latitude: focus.destination.coordinate.latitude,
+            longitude: focus.destination.coordinate.longitude
+        )
+        let resultLocation = CLLocation(
+            latitude: mapItem.location.coordinate.latitude,
+            longitude: mapItem.location.coordinate.longitude
+        )
+        let distance = resultLocation.distance(from: cityCenter)
+        switch distance {
+        case 0..<2_000: score += 22
+        case 2_000..<10_000: score += 16
+        case 10_000..<55_000: score += 8
+        case 55_000..<140_000: break
+        default: score -= 22
+        }
+
+        if focus.item.nameLikelyNeedsContext, nameMatchScore(candidateName, itemName: itemName) < 24 {
+            score -= 24
+        }
+
+        return score
+    }
+
+    private func nameMatchScore(_ candidateName: String, itemName: String) -> Double {
+        let candidate = candidateName.normalizedForSearch
+        let item = itemName.normalizedForSearch
+        guard !candidate.isEmpty, !item.isEmpty else { return 0 }
+
+        if candidate == item { return 70 }
+        if candidate.contains(item) || item.contains(candidate) { return 56 }
+
+        let fragmentScores = nameFragments(from: itemName).map { fragment -> Double in
+            let fragment = fragment.normalizedForSearch
+            if fragment.isEmpty { return 0 }
+            if candidate == fragment { return 66 }
+            if candidate.contains(fragment) || fragment.contains(candidate) { return 50 }
+            return tokenOverlapScore(candidate, fragment)
+        }
+        return fragmentScores.max() ?? tokenOverlapScore(candidate, item)
+    }
+
+    private func tokenOverlapScore(_ candidate: String, _ item: String) -> Double {
+        let candidateTokens = Set(candidate.searchTokens)
+        let itemTokens = Set(item.searchTokens)
+        guard !candidateTokens.isEmpty, !itemTokens.isEmpty else { return 0 }
+        let overlap = candidateTokens.intersection(itemTokens).count
+        return (Double(overlap) / Double(itemTokens.count)) * 44
+    }
+
     /// Remove the focus, returning the Map tab to its default state.
     func clearFocus() {
         focus = nil
+    }
+}
+
+private extension String {
+    var normalizedForSearch: String {
+        folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    var searchTokens: [String] {
+        normalizedForSearch
+            .split(separator: " ")
+            .map(String.init)
+            .filter { $0.count > 2 && !Self.searchStopWords.contains($0) }
+    }
+
+    private static let searchStopWords: Set<String> = [
+        "and", "the", "with", "near", "from", "plus", "for", "day", "trip", "walk", "loop"
+    ]
+}
+
+private extension TravelPlanItem {
+    var nameLikelyNeedsContext: Bool {
+        let name = name.normalizedForSearch
+        return name.contains("stalls")
+            || name.contains("kiosks")
+            || name.contains("picnic")
+            || name.contains("boats")
+            || name.contains("ferry")
+            || name.contains("day trip")
+            || name.contains("at night")
+            || name.contains("walk")
+            || name.contains("loop")
+    }
+
+    var nameLikelyNeedsWiderSearch: Bool {
+        let name = name.normalizedForSearch
+        return name.contains("day trip")
+            || name.contains("north shore")
+            || name.contains("blue mountains")
+            || name.contains("hoover dam")
+            || name.contains("red rock canyon")
+            || name.contains("nusa penida")
+            || name.contains("jiufen")
+            || name.contains("teotihuacan")
     }
 }
 
@@ -410,9 +590,11 @@ struct MapScreen: View {
     @State private var detailPlace: MapPlace?
     /// Presents the full-detail sheet for the curated focus place.
     @State private var showsFocusDetail = false
+    @State private var lastCenteredCoordinateKey: String?
 
-    /// "|"-separated `MapPlace.saveKey`s the user bookmarked from the place card.
-    @AppStorage("mapSavedPlaceKeys") private var savedPlaceKeys = ""
+    /// `MapPlace.saveKey`s the user bookmarked from the place card, cloud-backed on
+    /// the profile so they survive reinstalls.
+    @Environment(TripStore.self) private var store
 
     private var selectedPlace: MapPlace? {
         places.first { $0.id == selectedPlaceID }
@@ -446,11 +628,8 @@ struct MapScreen: View {
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
-        .onChange(of: mapModel.navigateRequest) { recenterOnFocus() }
+        .onChange(of: mapModel.navigateRequest) { recenterOnFocus(force: true) }
         .onChange(of: coordinateKey) { recenterOnFocus() }
-        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: selectedPlaceID)
-        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: activeCategory)
-        .animation(.easeInOut(duration: 0.2), value: showsSearchThisArea)
     }
 
     private var mapSurface: some View {
@@ -472,13 +651,21 @@ struct MapScreen: View {
         .ignoresSafeArea(edges: .bottom)
         .onMapCameraChange(frequency: .onEnd) { context in
             visibleRegion = context.region
-            if activeCategory != nil, !isSearching, !places.isEmpty {
+            if activeCategory != nil, !isSearching, !places.isEmpty, !showsSearchThisArea {
                 showsSearchThisArea = true
             }
         }
-        .safeAreaInset(edge: .top, spacing: 0) { topControls }
-        .overlay(alignment: .bottom) { bottomCard }
-        .onAppear(perform: recenterOnFocus)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            topControls
+                .animation(.spring(response: 0.35, dampingFraction: 0.85), value: activeCategory)
+                .animation(.easeInOut(duration: 0.2), value: showsSearchThisArea)
+        }
+        .overlay(alignment: .bottom) {
+            bottomCard
+                .animation(.spring(response: 0.35, dampingFraction: 0.85), value: selectedPlaceID)
+                .animation(.spring(response: 0.35, dampingFraction: 0.85), value: mapModel.focus != nil)
+        }
+        .onAppear { recenterOnFocus(force: true, animated: false) }
     }
 
     // MARK: Floating top controls
@@ -636,9 +823,9 @@ struct MapScreen: View {
             center: CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194),
             span: MKCoordinateSpan(latitudeDelta: 0.1, longitudeDelta: 0.1)
         )
-        isSearching = true
-        showsSearchThisArea = false
-        selectedPlaceID = nil
+        if !isSearching { isSearching = true }
+        if showsSearchThisArea { showsSearchThisArea = false }
+        if selectedPlaceID != nil { selectedPlaceID = nil }
 
         let request = MKLocalSearch.Request()
         request.naturalLanguageQuery = category.searchQuery
@@ -652,33 +839,41 @@ struct MapScreen: View {
     }
 
     private func clearCategory() {
-        activeCategory = nil
-        places = []
-        selectedPlaceID = nil
-        showsSearchThisArea = false
+        if activeCategory != nil { activeCategory = nil }
+        if !places.isEmpty { places = [] }
+        if selectedPlaceID != nil { selectedPlaceID = nil }
+        if showsSearchThisArea { showsSearchThisArea = false }
     }
 
     private func savedBinding(for place: MapPlace) -> Binding<Bool> {
         Binding(
-            get: { savedPlaceKeys.split(separator: "|").map(String.init).contains(place.saveKey) },
+            get: { store.userProfile.savedPlaceKeys.contains(place.saveKey) },
             set: { isSaved in
-                var keys = Set(savedPlaceKeys.split(separator: "|").map(String.init))
+                var keys = Set(store.userProfile.savedPlaceKeys)
                 if isSaved { keys.insert(place.saveKey) } else { keys.remove(place.saveKey) }
-                savedPlaceKeys = keys.sorted().joined(separator: "|")
+                store.updateSavedPlaces(mapKeys: keys.sorted())
             }
         )
     }
 
     /// Move the camera to the current curated focus, zoomed to a neighborhood span.
-    private func recenterOnFocus() {
-        guard let focus = mapModel.focus else { return }
-        withAnimation(.easeInOut) {
+    private func recenterOnFocus(force: Bool = false, animated: Bool = true) {
+        guard let focus = mapModel.focus, let key = coordinateKey else { return }
+        guard force || key != lastCenteredCoordinateKey else { return }
+        lastCenteredCoordinateKey = key
+
+        let update = {
             position = .region(
                 MKCoordinateRegion(
                     center: focus.coordinate,
                     span: MKCoordinateSpan(latitudeDelta: 0.03, longitudeDelta: 0.03)
                 )
             )
+        }
+        if animated {
+            withAnimation(.easeInOut) { update() }
+        } else {
+            update()
         }
     }
 }
@@ -1301,7 +1496,8 @@ struct FocusDetailSheet: View {
 /// adventure" carousel, a smaller "Trending with travelers" rail, and a saved list.
 struct RecScreen: View {
     @State private var searchText = ""
-    @AppStorage("exploreSavedDestinationIDs") private var savedDestinationIDs = ""
+    /// Saved destinations live on the cloud-backed profile so they survive reinstalls.
+    @Environment(TripStore.self) private var store
 
     // Filters
     @State private var showFilterSheet = false
@@ -1311,7 +1507,7 @@ struct RecScreen: View {
     /// Slider ceiling; at the cap the budget filter is treated as "no limit".
     static let budgetCap: Double = 3500
 
-    private var savedIDs: Set<String> { idSet(from: savedDestinationIDs) }
+    private var savedIDs: Set<String> { Set(store.userProfile.savedDestinationIDs) }
 
     private var searchResults: [Destination] {
         let query = searchText.trimmingCharacters(in: .whitespaces)
@@ -1629,18 +1825,14 @@ struct RecScreen: View {
             .font(.title2.bold())
     }
 
-    private func idSet(from rawValue: String) -> Set<String> {
-        Set(rawValue.split(separator: "|").map(String.init))
-    }
-
     private func toggleSaved(_ id: String) {
-        var set = idSet(from: savedDestinationIDs)
+        var set = savedIDs
         if set.contains(id) {
             set.remove(id)
         } else {
             set.insert(id)
         }
-        savedDestinationIDs = set.sorted().joined(separator: "|")
+        store.updateSavedPlaces(destinationIDs: set.sorted())
     }
 }
 
