@@ -2438,6 +2438,7 @@ struct TripDetailView: View {
                                                 message: "TripSplit works out who owes whom below — tap a payment to record it once it's settled."
                                             )
                                         }
+                                        yourDebtsCard(trip)
                                         settleCard(trip).id("settle")
                                         membersCard(trip)
                                         expensesCard(trip)
@@ -2765,9 +2766,63 @@ struct TripDetailView: View {
     }
 
     @ViewBuilder
+    /// Personal "pay back" summary for the signed-in viewer: every settlement where
+    /// they are the debtor, listed creditor-by-creditor so they can see at a glance
+    /// whom to pay. Only account-backed members (the trip owner or invited users) can
+    /// be `store.currentUser`, so the card never renders for manually added members —
+    /// their `Person.ID` is a random UUID that no signed-in viewer matches.
+    private func yourDebtsCard(_ trip: Trip) -> some View {
+        let me = store.currentUser.id
+        let myDebts = trip.settlements().filter { $0.from.id == me }
+        return Group {
+            if trip.members.contains(where: { $0.id == me }), !myDebts.isEmpty {
+                TripCard(title: "You Need to Pay Back", icon: "arrow.up.right.circle.fill") {
+                    ForEach(myDebts) { settlement in
+                        Button {
+                            activeSettlement = settlement
+                        } label: {
+                            yourDebtRow(trip, settlement)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+
+    private func yourDebtRow(_ trip: Trip, _ settlement: Settlement) -> some View {
+        let settled = store.isFullySettled(tripID: tripID, settlement)
+        return HStack(spacing: 8) {
+            avatar(settlement.to, size: 30)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: settlement.to.name)
+                    .font(.subheadline).fontWeight(.semibold)
+                if settled {
+                    Text("Settled").font(.caption).foregroundStyle(Color(hex: 0x10B981))
+                } else {
+                    Text("Tap to record a payment")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            if settled {
+                Image(systemName: "checkmark.seal.fill").foregroundStyle(Color(hex: 0x10B981))
+            } else {
+                Text(money(store.remaining(tripID: tripID, for: settlement), trip.currencyCode))
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.negative)
+            }
+            Image(systemName: "chevron.right")
+                .font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
+        }
+        .contentShape(.rect)
+        .padding(.vertical, 4)
+    }
+
     private func settleCard(_ trip: Trip) -> some View {
         let settlements = trip.settlements()
-        TripCard(title: "Settle Up", icon: "arrow.left.arrow.right.circle.fill") {
+        return TripCard(title: "Settle Up", icon: "arrow.left.arrow.right.circle.fill") {
             if settlements.isEmpty {
                 Text("All settled up — no transfers needed.")
                     .font(.subheadline)
