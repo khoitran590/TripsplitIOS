@@ -2666,6 +2666,9 @@ struct TripDetailView: View {
         let spent = trip.spent(for: me)
         let remaining = trip.remainingBudget(for: me)
         let overBudget = budget > 0 && spent > budget
+        // A $0 budget has no separate "over budget" state, so retain the negative
+        // balance to make spending against it visible in the Remaining tile.
+        let displayedRemaining = budget == 0 ? remaining : abs(remaining)
         let usedFraction = budget > 0 ? spent / budget : 0
         let nearBudget = budget > 0 && usedFraction >= 0.8 && !overBudget
         let barColor = overBudget ? Theme.negative : (nearBudget ? Theme.warning : Theme.positive)
@@ -2724,7 +2727,7 @@ struct TripDetailView: View {
                 budgetTile("Spent So Far", money(spent, trip.currencyCode), Theme.accent)
                 budgetTile(
                     overBudget ? "Over Budget" : "Remaining",
-                    money(abs(remaining), trip.currencyCode),
+                    money(displayedRemaining, trip.currencyCode),
                     barColor
                 )
             }
