@@ -44,6 +44,14 @@ struct ContentView: View {
     /// the old `switch` tore down and rebuilt the whole screen (map region, scroll
     /// positions, resolved images) on every dock tap, which made navigation feel laggy.
     @State private var visitedTabs: Set<DockTab> = [.home]
+    /// One-time profile-setup prompt for accounts with no display name yet.
+    /// Session-scoped so a skip isn't re-asked until the next launch.
+    @State private var showProfileSetup = false
+    @State private var promptedProfileSetup = false
+    /// An invite link opened while signed out, held until the user signs in.
+    @State private var pendingInviteURL: URL?
+    @State private var showInviteSignInAlert = false
+    @State private var inviteErrorMessage: String?
 
     var body: some View {
         ZStack {
@@ -74,12 +82,23 @@ struct ContentView: View {
         // once authentication succeeds, land the user on Home.
         .onChange(of: auth.isAuthenticated) { _, isAuthenticated in
             if isAuthenticated { selectedTab = .home }
+            // Redeem an invitation link that was opened before the user signed in.
+            if isAuthenticated, let url = pendingInviteURL {
+                pendingInviteURL = nil
+                Task { await acceptInvite(url) }
+            }
         }
         // Tapping a place inside a curated Explore trip asks the Map tab to focus it;
         // remember the current tab first so the map's Back button can return here.
         .onChange(of: mapModel.navigateRequest) {
             mapModel.originTab = selectedTab
             selectedTab = .map
+        }
+        // Attached before the `.environment(...)` modifiers below so the sheet's
+        // content inherits TripStore/AuthStore — a sheet added outside that scope
+        // crashes on its `@Environment` lookup.
+        .sheet(isPresented: $showProfileSetup) {
+            ProfileSetupView()
         }
         .environment(store)
         .environment(auth)
@@ -96,11 +115,44 @@ struct ContentView: View {
             // the authoritative name/avatar rather than the local cache.
             await store.loadProfileFromCloud()
             await store.loadFromCloud()
+            // Fresh account with no display name: offer the one-time profile setup so
+            // the user doesn't show up to trip mates as a bare email handle.
+            if auth.isAuthenticated, !promptedProfileSetup,
+               store.currentUser.name.trimmingCharacters(in: .whitespaces).isEmpty {
+                promptedProfileSetup = true
+                showProfileSetup = true
+            }
         }
         .onOpenURL { url in
-            Task {
-                try? await store.acceptInvitationLink(url)
+            if auth.isAuthenticated {
+                Task { await acceptInvite(url) }
+            } else {
+                // Hold the link and point the user at sign-in; redeemed automatically
+                // in `onChange(of: auth.isAuthenticated)` once they're in.
+                pendingInviteURL = url
+                showInviteSignInAlert = true
             }
+        }
+        .alert("Sign In to Join the Trip", isPresented: $showInviteSignInAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Sign in (or create an account) from the profile icon on the Home tab — your invitation will be accepted automatically.")
+        }
+        .alert("Couldn't Accept Invitation", isPresented: Binding(
+            get: { inviteErrorMessage != nil },
+            set: { if !$0 { inviteErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(inviteErrorMessage ?? "")
+        }
+    }
+
+    private func acceptInvite(_ url: URL) async {
+        do {
+            try await store.acceptInvitationLink(url)
+        } catch {
+            inviteErrorMessage = (error as? AuthError)?.message ?? error.localizedDescription
         }
     }
 

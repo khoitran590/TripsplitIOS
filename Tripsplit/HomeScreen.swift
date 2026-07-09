@@ -165,6 +165,18 @@ struct HomeScreen: View {
                     Text("Create a trip to start tracking expenses.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    Button {
+                        if auth.isAuthenticated { showAddTrip = true } else { showSignInAlert = true }
+                    } label: {
+                        Label("Create your first trip", systemImage: "plus")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 10)
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+                    .padding(.top, 4)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 28)

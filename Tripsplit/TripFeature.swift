@@ -2387,6 +2387,13 @@ struct TripDetailView: View {
                                     case .overview:
                                         tripDetailsCard(trip)
                                         budgetOverviewCard(trip)
+                                        if trip.members.count >= 2 && !trip.expenses.isEmpty {
+                                            OneTimeTipBanner(
+                                                key: "tipSettleUpDismissed",
+                                                icon: "arrow.left.arrow.right.circle.fill",
+                                                message: "TripSplit works out who owes whom below — tap a payment to record it once it's settled."
+                                            )
+                                        }
                                         settleCard(trip).id("settle")
                                         membersCard(trip)
                                         expensesCard(trip)
@@ -3555,6 +3562,13 @@ struct AddExpenseView: View {
                 if let trip {
                     ScrollView {
                         VStack(spacing: 18) {
+                            if !isEditing {
+                                OneTimeTipBanner(
+                                    key: "tipScanReceiptDismissed",
+                                    icon: "doc.text.viewfinder",
+                                    message: "Skip the typing: scan the receipt with the Camera button below and the items, tax, and tip fill in automatically."
+                                )
+                            }
                             amountCard(trip)
                             payerCard(trip)
                             receiptCard(trip)

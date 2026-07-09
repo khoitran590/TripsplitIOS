@@ -6,12 +6,20 @@ struct RootView: View {
     @State private var localization = LocalizationManager.shared
     @State private var themeManager = ThemeManager.shared
     @AppStorage("appearancePreference") private var appearance: AppearancePreference = .system
+    @AppStorage("hasSeenWelcome") private var hasSeenWelcome = false
 
     var body: some View {
         ZStack {
             if isActive {
-                ContentView()
+                if hasSeenWelcome {
+                    ContentView()
+                        .transition(.opacity)
+                } else {
+                    WelcomeView {
+                        withAnimation(.easeInOut(duration: 0.35)) { hasSeenWelcome = true }
+                    }
                     .transition(.opacity)
+                }
             } else {
                 SplashScreen()
                     .transition(.opacity)

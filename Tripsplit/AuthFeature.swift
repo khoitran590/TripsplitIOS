@@ -2,6 +2,8 @@ import SwiftUI
 import Observation
 import Security
 import os
+import AuthenticationServices
+import CryptoKit
 
 // MARK: - Supabase configuration
 
@@ -19,6 +21,12 @@ enum SupabaseConfig {
     nonisolated static var isConfigured: Bool {
         !url.contains("YOUR-PROJECT-REF") && !anonKey.contains("YOUR-SUPABASE-ANON-KEY")
     }
+
+    /// Sign in with Apple requires a paid Apple Developer Program team (personal teams
+    /// can't sign the `com.apple.developer.applesignin` entitlement). Flip to true after
+    /// enrolling AND re-adding `CODE_SIGN_ENTITLEMENTS = Tripsplit/Tripsplit.entitlements`
+    /// to both target configurations in project.pbxproj — the code path is otherwise ready.
+    nonisolated static let appleSignInEnabled = false
 }
 
 // MARK: - Auth models
@@ -194,6 +202,21 @@ actor AuthService {
     func resetPassword(email: String) async throws {
         let email = try validateEmail(email)
         _ = try await send("POST", "/auth/v1/recover", body: ["email": email])
+    }
+
+    /// Exchanges an Apple identity token for a Supabase session (GoTrue's `id_token`
+    /// grant). `nonce` is the raw nonce whose SHA-256 hash was sent in the Apple
+    /// request; GoTrue verifies it against the token's `nonce` claim.
+    func signInWithApple(identityToken: String, nonce: String) async throws -> AuthSession {
+        let data = try await post(
+            "/auth/v1/token?grant_type=id_token",
+            body: ["provider": "apple", "id_token": identityToken, "nonce": nonce]
+        )
+        let token = try JSONDecoder().decode(TokenResponse.self, from: data)
+        guard let access = token.accessToken, let refresh = token.refreshToken else {
+            throw AuthError(message: "Unexpected response from the server.")
+        }
+        return AuthSession(accessToken: access, refreshToken: refresh, email: token.user?.email)
     }
 
     /// Whether `accessToken` is currently accepted as a signed-in user by Supabase Auth.
@@ -398,6 +421,10 @@ final class AuthStore {
         try await AuthService.shared.resetPassword(email: email)
     }
 
+    func signInWithApple(identityToken: String, nonce: String) async throws {
+        persist(try await AuthService.shared.signInWithApple(identityToken: identityToken, nonce: nonce))
+    }
+
     func refreshSession() async throws -> AuthSession {
         // Coalesce concurrent refreshes onto a single request (see `refreshTask`).
         if let refreshTask {
@@ -482,6 +509,10 @@ struct AuthView: View {
     @State private var errorMessage: String?
     @State private var infoMessage: String?
     @State private var isWorking = false
+    /// Raw nonce for the in-flight Apple request; its SHA-256 goes to Apple, the raw
+    /// value to Supabase so GoTrue can verify the identity token's `nonce` claim.
+    @State private var appleNonce = ""
+    @Environment(\.colorScheme) private var colorScheme
 
     private var canSubmit: Bool {
         guard !email.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
@@ -555,6 +586,11 @@ struct AuthView: View {
 
             primaryButton
 
+            if mode != .forgot && SupabaseConfig.appleSignInEnabled {
+                orDivider
+                appleButton
+            }
+
             if mode == .signIn {
                 Button("Forgot password?") { switchMode(.forgot) }
                     .font(.subheadline)
@@ -610,6 +646,77 @@ struct AuthView: View {
         .glassEffect(.regular.tint(Color(hex: 0x4F46E5)).interactive(), in: .rect(cornerRadius: 14))
         .disabled(!canSubmit || isWorking)
         .opacity(canSubmit && !isWorking ? 1 : 0.5)
+    }
+
+    private var orDivider: some View {
+        HStack(spacing: 12) {
+            Rectangle().fill(.secondary.opacity(0.25)).frame(height: 1)
+            Text("or")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            Rectangle().fill(.secondary.opacity(0.25)).frame(height: 1)
+        }
+    }
+
+    private var appleButton: some View {
+        SignInWithAppleButton(mode == .signUp ? .signUp : .signIn) { request in
+            appleNonce = Self.randomNonce()
+            request.requestedScopes = [.fullName, .email]
+            request.nonce = SHA256.hash(data: Data(appleNonce.utf8))
+                .map { String(format: "%02x", $0) }
+                .joined()
+        } onCompletion: { result in
+            handleAppleResult(result)
+        }
+        .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
+        // Recreate the button when the label should change — UIKit-backed, so SwiftUI
+        // won't re-render "Sign in" ↔ "Sign up" on its own.
+        .id(mode == .signUp)
+        .frame(height: 48)
+        .clipShape(.rect(cornerRadius: 14))
+        .disabled(isWorking)
+    }
+
+    private static func randomNonce() -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        return Data(bytes).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func handleAppleResult(_ result: Result<ASAuthorization, Error>) {
+        switch result {
+        case .success(let authorization):
+            guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
+                  let tokenData = credential.identityToken,
+                  let identityToken = String(data: tokenData, encoding: .utf8) else {
+                errorMessage = "Apple didn't return a usable credential. Try again."
+                return
+            }
+            // Apple provides the name only on the very first authorization for this
+            // account — stash it so the profile-setup step can prefill it.
+            if let name = credential.fullName {
+                let display = [name.givenName, name.familyName].compactMap(\.self).joined(separator: " ")
+                if !display.isEmpty {
+                    UserDefaults.standard.set(display, forKey: "pendingAppleDisplayName")
+                }
+            }
+            errorMessage = nil
+            infoMessage = nil
+            isWorking = true
+            let nonce = appleNonce
+            Task {
+                do {
+                    try await auth.signInWithApple(identityToken: identityToken, nonce: nonce)
+                } catch {
+                    errorMessage = (error as? AuthError)?.message ?? error.localizedDescription
+                }
+                isWorking = false
+            }
+        case .failure(let error):
+            // A user-cancelled sheet is not an error worth surfacing.
+            if let authError = error as? ASAuthorizationError, authError.code == .canceled { return }
+            errorMessage = error.localizedDescription
+        }
     }
 
     /// "Don't have an account? Sign up" / "Already have an account? Login".
