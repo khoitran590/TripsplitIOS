@@ -498,12 +498,15 @@ struct BalanceCard: View {
         let heroValue = hasBudget
             ? (isOver ? money(totals.spent - totals.budget, "USD") : money(totals.available, "USD"))
             : money(totals.spent, "USD")
-        let heroLabel = !hasBudget ? "Spent" : (isOver ? "Over budget" : "Remaining")
+        // Without a budget the hero figure is a spending total, not headroom — say so
+        // plainly, and title the card "Spending" so it doesn't promise a budget it
+        // doesn't have.
+        let heroLabel = !hasBudget ? "Total spent" : (isOver ? "Over budget" : "Remaining")
         let statusText = isOver ? "Over budget" : isNear ? "Near limit" : "On track"
 
         return VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text("Budget")
+                Text(LocalizedStringKey(hasBudget ? "Budget" : "Spending"))
                     .font(.title3.weight(.bold))
                 Button {
                     showBudgetInfo = true
@@ -561,8 +564,10 @@ struct BalanceCard: View {
                 GeometryReader { geo in
                     ZStack(alignment: .leading) {
                         Capsule().fill(Color.primary.opacity(0.08))
+                        // Without a budget the bar has no limit to measure against —
+                        // render it as a neutral full strip, not a "100% used" signal.
                         Capsule()
-                            .fill(ringColor)
+                            .fill(hasBudget ? AnyShapeStyle(ringColor) : AnyShapeStyle(Color.primary.opacity(0.18)))
                             .frame(width: geo.size.width * min(1, max(0, hasBudget ? fraction : (totals.spent > 0 ? 1 : 0))))
                             .animation(.easeInOut(duration: 0.4), value: fraction)
                     }
@@ -577,8 +582,18 @@ struct BalanceCard: View {
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(ringColor)
                         Spacer()
+                        barLabel("Budget", money(totals.budget, "USD"), trailing: true)
+                    } else {
+                        // No budget anywhere: say what's missing instead of a bare "—".
+                        VStack(alignment: .trailing, spacing: 1) {
+                            Text("No budget set")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            Text("Set one inside a trip")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
                     }
-                    barLabel("Budget", hasBudget ? money(totals.budget, "USD") : "—", trailing: true)
                 }
             }
 

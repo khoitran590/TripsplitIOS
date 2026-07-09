@@ -485,11 +485,16 @@ create table if not exists public.trip_feed_posts (
     author_name text not null default '',
     body        text not null default '',
     photo_paths jsonb not null default '[]'::jsonb,
+    -- Optional place tag shown on the post ("Blue Bottle Coffee, Oakland").
+    location_name text,
     comments    jsonb not null default '[]'::jsonb,
     reactions   jsonb not null default '{}'::jsonb,
     created_at  timestamptz not null default now(),
     updated_at  timestamptz not null default now()
 );
+
+-- Upgrade path for databases created before location tags existed.
+alter table public.trip_feed_posts add column if not exists location_name text;
 
 create index if not exists trip_feed_posts_trip_created_idx
     on public.trip_feed_posts (trip_id, created_at desc);

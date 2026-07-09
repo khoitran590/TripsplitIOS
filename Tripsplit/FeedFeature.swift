@@ -1,6 +1,7 @@
 import SwiftUI
 import PhotosUI
 import UIKit
+import MapKit
 
 // MARK: - Trip feed models
 
@@ -16,6 +17,8 @@ nonisolated struct FeedPost: Identifiable, Codable {
     var authorName: String
     var text: String
     var photoPaths: [String] = []
+    /// Optional place tag the author attached when posting (display name only).
+    var locationName: String?
     var date: Date
     var comments: [ExpenseComment] = []
     /// Emoji reactions: emoji → the members who dropped it.
@@ -27,6 +30,7 @@ nonisolated struct FeedPost: Identifiable, Codable {
         authorName: String,
         text: String,
         photoPaths: [String] = [],
+        locationName: String? = nil,
         date: Date = Date(),
         comments: [ExpenseComment] = [],
         reactions: [String: [Person.ID]] = [:]
@@ -36,6 +40,7 @@ nonisolated struct FeedPost: Identifiable, Codable {
         self.authorName = authorName
         self.text = text
         self.photoPaths = photoPaths
+        self.locationName = locationName
         self.date = date
         self.comments = comments
         self.reactions = reactions
@@ -63,6 +68,7 @@ actor FeedRepository {
         var authorName: String
         var body: String
         var photoPaths: [String]
+        var locationName: String?
         var comments: [ExpenseComment]
         var reactions: [String: [UUID]]
         var createdAt: Date
@@ -74,6 +80,7 @@ actor FeedRepository {
             case authorName = "author_name"
             case body
             case photoPaths = "photo_paths"
+            case locationName = "location_name"
             case comments
             case reactions
             case createdAt = "created_at"
@@ -86,6 +93,7 @@ actor FeedRepository {
             authorName = post.authorName
             body = post.text
             photoPaths = post.photoPaths
+            locationName = post.locationName
             comments = post.comments
             reactions = post.reactions
             createdAt = post.date
@@ -98,6 +106,7 @@ actor FeedRepository {
                 authorName: authorName,
                 text: body,
                 photoPaths: photoPaths,
+                locationName: locationName,
                 date: createdAt,
                 comments: comments,
                 reactions: reactions
@@ -154,8 +163,8 @@ actor FeedRepository {
         )
     }
 
-    /// Pushes one post's comments and reactions (the only columns the app edits after
-    /// posting). Patching just these keeps concurrent edits to other posts untouched.
+    /// Pushes one post's comments and reactions. Patching just these keeps concurrent
+    /// edits to other posts untouched.
     func updateInteractions(for post: FeedPost, accessToken: String) async throws {
         struct Patch: Encodable {
             let comments: [ExpenseComment]
@@ -165,6 +174,33 @@ actor FeedRepository {
         _ = try await send(
             "PATCH",
             "/rest/v1/trip_feed_posts?id=eq.\(post.id.uuidString)",
+            accessToken: accessToken,
+            body: body,
+            extraHeaders: ["Prefer": "return=minimal"]
+        )
+    }
+
+    /// Rewrites a post's text and location tag (the author editing their own post).
+    func updateBody(postID: UUID, text: String, locationName: String?, accessToken: String) async throws {
+        struct Patch: Encodable {
+            let body: String
+            // Encode nil explicitly so clearing a location tag nulls the column
+            // (encodeIfPresent would omit the key and leave the old tag in place).
+            let locationName: String?
+            enum CodingKeys: String, CodingKey {
+                case body
+                case locationName = "location_name"
+            }
+            func encode(to encoder: Encoder) throws {
+                var c = encoder.container(keyedBy: CodingKeys.self)
+                try c.encode(body, forKey: .body)
+                try c.encode(locationName, forKey: .locationName)
+            }
+        }
+        let body = try encoder.encode(Patch(body: text, locationName: locationName))
+        _ = try await send(
+            "PATCH",
+            "/rest/v1/trip_feed_posts?id=eq.\(postID.uuidString)",
             accessToken: accessToken,
             body: body,
             extraHeaders: ["Prefer": "return=minimal"]
@@ -262,6 +298,30 @@ extension TripStore {
         feedPostsByTrip[tripID, default: []].insert(post, at: 0)
     }
 
+    /// Rewrites the current user's own post (text + location tag) locally, then patches
+    /// the row; a failed patch reloads the feed to resync (same pattern as interactions).
+    func editFeedPost(_ postID: FeedPost.ID, in tripID: Trip.ID, text: String, locationName: String?) {
+        guard var posts = feedPostsByTrip[tripID],
+              let index = posts.firstIndex(where: { $0.id == postID }),
+              posts[index].authorID == currentUser.id
+        else { return }
+        posts[index].text = text
+        posts[index].locationName = locationName
+        feedPostsByTrip[tripID] = posts
+        Task {
+            guard let accessToken = try? await authorizedAccessToken() else { return }
+            do {
+                try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
+                    try await FeedRepository.shared.updateBody(
+                        postID: postID, text: text, locationName: locationName, accessToken: token
+                    )
+                }
+            } catch {
+                try? await loadFeed(for: tripID)
+            }
+        }
+    }
+
     /// A member may delete their own posts; the trip creator may delete any post.
     /// (Mirrors the table's delete RLS policy.)
     func canDeleteFeedPost(_ post: FeedPost, in trip: Trip) -> Bool {
@@ -289,6 +349,17 @@ extension TripStore {
                 authorName: currentUser.name,
                 text: text
             ))
+        }
+    }
+
+    /// Rewrites the current user's own comment in place and stamps it as edited.
+    func editFeedComment(_ commentID: ExpenseComment.ID, text: String, in postID: FeedPost.ID, tripID: Trip.ID) {
+        mutateFeedPost(postID, in: tripID) { post in
+            guard let index = post.comments.firstIndex(where: { $0.id == commentID }),
+                  post.comments[index].authorID == currentUser.id
+            else { return }
+            post.comments[index].text = text
+            post.comments[index].editedAt = Date()
         }
     }
 
@@ -427,6 +498,8 @@ private struct FeedComposerCard: View {
     @State private var text = ""
     @State private var picks: [PhotosPickerItem] = []
     @State private var previews: [UIImage] = []
+    @State private var locationName: String?
+    @State private var showLocationPicker = false
     @State private var isPosting = false
     @State private var postError: String?
 
@@ -467,6 +540,27 @@ private struct FeedComposerCard: View {
                 }
             }
 
+            if let locationName {
+                HStack(spacing: 4) {
+                    Image(systemName: "mappin.and.ellipse")
+                        .font(.caption.weight(.semibold))
+                    Text(verbatim: locationName)
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                    Button {
+                        self.locationName = nil
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .foregroundStyle(Theme.accent)
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .background(Theme.accent.opacity(0.12), in: .capsule)
+            }
+
             if let postError {
                 Text(verbatim: postError).font(.caption).foregroundStyle(Theme.negative)
             }
@@ -476,6 +570,13 @@ private struct FeedComposerCard: View {
                     Label("Photos", systemImage: "photo.badge.plus")
                         .font(.subheadline.weight(.semibold))
                 }
+                Button {
+                    showLocationPicker = true
+                } label: {
+                    Label("Location", systemImage: "mappin.and.ellipse")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .padding(.leading, 12)
                 Spacer()
                 Button {
                     Task { await submit() }
@@ -496,6 +597,9 @@ private struct FeedComposerCard: View {
         .glassEffect(.regular, in: .rect(cornerRadius: 24))
         .onChange(of: picks) { _, newPicks in
             Task { await loadPreviews(newPicks) }
+        }
+        .sheet(isPresented: $showLocationPicker) {
+            FeedLocationPicker(locationName: $locationName)
         }
     }
 
@@ -544,7 +648,8 @@ private struct FeedComposerCard: View {
             authorID: store.currentUser.id,
             authorName: store.currentUser.name,
             text: text.trimmingCharacters(in: .whitespacesAndNewlines),
-            photoPaths: paths
+            photoPaths: paths,
+            locationName: locationName
         )
         do {
             try await store.addFeedPost(post, to: tripID)
@@ -555,6 +660,102 @@ private struct FeedComposerCard: View {
         text = ""
         picks = []
         previews = []
+        locationName = nil
+    }
+}
+
+/// Sheet for tagging a post with a place: MapKit autocomplete over the typed query, with
+/// the raw text usable as-is (so places MapKit doesn't know can still be tagged).
+private struct FeedLocationPicker: View {
+    @Binding var locationName: String?
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var query = ""
+    @State private var completer = LocationCompleter()
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if !query.trimmingCharacters(in: .whitespaces).isEmpty {
+                    Button {
+                        choose(query.trimmingCharacters(in: .whitespaces))
+                    } label: {
+                        Label {
+                            Text("Use \u{201C}\(query.trimmingCharacters(in: .whitespaces))\u{201D}")
+                        } icon: {
+                            Image(systemName: "mappin.and.ellipse")
+                        }
+                    }
+                }
+                ForEach(completer.results, id: \.self) { completion in
+                    Button {
+                        choose(
+                            completion.subtitle.isEmpty
+                                ? completion.title
+                                : "\(completion.title), \(completion.subtitle)"
+                        )
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(verbatim: completion.title).font(.subheadline.weight(.semibold))
+                            if !completion.subtitle.isEmpty {
+                                Text(verbatim: completion.subtitle)
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .searchable(text: $query, prompt: "Search for a place")
+            .onChange(of: query) { _, newValue in
+                completer.search(newValue)
+            }
+            .navigationTitle("Tag Location")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func choose(_ name: String) {
+        locationName = name
+        dismiss()
+    }
+}
+
+/// Thin `@Observable` wrapper around `MKLocalSearchCompleter` (delegate-based, main-thread).
+@Observable @MainActor
+private final class LocationCompleter: NSObject, @preconcurrency MKLocalSearchCompleterDelegate {
+    private(set) var results: [MKLocalSearchCompletion] = []
+    private let completer = MKLocalSearchCompleter()
+
+    override init() {
+        super.init()
+        completer.delegate = self
+        completer.resultTypes = [.pointOfInterest, .address]
+    }
+
+    func search(_ query: String) {
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty {
+            results = []
+            completer.cancel()
+        } else {
+            completer.queryFragment = trimmed
+        }
+    }
+
+    // MKLocalSearchCompleter delivers delegate callbacks on the main queue.
+    func completerDidUpdateResults(_ completer: MKLocalSearchCompleter) {
+        results = completer.results
+    }
+
+    func completer(_ completer: MKLocalSearchCompleter, didFailWithError error: Error) {
+        results = []
     }
 }
 
@@ -566,6 +767,12 @@ private struct FeedPostCard: View {
     let post: FeedPost
 
     @State private var newComment = ""
+    @State private var editingCommentID: ExpenseComment.ID?
+    @State private var editedCommentText = ""
+    @State private var isEditingPost = false
+    @State private var editedPostText = ""
+    @State private var editedLocation: String?
+    @State private var showEditLocationPicker = false
 
     private static let quickEmojis = ["👍", "❤️", "😂", "😮", "🎉", "🔥"]
 
@@ -577,7 +784,9 @@ private struct FeedPostCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
-            if !post.text.isEmpty {
+            if isEditingPost {
+                postEditor
+            } else if !post.text.isEmpty {
                 Text(verbatim: post.text).font(.subheadline)
             }
             if !post.photoPaths.isEmpty {
@@ -604,10 +813,26 @@ private struct FeedPostCard: View {
                 Text(verbatim: author.name).font(.subheadline.weight(.semibold))
                 Text(post.date.formatted(.relative(presentation: .named)))
                     .font(.caption).foregroundStyle(.secondary)
+                if let location = post.locationName, !location.isEmpty {
+                    HStack(spacing: 3) {
+                        Image(systemName: "mappin.and.ellipse").font(.caption2)
+                        Text(verbatim: location).font(.caption).lineLimit(1)
+                    }
+                    .foregroundStyle(Theme.accent)
+                }
             }
             Spacer()
             if let trip = store.trip(tripID), store.canDeleteFeedPost(post, in: trip) {
                 Menu {
+                    if post.authorID == store.currentUser.id {
+                        Button {
+                            editedPostText = post.text
+                            editedLocation = post.locationName
+                            isEditingPost = true
+                        } label: {
+                            Label("Edit Post", systemImage: "pencil")
+                        }
+                    }
                     Button(role: .destructive) {
                         store.deleteFeedPost(post.id, in: tripID)
                     } label: {
@@ -622,6 +847,73 @@ private struct FeedPostCard: View {
                 }
             }
         }
+    }
+
+    /// Inline editor for the author's own post: text plus a re-taggable location.
+    private var postEditor: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TextField("Edit post", text: $editedPostText, axis: .vertical)
+                .font(.subheadline)
+                .lineLimit(1...6)
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+
+            HStack(spacing: 8) {
+                Button {
+                    showEditLocationPicker = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "mappin.and.ellipse").font(.caption.weight(.semibold))
+                        Text(verbatim: editedLocation ?? String(localized: "Add location"))
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(Theme.accent)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(Theme.accent.opacity(0.12), in: .capsule)
+                }
+                .buttonStyle(.plain)
+                if editedLocation != nil {
+                    Button {
+                        editedLocation = nil
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+                Spacer()
+                Button("Cancel") { isEditingPost = false }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .buttonStyle(.plain)
+                Button {
+                    savePostEdit()
+                } label: {
+                    Text("Save").font(.caption.weight(.bold)).frame(minWidth: 40)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.accent)
+                .controlSize(.small)
+                .disabled(
+                    editedPostText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        && post.photoPaths.isEmpty
+                )
+            }
+        }
+        .sheet(isPresented: $showEditLocationPicker) {
+            FeedLocationPicker(locationName: $editedLocation)
+        }
+    }
+
+    private func savePostEdit() {
+        let trimmed = editedPostText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty || !post.photoPaths.isEmpty else { return }
+        if trimmed != post.text || editedLocation != post.locationName {
+            store.editFeedPost(post.id, in: tripID, text: trimmed, locationName: editedLocation)
+        }
+        isEditingPost = false
     }
 
     private var photosRow: some View {
@@ -683,21 +975,72 @@ private struct FeedPostCard: View {
                         .font(.caption.weight(.semibold))
                     Text(comment.date.formatted(.relative(presentation: .named)))
                         .font(.caption2).foregroundStyle(.secondary)
+                    if comment.editedAt != nil {
+                        Text("(edited)")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
                 }
-                Text(verbatim: comment.text).font(.subheadline)
+                if editingCommentID == comment.id {
+                    HStack(spacing: 8) {
+                        TextField("Edit comment", text: $editedCommentText, axis: .vertical)
+                            .font(.subheadline)
+                            .padding(.horizontal, 10).padding(.vertical, 6)
+                            .background(Theme.fieldBackground, in: .rect(cornerRadius: 10))
+                        Button {
+                            saveCommentEdit(comment)
+                        } label: {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.title3)
+                                .foregroundStyle(Theme.accent)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(editedCommentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        Button {
+                            editingCommentID = nil
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.title3)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                } else {
+                    Text(verbatim: comment.text).font(.subheadline)
+                }
             }
             Spacer(minLength: 0)
-            if comment.authorID == store.currentUser.id {
-                Button {
-                    store.deleteFeedComment(comment.id, from: post.id, in: tripID)
+            if comment.authorID == store.currentUser.id && editingCommentID != comment.id {
+                Menu {
+                    Button {
+                        editedCommentText = comment.text
+                        editingCommentID = comment.id
+                    } label: {
+                        Label("Edit Comment", systemImage: "pencil")
+                    }
+                    Button(role: .destructive) {
+                        store.deleteFeedComment(comment.id, from: post.id, in: tripID)
+                    } label: {
+                        Label("Delete Comment", systemImage: "trash")
+                    }
                 } label: {
-                    Image(systemName: "xmark")
-                        .font(.caption2.weight(.bold))
+                    Image(systemName: "ellipsis")
+                        .font(.caption.weight(.bold))
                         .foregroundStyle(.secondary)
+                        .frame(width: 26, height: 26)
+                        .contentShape(.rect)
                 }
-                .buttonStyle(.plain)
             }
         }
+    }
+
+    private func saveCommentEdit(_ comment: ExpenseComment) {
+        let trimmed = editedCommentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if trimmed != comment.text {
+            store.editFeedComment(comment.id, text: trimmed, in: post.id, tripID: tripID)
+        }
+        editingCommentID = nil
+        editedCommentText = ""
     }
 
     private var commentField: some View {

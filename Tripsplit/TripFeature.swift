@@ -153,17 +153,20 @@ struct ExpenseComment: Identifiable, Codable {
     var authorName: String
     var text: String
     var date: Date
+    /// Set when the author edits the comment after posting; nil for untouched comments.
+    var editedAt: Date?
 
     private enum CodingKeys: String, CodingKey {
-        case id, authorID, authorName, text, date
+        case id, authorID, authorName, text, date, editedAt
     }
 
-    init(id: UUID = UUID(), authorID: Person.ID, authorName: String, text: String, date: Date = Date()) {
+    init(id: UUID = UUID(), authorID: Person.ID, authorName: String, text: String, date: Date = Date(), editedAt: Date? = nil) {
         self.id = id
         self.authorID = authorID
         self.authorName = authorName
         self.text = text
         self.date = date
+        self.editedAt = editedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -173,6 +176,7 @@ struct ExpenseComment: Identifiable, Codable {
         authorName = try c.decodeIfPresent(String.self, forKey: .authorName) ?? ""
         text = try c.decode(String.self, forKey: .text)
         date = try c.decode(Date.self, forKey: .date)
+        editedAt = try c.decodeIfPresent(Date.self, forKey: .editedAt)
     }
 }
 

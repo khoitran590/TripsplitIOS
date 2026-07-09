@@ -1,11 +1,17 @@
 ---
 name: sim-verify
-description: After any UI or behavior change to the Tripsplit app, build, launch in the iOS Simulator, drive the changed screen, and screenshot it BEFORE reporting done. Use whenever a change touches SwiftUI views, navigation, layout, or anything the user would see or tap — do not hand back with only a successful xcodebuild.
+description: Build, launch, drive, and screenshot the Tripsplit app in the iOS Simulator. Use ONLY when the user explicitly asks to verify/run/screenshot in the simulator, or for large risky UI changes (new screens, navigation rework, theme overhauls). For routine features and small UI tweaks, a clean error-free xcodebuild is enough — the user runs the app themselves.
 ---
 
 # Simulator verification for Tripsplit
 
-A compiling build is not verification. ~1 in 4 turns in this project's history is the user pasting a screenshot or runtime error that a simulator launch would have caught. Never end a UI-affecting turn on "build succeeded."
+## When to use this skill
+
+The user's standing preference: **do not run the simulator for every change.** For small features and improvements, verify with a clean build (`xcodebuild ... build` with zero errors) and hand back — the user runs the app themselves.
+
+Run the full simulator flow below only when:
+- the user explicitly asks ("run it", "screenshot it", "verify in the sim"), or
+- the change is large and visually risky: a brand-new screen, navigation restructuring, or app-wide theme/layout changes.
 
 ## Steps
 
@@ -16,6 +22,8 @@ A compiling build is not verification. ~1 in 4 turns in this project's history i
    ```
    If the destination is missing: `xcrun simctl list devices available` and pick the newest iPhone.
 
+   **Stale-build trap:** incremental builds can silently ship old code. Before trusting what you see on screen, check the app's `debug.dylib` mtime is newer than your edits, or clean-build.
+
 2. **Install + launch** on the simulator:
    ```sh
    xcrun simctl boot "iPhone 17" 2>/dev/null || true
@@ -25,24 +33,25 @@ A compiling build is not verification. ~1 in 4 turns in this project's history i
    xcrun simctl launch booted $(defaults read "$APP/Info" CFBundleIdentifier)
    ```
 
-3. **Watch for crashes** while exercising the app:
+3. **Watch for crashes** while exercising the app (run in background ~30s):
    ```sh
    xcrun simctl spawn booted log stream --predicate 'process == "Tripsplit"' --level error
    ```
-   Run in background for ~30s; a launch crash, Auto Layout "Unable to simultaneously satisfy constraints" spew, or main-thread violation shows up here.
+   Launch crashes, Auto Layout "Unable to simultaneously satisfy constraints" spew, and main-thread violations show up here.
 
-4. **Screenshot the changed screen(s)** and actually look at them with Read:
+4. **Drive the changed screen.** Use System Events accessibility-element clicks (not screen coordinates or cliclick). A signed-in session is usually required for deeper screens; the test account is `khoitran590+onboardtest@gmail.com`. If auth blocks you, screenshot what you can reach and say exactly which screens you could not verify.
+
+5. **Screenshot and actually look** (with Read):
    ```sh
    xcrun simctl io booted screenshot /tmp/claude/sim-verify.png
    ```
-   Take one screenshot per screen you changed, in both light and dark mode when the change touches Theme/colors:
+   One screenshot per changed screen; add dark mode when the change touches Theme/colors:
    ```sh
    xcrun simctl ui booted appearance dark   # then screenshot again
    ```
-   Navigation to deeper screens usually requires a signed-in session; if the sim has one from a previous run, use it. If auth blocks you, screenshot what you can reach and say exactly which screens you could not verify.
 
-5. **Judge the screenshot against the request**, not just "did it render": overlapping elements, truncated text, empty gaps, wrong spacing, elements covering the map/cards, tab bar overlap. These are the exact issues the user historically had to report manually.
+6. **Judge against the request**, not just "did it render": overlapping elements, truncated text, empty gaps, wrong spacing, tab-bar overlap — the exact issues the user historically reported manually.
 
 ## Reporting
 
-End the turn with: what was verified visually (attach/mention screenshot paths), any log errors seen, and explicitly which flows were NOT exercised (e.g. "did not test invite flow — needs a second account").
+End the turn with: what was verified visually (screenshot paths), any log errors seen, and explicitly which flows were NOT exercised (e.g. "did not test invite flow — needs a second account").
