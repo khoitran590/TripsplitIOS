@@ -1,5 +1,6 @@
 import CoreImage
 import Foundation
+import ImageIO
 import SwiftUI
 import UIKit
 import Vision
@@ -954,9 +955,22 @@ actor ImageCache {
     private var refreshedPaths: Set<String> = []
     private var downloadTasks: [String: Task<Data?, Never>] = [:]
     private let directory: URL
+    private var didPruneDisk = false
+    private var diskBytes = 0
+
+    /// Count alone is a poor proxy for images: a decoded 2,200px square JPEG is about
+    /// 19 MiB. Keep the cache within a predictable memory envelope and downsample every
+    /// downloaded/disk image to a phone-appropriate maximum before inserting it.
+    private let memoryLimit = 96 * 1_024 * 1_024
+    private let diskLimit = 200 * 1_024 * 1_024
+    private let diskTrimTarget = 180 * 1_024 * 1_024
+    private let maxDownloadBytes = 16 * 1_024 * 1_024
+    private let maxDecodedPixelSize = 1_600
+    private let maxDiskAge: TimeInterval = 30 * 24 * 60 * 60
 
     init() {
-        memory.countLimit = 150
+        memory.countLimit = 80
+        memory.totalCostLimit = memoryLimit
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         directory = caches.appendingPathComponent("StorageImages", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -971,9 +985,11 @@ actor ImageCache {
     /// The cached image for a path — memory first, then disk (promoting to memory).
     func image(for path: String) -> UIImage? {
         if let hit = memory.object(forKey: path as NSString) { return hit }
+        pruneDiskIfNeeded()
         guard let data = try? Data(contentsOf: fileURL(for: path)),
-              let image = Self.decodedImage(from: data) else { return nil }
-        memory.setObject(image, forKey: path as NSString)
+              data.count <= maxDownloadBytes,
+              let image = Self.decodedImage(from: data, maxPixelSize: maxDecodedPixelSize) else { return nil }
+        memory.setObject(image, forKey: path as NSString, cost: Self.memoryCost(of: image))
         return image
     }
 
@@ -999,9 +1015,18 @@ actor ImageCache {
             downloadTasks[path] = nil
         }
         refreshedPaths.insert(path)
-        guard let data, let image = Self.decodedImage(from: data) else { return nil }
-        memory.setObject(image, forKey: path as NSString)
-        try? data.write(to: fileURL(for: path), options: .atomic)
+        guard let data, data.count <= maxDownloadBytes,
+              let image = Self.decodedImage(from: data, maxPixelSize: maxDecodedPixelSize) else { return nil }
+        memory.setObject(image, forKey: path as NSString, cost: Self.memoryCost(of: image))
+
+        pruneDiskIfNeeded()
+        let destination = fileURL(for: path)
+        let previousBytes = Self.fileSize(at: destination)
+        do {
+            try data.write(to: destination, options: .atomic)
+            diskBytes += data.count - previousBytes
+            if diskBytes > diskLimit { pruneDisk(force: true) }
+        } catch {}
         return image
     }
 
@@ -1011,12 +1036,81 @@ actor ImageCache {
         refreshedPaths.remove(path)
         downloadTasks[path]?.cancel()
         downloadTasks[path] = nil
-        try? FileManager.default.removeItem(at: fileURL(for: path))
+        let url = fileURL(for: path)
+        let removedBytes = Self.fileSize(at: url)
+        try? FileManager.default.removeItem(at: url)
+        diskBytes = max(0, diskBytes - removedBytes)
     }
 
-    nonisolated private static func decodedImage(from data: Data) -> UIImage? {
-        guard let image = UIImage(data: data) else { return nil }
-        return image.preparingForDisplay() ?? image
+    /// Removes expired files once per launch, then trims oldest-first to a lower target so
+    /// a burst of new downloads doesn't trigger directory scans after every image.
+    private func pruneDiskIfNeeded() {
+        guard !didPruneDisk else { return }
+        pruneDisk(force: true)
+    }
+
+    private func pruneDisk(force: Bool) {
+        guard force || !didPruneDisk else { return }
+        didPruneDisk = true
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: Array(keys),
+            options: [.skipsHiddenFiles]
+        ) else {
+            diskBytes = 0
+            return
+        }
+
+        let cutoff = Date().addingTimeInterval(-maxDiskAge)
+        var entries: [(url: URL, bytes: Int, modified: Date)] = []
+        for url in urls {
+            guard let values = try? url.resourceValues(forKeys: keys),
+                  values.isRegularFile == true else { continue }
+            let bytes = values.fileSize ?? 0
+            let modified = values.contentModificationDate ?? .distantPast
+            if modified < cutoff {
+                try? FileManager.default.removeItem(at: url)
+            } else {
+                entries.append((url, bytes, modified))
+            }
+        }
+
+        var total = entries.reduce(0) { $0 + $1.bytes }
+        if total > diskLimit {
+            for entry in entries.sorted(by: { $0.modified < $1.modified }) where total > diskTrimTarget {
+                try? FileManager.default.removeItem(at: entry.url)
+                total -= entry.bytes
+            }
+        }
+        diskBytes = max(0, total)
+    }
+
+    nonisolated private static func fileSize(at url: URL) -> Int {
+        (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+    }
+
+    nonisolated private static func memoryCost(of image: UIImage) -> Int {
+        guard let cgImage = image.cgImage else { return 0 }
+        return cgImage.bytesPerRow * cgImage.height
+    }
+
+    /// ImageIO creates a thumbnail directly from compressed bytes, avoiding the temporary
+    /// full-resolution decode caused by `UIImage(data:)` + `preparingForDisplay()`.
+    nonisolated private static func decodedImage(from data: Data, maxPixelSize: Int) -> UIImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, [
+            kCGImageSourceShouldCache: false,
+        ] as CFDictionary) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+            kCGImageSourceShouldCacheImmediately: true,
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return nil
+        }
+        return UIImage(cgImage: cgImage)
     }
 }
 

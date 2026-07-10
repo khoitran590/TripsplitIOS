@@ -3,6 +3,7 @@ import SwiftUI
 /// The TripSplit-style main dashboard: greeting, balance card, quick actions,
 /// and recent transactions.
 struct HomeScreen: View {
+    var isActive = true
     @Environment(TripStore.self) private var store
     @Environment(AuthStore.self) private var auth
     @AppStorage("appearancePreference") private var appearance: AppearancePreference = .system
@@ -25,6 +26,16 @@ struct HomeScreen: View {
     @State private var transactionsPendingDelete: [Transaction]?
 
     var body: some View {
+        Group {
+            if isActive {
+                homeContent
+            } else {
+                Color.clear.ignoresSafeArea()
+            }
+        }
+    }
+
+    private var homeContent: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {

@@ -454,6 +454,39 @@ extension Trip {
 
 // MARK: - Trip Store
 
+/// Latest-wins writer for the offline trips snapshot. Rapid UI mutations used to spawn
+/// one detached full-array JSON encode/write each, allowing redundant work and an older
+/// snapshot to finish after a newer one. This actor debounces writes and verifies the
+/// caller's revision again after encoding before touching disk.
+private actor TripsCacheWriter {
+    private var latestRevision = 0
+    private var pendingTask: Task<Void, Never>?
+
+    func schedule(trips: [Trip], at url: URL, revision: Int) {
+        guard revision > latestRevision else { return }
+        latestRevision = revision
+        pendingTask?.cancel()
+        pendingTask = Task {
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            let data = await Task.detached(priority: .utility) {
+                try? JSONEncoder().encode(trips)
+            }.value
+            guard !Task.isCancelled, revision == latestRevision, let data else { return }
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    func cancel(through revision: Int) {
+        // Ignore an older account-cancellation message if a newer account's scheduled
+        // write reached the actor first.
+        guard revision >= latestRevision else { return }
+        latestRevision = revision
+        pendingTask?.cancel()
+        pendingTask = nil
+    }
+}
+
 /// The app's in-memory source of truth for the current user and their trips.
 /// All balance figures on the home screen are derived from here.
 ///
@@ -504,6 +537,19 @@ final class TripStore {
     /// on every tap inserted/removed the banner (a full home-screen relayout) twice per
     /// mutation, which is what made buttons feel laggy.
     @ObservationIgnored private var activeSaveCount = 0
+
+    /// Persistence is latest-wins per trip. A burst of edits gets one cloud write after a
+    /// short debounce; edits arriving during a request are serialized into one follow-up
+    /// request, so an older response can never overwrite a newer snapshot.
+    @ObservationIgnored private var pendingTripSaves: [Trip.ID: Trip] = [:]
+    @ObservationIgnored private var tripSaveRevisions: [Trip.ID: Int] = [:]
+    @ObservationIgnored private var tripSaveTasks: [Trip.ID: Task<Void, Never>] = [:]
+    @ObservationIgnored private var tripSaveWorkerIDs: [Trip.ID: UUID] = [:]
+
+    /// The offline cache is also debounced and revisioned so rapid edits don't repeatedly
+    /// encode the complete trips array or finish writes out of order.
+    @ObservationIgnored private let cacheWriter = TripsCacheWriter()
+    @ObservationIgnored private var cacheRevision = 0
 
     /// Marks a cloud save as started; shows the syncing banner only if it's still running
     /// after 400 ms so quick saves never cause layout churn.
@@ -599,10 +645,18 @@ final class TripStore {
     private func cacheTripsLocally() {
         let snapshot = trips
         let userID = currentUser.id
-        Task.detached(priority: .utility) {
-            guard let data = try? JSONEncoder().encode(snapshot) else { return }
-            try? data.write(to: Self.tripsCacheURL(for: userID), options: .atomic)
+        cacheRevision += 1
+        let revision = cacheRevision
+        let url = Self.tripsCacheURL(for: userID)
+        Task {
+            await cacheWriter.schedule(trips: snapshot, at: url, revision: revision)
         }
+    }
+
+    private func cancelPendingCacheWrite() {
+        cacheRevision += 1
+        let revision = cacheRevision
+        Task { await cacheWriter.cancel(through: revision) }
     }
 
     nonisolated private static func loadCachedTrips(for userID: UUID) -> [Trip]? {
@@ -1035,6 +1089,7 @@ final class TripStore {
     /// no token yet), the id is queued so the deletion is retried later and the trip isn't
     /// resurrected by `loadFromCloud` in the meantime.
     func deleteTrip(_ tripID: Trip.ID) {
+        cancelScheduledSave(for: tripID)
         trips.removeAll { $0.id == tripID }
         pendingDeletions.insert(tripID)
         savePendingDeletions()
@@ -1089,6 +1144,8 @@ final class TripStore {
             // Signed out — clear in-memory profile and trips so nothing from the
             // previous account stays on screen. The per-user disk cache is kept, so
             // signing back in repaints instantly via `restoreCachedTrips`.
+            cancelScheduledTripSaves()
+            cancelPendingCacheWrite()
             resetProfile()
             feedPostsByTrip = [:]
             resetSignedImageURLs()
@@ -1098,6 +1155,8 @@ final class TripStore {
         // Identity changed: drop cached feeds so a different account never sees the
         // previous user's loaded posts.
         if currentUser.id != uuid {
+            cancelScheduledTripSaves()
+            cancelPendingCacheWrite()
             feedPostsByTrip = [:]
             resetSignedImageURLs()
         }
@@ -1214,27 +1273,109 @@ final class TripStore {
         // Every local mutation funnels through here, so this keeps the offline snapshot
         // current even when the cloud save below fails or the user is offline.
         cacheTripsLocally()
-        beginSyncActivity()
-        Task {
+        pendingTripSaves[trip.id] = trip
+        tripSaveRevisions[trip.id, default: 0] += 1
+        startSaveWorkerIfNeeded(for: trip.id)
+    }
+
+    private func startSaveWorkerIfNeeded(for tripID: Trip.ID) {
+        guard tripSaveTasks[tripID] == nil else { return }
+        let workerID = UUID()
+        tripSaveWorkerIDs[tripID] = workerID
+        tripSaveTasks[tripID] = Task { [weak self] in
+            await self?.drainScheduledSaves(for: tripID, workerID: workerID)
+        }
+    }
+
+    /// Debounces before each request and then drains at most one request at a time for a
+    /// trip. JWT validity is checked locally on the happy path; the existing 401/403 retry
+    /// pipeline refreshes rejected tokens, avoiding an extra `/auth/v1/user` round-trip on
+    /// every tap-triggered save.
+    private func drainScheduledSaves(for tripID: Trip.ID, workerID: UUID) async {
+        defer { finishSaveWorker(for: tripID, workerID: workerID) }
+
+        while !Task.isCancelled {
+            guard let revision = tripSaveRevisions[tripID],
+                  let trip = pendingTripSaves[tripID] else { return }
+
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled else { return }
+            // More edits arrived during the debounce; restart the quiet-time window with
+            // the newest snapshot instead of sending this intermediate version.
+            guard tripSaveRevisions[tripID] == revision else { continue }
+
+            beginSyncActivity()
+            let accessToken: String
             do {
-                guard let accessToken = try await authorizedAccessToken(requireServerAccepted: true) else {
-                    self.endSyncActivity(failed: false)
+                guard let token = try await authorizedAccessToken() else {
+                    endSyncActivity(failed: false)
+                    pendingTripSaves[tripID] = nil
+                    tripSaveRevisions[tripID] = nil
                     return
                 }
+                accessToken = token
+            } catch {
+                if Task.isCancelled {
+                    endSyncActivity(failed: false)
+                } else {
+                    let message = await syncFailureMessage(error)
+                    endSyncActivity(failed: true, message: message)
+                }
+                pendingTripSaves[tripID] = nil
+                tripSaveRevisions[tripID] = nil
+                return
+            }
+
+            do {
                 try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
                     let cloudTrip = self.tripForCloudSave(trip, accessToken: token)
                     try await TripsRepository.shared.upsert(cloudTrip, accessToken: token)
                 }
-                self.endSyncActivity(failed: false)
+                endSyncActivity(failed: false)
             } catch {
-                let message = await self.syncFailureMessage(error)
-                self.endSyncActivity(failed: true, message: message)
+                if Task.isCancelled {
+                    endSyncActivity(failed: false)
+                } else {
+                    let message = await syncFailureMessage(error)
+                    endSyncActivity(failed: true, message: message)
+                }
+                pendingTripSaves[tripID] = nil
+                tripSaveRevisions[tripID] = nil
+                return
             }
+
+            guard tripSaveRevisions[tripID] == revision else { continue }
+            pendingTripSaves[tripID] = nil
+            tripSaveRevisions[tripID] = nil
+            return
         }
+    }
+
+    private func finishSaveWorker(for tripID: Trip.ID, workerID: UUID) {
+        guard tripSaveWorkerIDs[tripID] == workerID else { return }
+        tripSaveTasks[tripID] = nil
+        tripSaveWorkerIDs[tripID] = nil
+    }
+
+    private func cancelScheduledSave(for tripID: Trip.ID) {
+        tripSaveWorkerIDs[tripID] = nil
+        tripSaveTasks[tripID]?.cancel()
+        tripSaveTasks[tripID] = nil
+        pendingTripSaves[tripID] = nil
+        tripSaveRevisions[tripID] = nil
+    }
+
+    private func cancelScheduledTripSaves() {
+        tripSaveTasks.values.forEach { $0.cancel() }
+        tripSaveTasks = [:]
+        tripSaveWorkerIDs = [:]
+        pendingTripSaves = [:]
+        tripSaveRevisions = [:]
     }
 
     /// Re-pushes every trip to Supabase. Used by the "Retry" action after a failed save.
     func retrySync() {
+        cancelScheduledTripSaves()
         // Explicit retry: show progress immediately (the user asked for it), and clear the
         // failed state so the delayed-banner logic doesn't suppress the spinner.
         syncState = .syncing

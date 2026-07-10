@@ -50,10 +50,9 @@ nonisolated struct FeedPost: Identifiable, Codable {
 // MARK: - Feed repository (Supabase PostgREST)
 
 /// Reads and writes `public.trip_feed_posts` directly over PostgREST. RLS scopes every
-/// operation to trip members (see `supabase_schema.sql`): members read and update
-/// (comments/reactions), authors insert their own posts, and authors or the trip owner
-/// delete. Comments and reactions are jsonb columns patched wholesale per post — the
-/// row, not the whole trip, is the unit of last-write-wins.
+/// operation to trip members (see `supabase_schema.sql`): members read, authors insert
+/// and edit their own posts, and authors or the trip owner delete. Comments/reactions go
+/// through a database RPC which rejects attempts to alter another user's interactions.
 actor FeedRepository {
     static let shared = FeedRepository()
 
@@ -114,6 +113,39 @@ actor FeedRepository {
         }
     }
 
+    /// Columns accepted when creating a post. Interaction state and timestamps are
+    /// intentionally omitted: Postgres owns their defaults, so a client cannot seed a
+    /// new post with forged comments/reactions or manipulate feed ordering.
+    private struct InsertRow: Encodable {
+        let id: UUID
+        let tripID: UUID
+        let authorID: UUID
+        let authorName: String
+        let body: String
+        let photoPaths: [String]
+        let locationName: String?
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case tripID = "trip_id"
+            case authorID = "author_id"
+            case authorName = "author_name"
+            case body
+            case photoPaths = "photo_paths"
+            case locationName = "location_name"
+        }
+
+        init(post: FeedPost, tripID: UUID) {
+            id = post.id
+            self.tripID = tripID
+            authorID = post.authorID
+            authorName = post.authorName
+            body = post.text
+            photoPaths = post.photoPaths
+            locationName = post.locationName
+        }
+    }
+
     private let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -153,7 +185,7 @@ actor FeedRepository {
     }
 
     func insert(_ post: FeedPost, tripID: UUID, accessToken: String) async throws {
-        let body = try encoder.encode(Row(post: post, tripID: tripID))
+        let body = try encoder.encode(InsertRow(post: post, tripID: tripID))
         _ = try await send(
             "POST",
             "/rest/v1/trip_feed_posts",
@@ -163,17 +195,29 @@ actor FeedRepository {
         )
     }
 
-    /// Pushes one post's comments and reactions. Patching just these keeps concurrent
-    /// edits to other posts untouched.
+    /// Pushes one post's comments and reactions through the hardened interaction RPC.
+    /// The database validates that the caller changed only their own comments/reactions;
+    /// a stale snapshot is rejected rather than overwriting another member's new activity.
     func updateInteractions(for post: FeedPost, accessToken: String) async throws {
-        struct Patch: Encodable {
+        struct Parameters: Encodable {
+            let postID: UUID
             let comments: [ExpenseComment]
             let reactions: [String: [UUID]]
+
+            enum CodingKeys: String, CodingKey {
+                case postID = "p_post_id"
+                case comments = "p_comments"
+                case reactions = "p_reactions"
+            }
         }
-        let body = try encoder.encode(Patch(comments: post.comments, reactions: post.reactions))
+        let body = try encoder.encode(Parameters(
+            postID: post.id,
+            comments: post.comments,
+            reactions: post.reactions
+        ))
         _ = try await send(
-            "PATCH",
-            "/rest/v1/trip_feed_posts?id=eq.\(post.id.uuidString)",
+            "POST",
+            "/rest/v1/rpc/update_feed_interactions",
             accessToken: accessToken,
             body: body,
             extraHeaders: ["Prefer": "return=minimal"]
@@ -365,7 +409,10 @@ extension TripStore {
 
     func deleteFeedComment(_ commentID: ExpenseComment.ID, from postID: FeedPost.ID, in tripID: Trip.ID) {
         mutateFeedPost(postID, in: tripID) { post in
-            post.comments.removeAll { $0.id == commentID }
+            guard post.comments.contains(where: {
+                $0.id == commentID && $0.authorID == currentUser.id
+            }) else { return }
+            post.comments.removeAll { $0.id == commentID && $0.authorID == currentUser.id }
         }
     }
 

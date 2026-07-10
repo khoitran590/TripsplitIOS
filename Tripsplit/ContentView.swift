@@ -159,11 +159,11 @@ struct ContentView: View {
     @ViewBuilder
     private func screen(for tab: DockTab) -> some View {
         switch tab {
-        case .home: HomeScreen()
+        case .home: HomeScreen(isActive: tab == selectedTab)
         case .map: MapScreen(selectedTab: $selectedTab, isActive: tab == selectedTab)
         case .rec:
             if auth.isAuthenticated {
-                RecScreen()
+                RecScreen(isActive: tab == selectedTab)
             } else {
                 LockedExploreScreen(selectedTab: $selectedTab)
             }
@@ -1495,6 +1495,7 @@ struct FocusDetailSheet: View {
 /// A TripAdvisor-style "Explore" screen: search up top, a tall "Plan your next
 /// adventure" carousel, a smaller "Trending with travelers" rail, and a saved list.
 struct RecScreen: View {
+    var isActive = true
     @State private var searchText = ""
     /// Saved destinations live on the cloud-backed profile so they survive reinstalls.
     @Environment(TripStore.self) private var store
@@ -1571,9 +1572,19 @@ struct RecScreen: View {
     }
 
     var body: some View {
+        Group {
+            if isActive {
+                exploreContent
+            } else {
+                Color.clear.ignoresSafeArea()
+            }
+        }
+    }
+
+    private var exploreContent: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
+                LazyVStack(alignment: .leading, spacing: 24) {
                     searchBar
 
                     if !searchText.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -1584,7 +1595,7 @@ struct RecScreen: View {
                         if !isFiltering {
                             sectionHeader("Plan your next adventure")
                             ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 14) {
+                                LazyHStack(spacing: 14) {
                                     ForEach(adventures) { destination in
                                         NavigationLink(value: destination.id) {
                                             AdventureCard(
@@ -1646,7 +1657,7 @@ struct RecScreen: View {
                                             .glassEffect(.regular, in: .capsule)
                                     }
                                     ScrollView(.horizontal, showsIndicators: false) {
-                                        HStack(spacing: 14) {
+                                        LazyHStack(spacing: 14) {
                                             ForEach(section.destinations) { destination in
                                                 NavigationLink(value: destination.id) {
                                                     CountryTripCard(
@@ -1680,7 +1691,7 @@ struct RecScreen: View {
                             .glassEffect(.regular, in: .rect(cornerRadius: 18))
                         } else {
                             sectionHeader("Saved")
-                            VStack(spacing: 12) {
+                            LazyVStack(spacing: 12) {
                                 ForEach(saved) { destination in
                                     NavigationLink(value: destination.id) {
                                         DestinationRow(destination: destination)
