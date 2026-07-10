@@ -20,7 +20,7 @@ struct HomeScreen: View {
     @State private var splitTrip: Trip?
     @State private var expenseTrip: Trip?
     @State private var tripToDelete: Trip?
-    @State private var showAllTransactions = false
+    @State private var expandedTripIDs: Set<Trip.ID> = []
     @State private var isSelectingTransactions = false
     @State private var selectedTransactionIDs: Set<Transaction.ID> = []
     @State private var transactionsPendingDelete: [Transaction]?
@@ -307,7 +307,7 @@ struct HomeScreen: View {
                         tripID: trip.id,
                         expenseID: expense.id,
                         name: expense.title,
-                        category: "\(trip.name) • Paid by \(payerLabel)",
+                        category: "Paid by \(payerLabel)",
                         date: expense.date.formatted(date: .abbreviated, time: .omitted),
                         amount: expense.amount,
                         currencyCode: trip.currencyCode,
@@ -320,13 +320,34 @@ struct HomeScreen: View {
             .sorted { $0.sortDate > $1.sortDate }
     }
 
+    /// Transactions rolled up per trip, ordered by each trip's most recent expense.
+    /// Summarizing per trip keeps the home feed short; tapping a trip reveals its rows.
+    private var transactionGroups: [TripTransactionGroup] {
+        let byTrip = Dictionary(grouping: allTransactions, by: \.tripID)
+        return store.myTrips.compactMap { trip -> TripTransactionGroup? in
+            guard let transactions = byTrip[trip.id], !transactions.isEmpty else { return nil }
+            return TripTransactionGroup(
+                id: trip.id,
+                name: trip.name,
+                currencyCode: trip.currencyCode,
+                total: transactions.reduce(0) { $0 + $1.amount },
+                latestDate: transactions[0].sortDate,
+                transactions: transactions
+            )
+        }
+        .sorted { $0.latestDate > $1.latestDate }
+    }
+
     private var recentTransactions: some View {
-        // Materialized once per render: `allTransactions` walks every trip's expenses,
+        // Materialized once per render: `transactionGroups` walks every trip's expenses,
         // formats dates, and sorts — referencing the computed property from each spot
         // below would redo all of that several times per body pass.
-        let all = allTransactions
-        let transactions = showAllTransactions ? all : Array(all.prefix(5))
-        let visibleDeletableTransactions = transactions.filter(\.canDelete)
+        let groups = transactionGroups
+        // Selection only applies to rows the user can currently see (expanded trips).
+        let visibleDeletableTransactions = groups
+            .filter { expandedTripIDs.contains($0.id) }
+            .flatMap(\.transactions)
+            .filter(\.canDelete)
         return VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Recent Transactions")
@@ -353,30 +374,17 @@ struct HomeScreen: View {
                     .foregroundStyle(.secondary)
                     .buttonStyle(.plain)
                     .padding(.leading, 12)
-                } else {
-                    if all.count > 5 {
-                        Button {
-                            showAllTransactions.toggle()
-                        } label: {
-                            Text(showAllTransactions ? "Show Less" : "See All")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(Theme.accent)
-                        }
-                        .buttonStyle(.plain)
+                } else if !visibleDeletableTransactions.isEmpty {
+                    Button("Select") {
+                        isSelectingTransactions = true
                     }
-                    if !visibleDeletableTransactions.isEmpty {
-                        Button("Select") {
-                            isSelectingTransactions = true
-                        }
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Theme.accent)
-                        .buttonStyle(.plain)
-                        .padding(.leading, 12)
-                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.accent)
+                    .buttonStyle(.plain)
                 }
             }
 
-            if all.isEmpty {
+            if groups.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "tray")
                         .font(.largeTitle)
@@ -392,39 +400,19 @@ struct HomeScreen: View {
                 .glassEffect(.regular, in: .rect(cornerRadius: 20))
             } else {
                 GlassEffectContainer(spacing: 12) {
-                    // Lazy for "See All": only the rows scrolled into view are built,
-                    // instead of every transaction across every trip at once.
+                    // Lazy so expanding a large trip only builds the rows scrolled into view.
                     LazyVStack(spacing: 12) {
-                        ForEach(transactions) { transaction in
-                            if isSelectingTransactions {
-                                TransactionRow(
-                                    transaction: transaction,
-                                    isSelected: transaction.canDelete ? selectedTransactionIDs.contains(transaction.id) : nil
-                                ) {
-                                    guard transaction.canDelete else { return }
-                                    if selectedTransactionIDs.contains(transaction.id) {
-                                        selectedTransactionIDs.remove(transaction.id)
-                                    } else {
-                                        selectedTransactionIDs.insert(transaction.id)
-                                    }
-                                }
-                                .opacity(transaction.canDelete ? 1 : 0.5)
-                            } else if transaction.canDelete {
-                                SwipeToDeleteRow {
-                                    transactionsPendingDelete = [transaction]
-                                } content: {
-                                    TransactionRow(transaction: transaction)
-                                }
-                            } else {
-                                TransactionRow(transaction: transaction)
-                            }
+                        ForEach(groups) { group in
+                            tripGroupCard(group)
                         }
                     }
                 }
 
                 if isSelectingTransactions {
                     Button(role: .destructive) {
-                        transactionsPendingDelete = all.filter { selectedTransactionIDs.contains($0.id) }
+                        transactionsPendingDelete = groups
+                            .flatMap(\.transactions)
+                            .filter { selectedTransactionIDs.contains($0.id) }
                     } label: {
                         Text("Delete\(selectedTransactionIDs.isEmpty ? "" : " (\(selectedTransactionIDs.count))")")
                             .font(.subheadline.weight(.semibold))
@@ -453,6 +441,86 @@ struct HomeScreen: View {
             Button("Cancel", role: .cancel) { transactionsPendingDelete = nil }
         } message: {
             Text("This removes the expense from its trip for everyone it's shared with.")
+        }
+    }
+
+    /// One trip's summary card: a compact header (name, count, total) that expands
+    /// on tap to reveal that trip's transactions, newest first.
+    @ViewBuilder
+    private func tripGroupCard(_ group: TripTransactionGroup) -> some View {
+        let isExpanded = expandedTripIDs.contains(group.id)
+        VStack(spacing: 0) {
+            Button {
+                withAnimation(.snappy) {
+                    if isExpanded {
+                        expandedTripIDs.remove(group.id)
+                        // Collapsed rows are no longer visible — drop them from selection.
+                        selectedTransactionIDs.subtract(group.transactions.map(\.id))
+                    } else {
+                        expandedTripIDs.insert(group.id)
+                    }
+                }
+            } label: {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(verbatim: group.name)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                        Text("\(group.transactions.count) expense\(group.transactions.count == 1 ? "" : "s") • \(group.latestDate.formatted(date: .abbreviated, time: .omitted))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 8)
+                    Text(money(group.total, group.currencyCode))
+                        .font(.subheadline.weight(.semibold))
+                        .monospacedDigit()
+                    Image(systemName: "chevron.down")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(isExpanded ? 180 : 0))
+                }
+                .padding(14)
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                VStack(spacing: 0) {
+                    ForEach(group.transactions) { transaction in
+                        Divider().padding(.leading, 14)
+                        transactionRow(transaction)
+                    }
+                }
+            }
+        }
+        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+    }
+
+    /// A single expense row inside an expanded trip card, honoring selection mode
+    /// and swipe-to-delete exactly like the old flat list did.
+    @ViewBuilder
+    private func transactionRow(_ transaction: Transaction) -> some View {
+        if isSelectingTransactions {
+            TransactionRow(
+                transaction: transaction,
+                isSelected: transaction.canDelete ? selectedTransactionIDs.contains(transaction.id) : nil
+            ) {
+                guard transaction.canDelete else { return }
+                if selectedTransactionIDs.contains(transaction.id) {
+                    selectedTransactionIDs.remove(transaction.id)
+                } else {
+                    selectedTransactionIDs.insert(transaction.id)
+                }
+            }
+            .opacity(transaction.canDelete ? 1 : 0.5)
+        } else if transaction.canDelete {
+            SwipeToDeleteRow {
+                transactionsPendingDelete = [transaction]
+            } content: {
+                TransactionRow(transaction: transaction)
+            }
+        } else {
+            TransactionRow(transaction: transaction)
         }
     }
 
@@ -1081,6 +1149,20 @@ struct TripPickerSheet: View {
 
 // MARK: - Recent Transactions
 
+/// A trip's expenses rolled up for the home screen's compact "Recent Transactions"
+/// section: one summary line per trip, expandable to its individual transactions.
+struct TripTransactionGroup: Identifiable {
+    let id: Trip.ID
+    let name: String
+    let currencyCode: String
+    /// Sum of the trip's expenses, in the trip's own currency.
+    let total: Double
+    /// Date of the trip's most recent expense; orders the groups newest-first.
+    let latestDate: Date
+    /// The trip's transactions, newest first.
+    let transactions: [Transaction]
+}
+
 struct Transaction: Identifiable {
     /// Stable identity tied to the underlying expense so selection survives re-renders.
     /// (A fresh `UUID()` here would change on every recompute of `allTransactions`,
@@ -1139,7 +1221,6 @@ struct TransactionRow: View {
                 .foregroundStyle(.primary)
         }
         .padding(14)
-        .glassEffect(.regular, in: .rect(cornerRadius: 20))
         .contentShape(.rect)
         .onTapGesture { onTap?() }
     }
