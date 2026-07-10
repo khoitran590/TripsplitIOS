@@ -18,7 +18,7 @@ import UIKit
 }
 
 /// The destinations shown in the floating dock.
-enum DockTab: String, CaseIterable, Identifiable {
+enum DockTab: String, CaseIterable, Identifiable, Hashable {
     case home = "Home"
     case map = "Map"
     case rec = "Explore"
@@ -55,17 +55,8 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            ForEach(DockTab.allCases) { tab in
-                if visitedTabs.contains(tab) {
-                    screen(for: tab)
-                        .opacity(tab == selectedTab ? 1 : 0)
-                        .allowsHitTesting(tab == selectedTab)
-                        .accessibilityHidden(tab != selectedTab)
-                        // Swap screens instantly (like TabView). Animating the opacity
-                        // crossfade re-composited two full glass-heavy screens for the
-                        // whole spring, which is what made dock taps feel delayed.
-                        .animation(nil, value: selectedTab)
-                }
+            ForEach(DockTab.allCases, id: \.self) { tab in
+                mountedScreen(for: tab)
             }
         }
         .safeAreaInset(edge: .bottom) {
@@ -91,8 +82,20 @@ struct ContentView: View {
         // Tapping a place inside a curated Explore trip asks the Map tab to focus it;
         // remember the current tab first so the map's Back button can return here.
         .onChange(of: mapModel.navigateRequest) {
-            mapModel.originTab = selectedTab
-            selectedTab = .map
+            // A user can hop between stops from the Map detail sheet. Preserve the
+            // original Explore screen in that case, rather than replacing it with
+            // `.map` and making Back appear to do nothing.
+            if selectedTab != .map {
+                mapModel.originTab = selectedTab
+            }
+            // The tap should reveal the map on the next frame. Keep the map's own
+            // camera animation, but do not let an inherited glass/tab animation
+            // hold up the navigation state change.
+            var transaction = SwiftUI.Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                selectedTab = .map
+            }
         }
         // Attached before the `.environment(...)` modifiers below so the sheet's
         // content inherits TripStore/AuthStore — a sheet added outside that scope
@@ -167,6 +170,19 @@ struct ContentView: View {
             } else {
                 LockedExploreScreen(selectedTab: $selectedTab)
             }
+        }
+    }
+
+    /// Kept separate from the root modifier chain to keep SwiftUI's type checker
+    /// fast and to preserve the instant, non-interactive tab swap behavior.
+    @ViewBuilder
+    private func mountedScreen(for tab: DockTab) -> some View {
+        if visitedTabs.contains(tab) {
+            screen(for: tab)
+                .opacity(tab == selectedTab ? 1 : 0)
+                .allowsHitTesting(tab == selectedTab)
+                .accessibilityHidden(tab != selectedTab)
+                .animation(nil, value: selectedTab)
         }
     }
 }
@@ -298,7 +314,7 @@ final class ExploreMapModel {
         )
         navigateRequest += 1
         let token = navigateRequest
-        Task { await refine(token: token) }
+        Task(priority: .userInitiated) { await refine(token: token) }
     }
 
     /// Resolve the precise coordinate and place details using MapKit local search,
@@ -328,9 +344,10 @@ final class ExploreMapModel {
                 latitudinalMeters: searchRadius(for: focus),
                 longitudinalMeters: searchRadius(for: focus)
             )
-            if isRestaurant {
-                request.resultTypes = .pointOfInterest
-            }
+            // Curated stops are deliberately landmarks or venues, never raw street
+            // addresses. Restricting this prevents a similarly named road/address
+            // from winning over the actual attraction or restaurant.
+            request.resultTypes = .pointOfInterest
             let items = (try? await MKLocalSearch(request: request).start())?.mapItems ?? []
             scoredResults += items.map {
                 (score: matchScore($0, for: focus, queryIndex: queryIndex, isRestaurant: isRestaurant), item: $0)
@@ -338,18 +355,25 @@ final class ExploreMapModel {
         }
 
         let best = scoredResults.max { $0.score < $1.score }
-        guard let best, best.score >= 58 else { return nil }
+        // A city-biased result with only one word in common is worse than no result:
+        // it makes the user trust a pin for the wrong venue. Only accept candidates
+        // whose name is a strong match for the map-friendly anchor chosen by curation.
+        guard let best,
+              best.score >= 72,
+              nameMatchScore(best.item.name ?? "", itemName: focus.item.mapSearchTerm) >= 50
+        else { return nil }
         return best.item
     }
 
     private func searchQueries(for focus: MapFocus, isRestaurant: Bool) -> [String] {
         let cityContext = "\(focus.destination.city), \(focus.destination.country)"
+        let searchTerm = focus.item.mapSearchTerm
         var queries = [
-            "\(focus.item.name), \(cityContext)",
-            "\(focus.item.name) \(isRestaurant ? "restaurant" : "attraction"), \(cityContext)"
+            "\(searchTerm), \(cityContext)",
+            "\(searchTerm) \(isRestaurant ? "restaurant" : "attraction"), \(cityContext)"
         ]
 
-        for fragment in nameFragments(from: focus.item.name) where fragment != focus.item.name {
+        for fragment in nameFragments(from: searchTerm) where fragment != searchTerm {
             queries.append("\(fragment), \(cityContext)")
         }
 
@@ -384,7 +408,7 @@ final class ExploreMapModel {
         isRestaurant: Bool
     ) -> Double {
         let candidateName = mapItem.name ?? ""
-        let itemName = focus.item.name
+        let itemName = focus.item.mapSearchTerm
         let city = focus.destination.city.normalizedForSearch
         let country = focus.destination.country.normalizedForSearch
         let address = (mapItem.address?.fullAddress ?? "").normalizedForSearch
@@ -482,6 +506,113 @@ private extension String {
 }
 
 private extension TravelPlanItem {
+    /// The single, real-world landmark or venue that should receive the pin. Some
+    /// itinerary labels intentionally group a neighborhood, a walk, or multiple
+    /// stops; using that label verbatim makes MapKit return an arbitrary business
+    /// nearby. These anchors keep the itinerary wording while making navigation
+    /// deterministic and useful.
+    var mapSearchTerm: String {
+        let anchors: [String: String] = [
+            "Asakusa & Senso-ji": "Sensō-ji",
+            "Shibuya + Harajuku": "Meiji Jingu",
+            "Toyosu or Tsukiji": "Tsukiji Outer Market",
+            "Shinjuku at night": "Tokyo Metropolitan Government Building",
+            "Higashiyama": "Kiyomizu-dera",
+            "Arashiyama": "Tenryū-ji",
+            "Gyeongbokgung + Bukchon": "Gyeongbokgung Palace",
+            "Chao Phraya at dusk": "Sathorn Pier",
+            "Marina Bay loop": "Merlion Park",
+            "Kampong Glam": "Sultan Mosque",
+            "Ubud": "Ubud Monkey Forest",
+            "Uluwatu": "Uluwatu Temple",
+            "Canggu": "Batu Bolong Beach",
+            "Dotonbori + Namba": "Dotonbori Glico Sign",
+            "Taipei 101 + Xinyi": "Taipei 101",
+            "Jiufen day trip": "Jiufen Old Street",
+            "Eiffel Tower + Trocadéro": "Trocadéro Gardens",
+            "Louvre + Tuileries": "Louvre Museum",
+            "Seine at sunset": "Pont Alexandre III",
+            "Colosseum + Forum": "Colosseum",
+            "Pantheon + Piazza Navona": "Pantheon",
+            "Trevi + Spanish Steps": "Trevi Fountain",
+            "Gothic Quarter + El Born": "Barcelona Cathedral",
+            "Westminster + South Bank": "Westminster Abbey",
+            "Tower of London + Tower Bridge": "Tower of London",
+            "Borough Market + Bankside": "Borough Market",
+            "Alfama + Tram 28": "Miradouro das Portas do Sol",
+            "Bairro Alto miradouros": "Miradouro de São Pedro de Alcântara",
+            "Central Park + The Met": "The Metropolitan Museum of Art",
+            "Brooklyn Bridge + DUMBO": "Brooklyn Bridge",
+            "High Line + Chelsea Market": "Chelsea Market",
+            "Golden Gate Bridge + Presidio": "Golden Gate Bridge",
+            "Lands End": "Lands End Lookout",
+            "Stanley Park Seawall": "Stanley Park",
+            "Gastown + Chinatown": "Gastown Steam Clock",
+            "Bellagio Fountains + Strip walk": "Fountains of Bellagio",
+            "Centro Histórico": "Zócalo",
+            "Roma + Condesa": "Parque México",
+            "North Shore day trip": "Haleiwa",
+            "Opera House + Circular Quay": "Sydney Opera House",
+            "Bondi to Coogee walk": "Bondi Icebergs Club",
+            "Manly ferry": "Manly Wharf",
+            "Blue Mountains day trip": "Three Sisters",
+            "Sugarloaf cable car": "Sugarloaf Mountain",
+            "Copacabana + Ipanema": "Ipanema Beach",
+            "Santa Teresa + Selarón Steps": "Escadaria Selarón",
+            "Hagia Sophia + Blue Mosque": "Hagia Sophia",
+            "Grand Bazaar + Spice Bazaar": "Grand Bazaar",
+            "Bosphorus ferry": "Eminönü Ferry Terminal",
+            "Galata + Karaköy": "Galata Tower",
+            "Canal Ring walk": "Westerkerk",
+            "Vondelpark by bike": "Vondelpark",
+            "Burj Khalifa + Dubai Mall": "Burj Khalifa",
+            "Old Dubai + abra ride": "Al Fahidi Historical Neighbourhood",
+            "Dubai Marina walk": "Dubai Marina Walk",
+            "Giza Pyramids + Sphinx": "Great Sphinx of Giza",
+            "Nile felucca at sunset": "Dok Dok Landing Stage"
+        ]
+
+        if let anchor = anchors[name] { return anchor }
+
+        // A named venue normally searches best as written. For broad activity
+        // labels, trim the activity qualifier and let the city-biased query find
+        // the landmark rather than a generic result elsewhere in the world.
+        return name
+            .replacingOccurrences(of: " day trip", with: "")
+            .replacingOccurrences(of: " at night", with: "")
+            .replacingOccurrences(of: " stalls", with: "")
+            .replacingOccurrences(of: " walk", with: "")
+    }
+
+    /// Compact planning guidance for every curated stop. It is intentionally
+    /// evergreen (no hard-coded opening hours), while giving users the practical
+    /// decision information missing from a simple name-and-price list.
+    func visitAdvice(isRestaurant: Bool) -> String {
+        let normalized = "\(name) \(detail)".normalizedForSearch
+        if isRestaurant {
+            if normalized.contains("market") || normalized.contains("stalls") {
+                return "Best as a flexible grazing stop; bring cash and choose a busy stall."
+            }
+            if normalized.contains("queue") || normalized.contains("line") {
+                return "Plan an early or off-peak visit; queues are part of the experience."
+            }
+            return "A focused meal stop—check same-day hours and keep a nearby backup in mind."
+        }
+        if normalized.contains("sunset") || normalized.contains("golden hour") {
+            return "Time this for late afternoon and allow extra time for the return journey."
+        }
+        if normalized.contains("book") || normalized.contains("timed") || normalized.contains("reserve") {
+            return "Reserve ahead where available, then arrive with a little buffer for entry."
+        }
+        if normalized.contains("market") || normalized.contains("night") {
+            return "Keep this flexible; it works well as a food-and-wandering block rather than a timed tour."
+        }
+        if normalized.contains("day trip") || normalized.contains("ferry") || normalized.contains("boat") {
+            return "Confirm transport conditions before leaving and avoid stacking another fixed-time booking around it."
+        }
+        return "Allow a relaxed 1–2 hour stop and group it with nearby sights to reduce backtracking."
+    }
+
     var nameLikelyNeedsContext: Bool {
         let name = name.normalizedForSearch
         return name.contains("stalls")
@@ -630,6 +761,14 @@ struct MapScreen: View {
         }
         .onChange(of: mapModel.navigateRequest) { recenterOnFocus(force: true) }
         .onChange(of: coordinateKey) { recenterOnFocus() }
+        // A curated tap can occur before the Map tab has been mounted for the first
+        // time. `onChange` alone then has no prior value to compare; this task runs
+        // once the active Map view exists, guaranteeing that the pin is centered.
+        .task(id: mapModel.navigateRequest) {
+            guard isActive, mapModel.focus != nil else { return }
+            await Task.yield()
+            recenterOnFocus(force: true)
+        }
     }
 
     private var mapSurface: some View {
@@ -677,8 +816,13 @@ struct MapScreen: View {
             HStack {
                 if mapModel.focus != nil {
                     Button {
-                        selectedTab = mapModel.originTab
+                        let destinationTab = mapModel.originTab
                         mapModel.clearFocus()
+                        var transaction = SwiftUI.Transaction()
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) {
+                            selectedTab = destinationTab
+                        }
                     } label: {
                         Image(systemName: "chevron.left")
                             .font(.system(size: 15, weight: .semibold))
@@ -1497,6 +1641,10 @@ struct FocusDetailSheet: View {
 struct RecScreen: View {
     var isActive = true
     @State private var searchText = ""
+    /// Keep the detail route while Explore is covered by the Map tab. Without an
+    /// explicit path, SwiftUI rebuilds the NavigationStack at the curated list when
+    /// the inactive Explore surface is restored.
+    @State private var navigationPath = NavigationPath()
     /// Saved destinations live on the cloud-backed profile so they survive reinstalls.
     @Environment(TripStore.self) private var store
 
@@ -1582,7 +1730,7 @@ struct RecScreen: View {
     }
 
     private var exploreContent: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 24) {
                     searchBar
@@ -2570,6 +2718,46 @@ extension Destination {
         }
     }
 
+    struct PracticalGuide {
+        let base: String
+        let transport: String
+        let booking: String
+    }
+
+    /// Practical trip-level context for every curated destination. These are
+    /// deliberately specific enough to shape an itinerary, but avoid brittle
+    /// claims such as exact hours, fares, or availability that can change.
+    var practicalGuide: PracticalGuide {
+        switch id {
+        case "tokyo": .init(base: "Ueno, Ginza, or Shinjuku for easy rail access.", transport: "Use an IC transit card; plan days by neighborhood.", booking: "Timed attractions and popular dinner slots.")
+        case "kyoto": .init(base: "Gion, Kawaramachi, or Kyoto Station for a compact base.", transport: "Buses are useful, but group each day by district.", booking: "Temple-area meals and any seasonal evening visits.")
+        case "seoul": .init(base: "Jongno for palaces, Myeongdong for transit, Hongdae for nights.", transport: "Metro first; use a taxi for late, cross-city hops.", booking: "Palace tours and a few restaurant backups.")
+        case "bangkok": .init(base: "Riverside for temples or Sukhumvit for rail connections.", transport: "Pair river boats with BTS/MRT rather than road traffic.", booking: "One reliable airport transfer and a cooking class, if wanted.")
+        case "singapore": .init(base: "City Hall, Bugis, or Tanjong Pagar keeps days central.", transport: "MRT handles nearly every sightseeing cluster.", booking: "Gardens conservatories and any Sentosa activities.")
+        case "bali": .init(base: "Split Ubud and the coast instead of commuting across the island.", transport: "Arrange a driver for full-day temple or beach circuits.", booking: "Fast boats, airport transfers, and sunset venues.")
+        case "osaka": .init(base: "Namba or Umeda puts food districts and rail lines close.", transport: "Walk each district, then use the metro between clusters.", booking: "One high-demand dinner; leave the rest flexible for snacks.")
+        case "taipei": .init(base: "Zhongshan, Ximending, or Da'an for an easy MRT base.", transport: "Pick up a transit card and use the MRT for most days.", booking: "Taipei 101 and any hot-spring private rooms.")
+        case "paris": .init(base: "Stay near a Metro line rather than chasing one landmark.", transport: "Cluster by arrondissement and walk between nearby stops.", booking: "Museum entries and one special dinner.")
+        case "rome": .init(base: "Centro Storico or Monti makes early starts realistic.", transport: "Walk the historic core; reserve taxis for longer jumps.", booking: "Vatican, Colosseum, and any guided archaeology.")
+        case "barcelona": .init(base: "Eixample or El Born balances sightseeing and evening dining.", transport: "Metro for longer hops; the center rewards walking.", booking: "Gaudí sites and a table for a late tapas dinner.")
+        case "london": .init(base: "South Bank, Covent Garden, or Bloomsbury are well connected.", transport: "Tap in and out on public transit; group by zone.", booking: "Theatre, Tower of London, and popular restaurants.")
+        case "lisbon": .init(base: "Baixa, Chiado, or Príncipe Real reduce hill-heavy returns.", transport: "Use trams and funiculars strategically; keep good walking shoes.", booking: "Sintra transport or a small-group day trip.")
+        case "new-york": .init(base: "Midtown, Flatiron, or the Lower East Side suit first visits.", transport: "Subway for distance, walking for neighborhood exploration.", booking: "Observation decks, Broadway, and weekend brunch.")
+        case "san-francisco": .init(base: "Union Square, North Beach, or Hayes Valley are central bases.", transport: "Use Muni and rideshares for hills; group by neighborhood.", booking: "Alcatraz and any Golden Gate bike rental.")
+        case "vancouver": .init(base: "Downtown or Yaletown keeps the seawall and transit nearby.", transport: "Walk the core; use transit or car share for mountains.", booking: "Seasonal mountain activities and a flexible weather day.")
+        case "las-vegas": .init(base: "Choose the Strip for convenience or Arts District for a quieter base.", transport: "Walk short sections; rideshare between distant resorts.", booking: "One show, a restaurant, and any desert excursion.")
+        case "mexico-city": .init(base: "Roma Norte or Condesa are walkable, central starting points.", transport: "Metro and rideshare work best when you cluster neighborhoods.", booking: "Teotihuacan transport and a museum for popular weekends.")
+        case "honolulu": .init(base: "Waikiki is practical for a car-free first stay.", transport: "Use rideshare or a rental for east and north shore days.", booking: "Diamond Head and Hanauma Bay before building the rest around them.")
+        case "sydney": .init(base: "CBD, Surry Hills, or Circular Quay make ferry days easy.", transport: "Use ferries as transport and sightseeing in one.", booking: "Harbour activities, coastal tours, and a Blue Mountains day.")
+        case "rio-de-janeiro": .init(base: "Ipanema or Copacabana are practical, beach-forward bases.", transport: "Use licensed rideshares between neighborhoods, especially after dark.", booking: "Major viewpoints for the clearest forecast day.")
+        case "istanbul": .init(base: "Sultanahmet for sights or Karaköy for a livelier, central stay.", transport: "Load an Istanbulkart and use ferries to connect districts.", booking: "Palace tickets and a Bosphorus experience if desired.")
+        case "amsterdam": .init(base: "Jordaan, De Pijp, or the Canal Ring keeps most stops walkable.", transport: "Walk, bike carefully, or use trams for longer trips.", booking: "Rijksmuseum and Van Gogh Museum before arrival.")
+        case "dubai": .init(base: "Downtown for landmarks or Al Seef for old-Dubai character.", transport: "Metro covers the spine; taxis fill the gaps efficiently.", booking: "Burj Khalifa, a desert operator, and any beach club.")
+        case "cairo": .init(base: "Zamalek or Downtown work well for a first-time base.", transport: "Use a vetted driver or rideshare between major sights.", booking: "A Giza guide or transport, plus museum entry if needed.")
+        default: .init(base: "Choose a central, well-connected neighborhood.", transport: "Group stops by area and rely on local transit.", booking: "Reserve the one experience you would be disappointed to miss.")
+        }
+    }
+
     /// City-center coordinate, used to bias the Map tab's POI search and as the
     /// fallback pin location when a specific place can't be resolved.
     var coordinate: CLLocationCoordinate2D {
@@ -2875,8 +3063,8 @@ struct DestinationDetailView: View {
                 VStack(alignment: .leading, spacing: 20) {
                     switch tab {
                     case .overview: overviewSection
-                    case .thingsToDo: planList(destination.places)
-                    case .restaurants: planList(destination.restaurants)
+                    case .thingsToDo: planList(destination.places, isRestaurant: false)
+                    case .restaurants: planList(destination.restaurants, isRestaurant: true)
                     }
                 }
                 .padding()
@@ -2975,6 +3163,42 @@ struct DestinationDetailView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)
             .glassEffect(.regular, in: .rect(cornerRadius: 18))
+
+            planningEssentials
+        }
+    }
+
+    /// Destination-level guidance turns the card collection into a trip a user can
+    /// actually follow: where to base themselves, how to move between clusters, and
+    /// the one thing worth arranging before arrival.
+    private var planningEssentials: some View {
+        let guide = destination.practicalGuide
+        return VStack(alignment: .leading, spacing: 12) {
+            Label("Plan it like a local", systemImage: "map.fill")
+                .font(.headline)
+
+            guideRow(icon: "bed.double.fill", title: "Best base", detail: guide.base)
+            guideRow(icon: "tram.fill", title: "Getting around", detail: guide.transport)
+            guideRow(icon: "calendar.badge.clock", title: "Book first", detail: guide.booking)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .glassEffect(.regular, in: .rect(cornerRadius: 18))
+    }
+
+    private func guideRow(icon: String, title: String, detail: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.tint)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.secondary)
+                Text(detail)
+                    .font(.subheadline)
+            }
         }
     }
 
@@ -2995,7 +3219,7 @@ struct DestinationDetailView: View {
 
     /// A numbered TripAdvisor-style list of places or restaurants. Tapping a row
     /// drops a pin on the Map tab so the user can see where it is.
-    private func planList(_ items: [TravelPlanItem]) -> some View {
+    private func planList(_ items: [TravelPlanItem], isRestaurant: Bool) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Label("Tap a spot to see it on the map", systemImage: "mappin.and.ellipse")
                 .font(.caption)
@@ -3032,6 +3256,11 @@ struct DestinationDetailView: View {
                                 .foregroundStyle(.secondary)
                                 .multilineTextAlignment(.leading)
                                 .fixedSize(horizontal: false, vertical: true)
+                            Label(item.visitAdvice(isRestaurant: isRestaurant), systemImage: "checkmark.circle")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                         Spacer(minLength: 0)
 
@@ -3043,6 +3272,8 @@ struct DestinationDetailView: View {
                     .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
                 }
                 .buttonStyle(.plain)
+                .contentShape(.rect)
+                .accessibilityHint("Opens \(item.mapSearchTerm) on the map")
             }
         }
     }
@@ -3428,15 +3659,11 @@ struct FloatingDock: View {
     var body: some View {
         GlassEffectContainer(spacing: 18) {
             HStack(spacing: 8) {
-                ForEach(DockTab.allCases) { tab in
+                ForEach(DockTab.allCases, id: \.self) { tab in
                     let isActive = tab == selectedTab
 
                     Button {
-                        // Fast, non-bouncy morph: only the dock highlight animates —
-                        // the screens themselves switch instantly (see ContentView).
-                        withAnimation(.snappy(duration: 0.25, extraBounce: 0)) {
-                            selectedTab = tab
-                        }
+                        select(tab)
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: tab.systemImage)
@@ -3466,7 +3693,40 @@ struct FloatingDock: View {
                 }
             }
             .padding(6)
+            // Keep horizontal swiping confined to the dock. A screen-wide gesture
+            // would steal map pans and Explore's horizontal destination rails.
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 18)
+                    .onEnded { value in
+                        let horizontal = value.translation.width
+                        guard abs(horizontal) >= 38,
+                              abs(horizontal) > abs(value.translation.height) * 1.4
+                        else { return }
+                        moveSelection(for: horizontal)
+                    }
+            )
+            .accessibilityHint("Swipe left or right on the dock to change tabs")
         }
+    }
+
+    private func moveSelection(for horizontalTranslation: CGFloat) {
+        let tabs = DockTab.allCases
+        guard let index = tabs.firstIndex(of: selectedTab) else { return }
+        let nextIndex = horizontalTranslation < 0 ? index + 1 : index - 1
+        guard tabs.indices.contains(nextIndex) else { return }
+        select(tabs[nextIndex])
+    }
+
+    private func select(_ tab: DockTab) {
+        guard tab != selectedTab else { return }
+        // Dock selection is state-only. Removing the layout animation keeps taps
+        // responsive even while a map or photo view is busy.
+        var transaction = SwiftUI.Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            selectedTab = tab
+        }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 }
 
