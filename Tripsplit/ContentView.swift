@@ -3693,27 +3693,39 @@ struct FloatingDock: View {
                 }
             }
             .padding(6)
-            // Keep horizontal swiping confined to the dock. A screen-wide gesture
-            // would steal map pans and Explore's horizontal destination rails.
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 18)
-                    .onEnded { value in
-                        let horizontal = value.translation.width
-                        guard abs(horizontal) >= 38,
-                              abs(horizontal) > abs(value.translation.height) * 1.4
-                        else { return }
-                        moveSelection(for: horizontal)
-                    }
-            )
-            .accessibilityHint("Swipe left or right on the dock to change tabs")
         }
+        // Make the whole bottom strip swipeable, not just the capsule itself, so a
+        // thumb swipe anywhere along the dock changes tabs — while staying confined
+        // to the dock area (a screen-wide gesture would steal map pans and Explore's
+        // horizontal destination rails).
+        .frame(maxWidth: .infinity)
+        .contentShape(.rect)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 18)
+                .onEnded { value in
+                    let horizontal = value.translation.width
+                    let projected = value.predictedEndTranslation.width
+                    // Accept either a deliberate drag or a quick flick (short travel
+                    // but high velocity), as long as it's predominantly horizontal.
+                    guard abs(horizontal) > abs(value.translation.height) * 1.4,
+                          abs(horizontal) >= 38 || abs(projected) >= 90
+                    else { return }
+                    moveSelection(for: horizontal)
+                }
+        )
+        .accessibilityHint("Swipe left or right on the dock to change tabs")
     }
 
     private func moveSelection(for horizontalTranslation: CGFloat) {
         let tabs = DockTab.allCases
         guard let index = tabs.firstIndex(of: selectedTab) else { return }
         let nextIndex = horizontalTranslation < 0 ? index + 1 : index - 1
-        guard tabs.indices.contains(nextIndex) else { return }
+        guard tabs.indices.contains(nextIndex) else {
+            // Already at the end of the row — acknowledge the swipe with a soft bump
+            // instead of silently ignoring it.
+            UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.6)
+            return
+        }
         select(tabs[nextIndex])
     }
 

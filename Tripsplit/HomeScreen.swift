@@ -20,6 +20,7 @@ struct HomeScreen: View {
     @State private var splitTrip: Trip?
     @State private var expenseTrip: Trip?
     @State private var tripToDelete: Trip?
+    @State private var showArchivedTrips = false
     @State private var expandedTripIDs: Set<Trip.ID> = []
     @State private var isSelectingTransactions = false
     @State private var selectedTransactionIDs: Set<Transaction.ID> = []
@@ -67,6 +68,8 @@ struct HomeScreen: View {
                             initials: store.currentUser.initials,
                             size: 34
                         )
+                        .frame(width: 44, height: 44)
+                        .contentShape(.rect)
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(Text("Profile & settings"))
@@ -78,6 +81,9 @@ struct HomeScreen: View {
         }
         .sheet(isPresented: $showSettings) {
             SettingsScreen()
+        }
+        .sheet(isPresented: $showArchivedTrips) {
+            ArchivedTripsSheet()
         }
         .sheet(item: $selectedTrip) { trip in
             TripDetailView(tripID: trip.id)
@@ -160,7 +166,8 @@ struct HomeScreen: View {
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
+                        .frame(minHeight: 44)
+                        .contentShape(.capsule)
                 }
                 .buttonStyle(.plain)
                 .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
@@ -183,7 +190,8 @@ struct HomeScreen: View {
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 18)
-                            .padding(.vertical, 10)
+                            .frame(minHeight: 44)
+                            .contentShape(.capsule)
                     }
                     .buttonStyle(.plain)
                     .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
@@ -201,7 +209,15 @@ struct HomeScreen: View {
                                     .frame(width: 300)
                             }
                             .buttonStyle(.plain)
+                            .contentShape(.contextMenuPreview, .rect(cornerRadius: 24))
                             .contextMenu {
+                                Button {
+                                    withAnimation(.snappy) {
+                                        store.setArchived(true, for: trip.id)
+                                    }
+                                } label: {
+                                    Label("Archive Trip", systemImage: "archivebox")
+                                }
                                 if store.isCreator(of: trip) {
                                     Button(role: .destructive) {
                                         tripToDelete = trip
@@ -217,6 +233,33 @@ struct HomeScreen: View {
                 }
                 .scrollTargetBehavior(.viewAligned)
                 .scrollClipDisabled()
+            }
+
+            if !store.archivedTrips.isEmpty {
+                Button { showArchivedTrips = true } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "archivebox")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Text("Archived Trips")
+                            .font(.subheadline.weight(.semibold))
+                        Text(verbatim: "\(store.archivedTrips.count)")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(.secondary.opacity(0.15), in: .capsule)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 48)
+                    .contentShape(.rect(cornerRadius: 16))
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 16))
             }
         }
     }
@@ -249,6 +292,8 @@ struct HomeScreen: View {
                     Text("Retry").font(.caption.weight(.bold)).foregroundStyle(Color(hex: 0xDC2626))
                         .padding(.horizontal, 12).padding(.vertical, 6)
                         .background(.white, in: .capsule)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
             }
@@ -273,6 +318,8 @@ struct HomeScreen: View {
             }
         } label: {
             Image(systemName: appearance.icon)
+                .frame(width: 44, height: 44)
+                .contentShape(.rect)
         }
         .accessibilityLabel("Appearance: \(appearance.label)")
     }
@@ -365,6 +412,8 @@ struct HomeScreen: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Theme.accent)
                     .buttonStyle(.plain)
+                    .frame(minHeight: 44)
+                    .contentShape(.rect)
 
                     Button("Cancel") {
                         isSelectingTransactions = false
@@ -373,6 +422,8 @@ struct HomeScreen: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .buttonStyle(.plain)
+                    .frame(minHeight: 44)
+                    .contentShape(.rect)
                     .padding(.leading, 12)
                 } else if !visibleDeletableTransactions.isEmpty {
                     Button("Select") {
@@ -381,6 +432,8 @@ struct HomeScreen: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Theme.accent)
                     .buttonStyle(.plain)
+                    .frame(minHeight: 44)
+                    .contentShape(.rect)
                 }
             }
 
@@ -445,12 +498,35 @@ struct HomeScreen: View {
     }
 
     /// One trip's summary card: a compact header (name, count, total) that expands
-    /// on tap to reveal that trip's transactions, newest first.
+    /// on tap to reveal that trip's transactions, newest first. Swiping the header
+    /// left archives the trip (only the header, so the expense rows keep their own
+    /// swipe-to-delete gesture).
     @ViewBuilder
     private func tripGroupCard(_ group: TripTransactionGroup) -> some View {
         let isExpanded = expandedTripIDs.contains(group.id)
         VStack(spacing: 0) {
-            Button {
+            SwipeActionsRow(actions: [
+                RowSwipeAction(label: "Archive", icon: "archivebox.fill", tint: Theme.accent) {
+                    withAnimation(.snappy) { store.setArchived(true, for: group.id) }
+                }
+            ]) {
+                groupHeaderButton(group, isExpanded: isExpanded)
+            }
+
+            if isExpanded {
+                VStack(spacing: 0) {
+                    ForEach(group.transactions) { transaction in
+                        Divider().padding(.leading, 14)
+                        transactionRow(transaction)
+                    }
+                }
+            }
+        }
+        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+    }
+
+    private func groupHeaderButton(_ group: TripTransactionGroup, isExpanded: Bool) -> some View {
+        Button {
                 withAnimation(.snappy) {
                     if isExpanded {
                         expandedTripIDs.remove(group.id)
@@ -483,17 +559,6 @@ struct HomeScreen: View {
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
-
-            if isExpanded {
-                VStack(spacing: 0) {
-                    ForEach(group.transactions) { transaction in
-                        Divider().padding(.leading, 14)
-                        transactionRow(transaction)
-                    }
-                }
-            }
-        }
-        .glassEffect(.regular, in: .rect(cornerRadius: 20))
     }
 
     /// A single expense row inside an expanded trip card, honoring selection mode
@@ -593,8 +658,8 @@ struct BalanceCard: View {
                     Image(systemName: "info.circle")
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(.secondary)
-                        .frame(width: 28, height: 28)
-                        .contentShape(.circle)
+                        .frame(width: 40, height: 44)
+                        .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("How your budget is calculated")
@@ -1035,8 +1100,9 @@ struct CurrencyConverterCard: View {
                 Image(systemName: "chevron.down").font(.caption2.weight(.bold))
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .frame(minHeight: 44)
             .background(.secondary.opacity(0.12), in: .capsule)
+            .contentShape(.capsule)
         }
     }
 
@@ -1078,6 +1144,9 @@ struct QuickActionButton: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 14)
             .padding(.vertical, 11)
+            // The label has transparent gaps (spacer, padding); without an explicit
+            // shape only the icon and text hit-test, leaving dead zones mid-button.
+            .contentShape(.capsule)
         }
         .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: .capsule)
@@ -1143,6 +1212,127 @@ struct TripPickerSheet: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(.rect(cornerRadius: 18))
+        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
+    }
+}
+
+// MARK: - Archived Trips
+
+/// Lists trips the signed-in user archived: tap a row to reopen the trip, unarchive to
+/// bring it back to Home, or (creators only) delete it outright. Archiving is per-account
+/// view state, so nothing here affects what other trip members see.
+struct ArchivedTripsSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(TripStore.self) private var store
+    @State private var openTrip: Trip?
+    @State private var tripToDelete: Trip?
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                if store.archivedTrips.isEmpty {
+                    ContentUnavailableView(
+                        "No archived trips",
+                        systemImage: "archivebox",
+                        description: Text("Swipe or long-press a trip on Home to archive it.")
+                    )
+                    .padding(.top, 60)
+                } else {
+                    VStack(spacing: 12) {
+                        Text("Archived trips are hidden from your Home screen and totals, but stay synced and visible to other members.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 4)
+                        ForEach(store.archivedTrips) { trip in
+                            SwipeActionsRow(actions: swipeActions(for: trip)) {
+                                Button { openTrip = trip } label: { row(trip) }
+                                    .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                    .padding()
+                }
+            }
+            .background { AppBackground() }
+            .navigationTitle("Archived Trips")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .sheet(item: $openTrip) { trip in
+            TripDetailView(tripID: trip.id)
+        }
+        .confirmationDialog(
+            "Delete this trip?",
+            isPresented: Binding(get: { tripToDelete != nil }, set: { if !$0 { tripToDelete = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Delete Trip", role: .destructive) {
+                if let tripToDelete { store.deleteTrip(tripToDelete.id) }
+                tripToDelete = nil
+            }
+            Button("Cancel", role: .cancel) { tripToDelete = nil }
+        } message: {
+            Text(tripToDelete.map { "“\($0.name)” and its expenses will be removed from your synced trips." } ?? "")
+        }
+    }
+
+    /// Unarchive for everyone; delete stays creator-only and sits at the swipe edge
+    /// (full swipe), matching the destructive-action convention.
+    private func swipeActions(for trip: Trip) -> [RowSwipeAction] {
+        var actions = [
+            RowSwipeAction(label: "Unarchive", icon: "tray.and.arrow.up.fill", tint: Theme.accent) {
+                unarchive(trip)
+            }
+        ]
+        if store.isCreator(of: trip) {
+            actions.append(
+                RowSwipeAction(label: "Delete", icon: "trash.fill", tint: Theme.negative) {
+                    tripToDelete = trip
+                }
+            )
+        }
+        return actions
+    }
+
+    private func unarchive(_ trip: Trip) {
+        withAnimation(.snappy) { store.setArchived(false, for: trip.id) }
+    }
+
+    private func row(_ trip: Trip) -> some View {
+        HStack(spacing: 12) {
+            TripCoverView(trip: trip)
+                .frame(width: 52, height: 52)
+                .clipShape(.rect(cornerRadius: 14))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: trip.name)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Text(trip.dateRangeText ?? "\(trip.expenses.count) expense\(trip.expenses.count == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Button { unarchive(trip) } label: {
+                Text("Unarchive")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.accent)
+                    .padding(.horizontal, 12)
+                    .frame(minHeight: 44)
+                    .background(Theme.accent.opacity(0.14), in: .capsule)
+                    .contentShape(.capsule)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(.rect(cornerRadius: 18))
         .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
     }
 }

@@ -218,6 +218,11 @@ struct Trip: Identifiable, Codable {
     /// users, so the permission doesn't apply to them.
     var allowMembersToPayForOthers: Bool = false
 
+    /// Members who archived this trip for themselves. Per-user view state kept in the
+    /// shared blob so it follows the account across devices without hiding the trip
+    /// for anyone else on it.
+    var archivedBy: [Person.ID] = []
+
     init(
         id: UUID = UUID(),
         name: String,
@@ -233,7 +238,8 @@ struct Trip: Identifiable, Codable {
         startDate: Date? = nil,
         endDate: Date? = nil,
         coverImageURL: String? = nil,
-        allowMembersToPayForOthers: Bool = false
+        allowMembersToPayForOthers: Bool = false,
+        archivedBy: [Person.ID] = []
     ) {
         self.id = id
         self.name = name
@@ -250,11 +256,12 @@ struct Trip: Identifiable, Codable {
         self.endDate = endDate
         self.coverImageURL = coverImageURL
         self.allowMembersToPayForOthers = allowMembersToPayForOthers
+        self.archivedBy = archivedBy
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, currencyCode, creatorID, members, budgets, expenses, deletedExpenses, settlementRecords, comments
-        case location, startDate, endDate, coverImageURL, allowMembersToPayForOthers
+        case location, startDate, endDate, coverImageURL, allowMembersToPayForOthers, archivedBy
     }
 
     // Custom decoder so trips saved before `settlementRecords` (and the new expense
@@ -276,7 +283,11 @@ struct Trip: Identifiable, Codable {
         endDate = try c.decodeIfPresent(Date.self, forKey: .endDate)
         coverImageURL = try c.decodeIfPresent(String.self, forKey: .coverImageURL)
         allowMembersToPayForOthers = try c.decodeIfPresent(Bool.self, forKey: .allowMembersToPayForOthers) ?? false
+        archivedBy = try c.decodeIfPresent([Person.ID].self, forKey: .archivedBy) ?? []
     }
+
+    /// Whether `userID` has archived this trip for themselves.
+    func isArchived(for userID: Person.ID) -> Bool { archivedBy.contains(userID) }
 
     /// A human-readable date range, e.g. "Apr 1–30, 2025", "Apr 28 – May 3, 2025", or a
     /// single date when only one is set. `nil` when no dates are present.
@@ -836,9 +847,28 @@ final class TripStore {
         return try? JSONDecoder().decode(StoredProfile.self, from: data)
     }
 
-    /// Trips available on this device. Cloud loads are already filtered by Supabase RLS,
-    /// so every fetched row is a trip this account can access.
-    var myTrips: [Trip] { trips }
+    /// Active (non-archived) trips available on this device. Cloud loads are already
+    /// filtered by Supabase RLS, so every fetched row is a trip this account can access.
+    /// Trips the user archived are excluded here so they drop out of the home cards,
+    /// totals, and pickers, but remain reachable via `archivedTrips`.
+    var myTrips: [Trip] { trips.filter { !$0.isArchived(for: currentUser.id) } }
+
+    /// Trips the signed-in user has archived for themselves.
+    var archivedTrips: [Trip] { trips.filter { $0.isArchived(for: currentUser.id) } }
+
+    /// Archives or restores a trip for the current user only. Archiving is view state,
+    /// not deletion: the trip stays in the cloud and stays visible to other members.
+    func setArchived(_ archived: Bool, for tripID: Trip.ID) {
+        guard let index = trips.firstIndex(where: { $0.id == tripID }) else { return }
+        let me = currentUser.id
+        if archived {
+            guard !trips[index].archivedBy.contains(me) else { return }
+            trips[index].archivedBy.append(me)
+        } else {
+            trips[index].archivedBy.removeAll { $0 == me }
+        }
+        persist(trips[index])
+    }
 
     /// Converts an amount in `code` into USD using the cached rates. Falls back to the
     /// original amount when a rate is unavailable (e.g. offline before rates load).
@@ -2684,6 +2714,8 @@ struct TripDetailView: View {
                     .foregroundStyle(.white)
                     .frame(width: 36, height: 36)
                     .background(.black.opacity(0.35), in: .circle)
+                    .frame(width: 44, height: 44)
+                    .contentShape(.rect)
             }
             .buttonStyle(.plain)
             .padding(.top, 60)
@@ -2731,7 +2763,9 @@ struct TripDetailView: View {
                 Text(title).font(.caption.weight(.semibold)).lineLimit(1)
             }
             .foregroundStyle(.white)
-            .padding(.horizontal, 14).padding(.vertical, 11)
+            .padding(.horizontal, 14)
+            .frame(minHeight: 44)
+            .contentShape(.capsule)
         }
         .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: .capsule)
@@ -2825,6 +2859,8 @@ struct TripDetailView: View {
                             .font(.caption.weight(.semibold))
                             .padding(.horizontal, 12).padding(.vertical, 6)
                             .background(.secondary.opacity(0.14), in: .capsule)
+                            .frame(minHeight: 44)
+                            .contentShape(.rect)
                     }
                     .buttonStyle(.plain)
                 }
@@ -2960,8 +2996,8 @@ struct TripDetailView: View {
             Image(systemName: "chevron.right")
                 .font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
         }
-        .contentShape(.rect)
         .padding(.vertical, 4)
+        .contentShape(.rect)
     }
 
     private func settleCard(_ trip: Trip) -> some View {
@@ -3056,8 +3092,10 @@ struct TripDetailView: View {
                     .font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
             }
-            .contentShape(.rect)
+            // Padding before contentShape so the whole padded row hit-tests,
+            // not just the inner rect.
             .padding(.vertical, 4)
+            .contentShape(.rect)
         }
         .buttonStyle(.plain)
     }
@@ -3085,8 +3123,8 @@ struct TripDetailView: View {
             Image(systemName: "chevron.right")
                 .font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
         }
-        .contentShape(.rect)
         .padding(.vertical, 4)
+        .contentShape(.rect)
     }
 
     private struct SettleMathInfoView: View {
@@ -3255,11 +3293,15 @@ struct TripDetailView: View {
                             } label: {
                                 Image(systemName: "doc.on.doc")
                                     .font(.caption.weight(.bold))
+                                    .frame(width: 38, height: 38)
+                                    .contentShape(.rect)
                             }
                             .buttonStyle(.plain)
                             ShareLink(item: inviteLink) {
                                 Image(systemName: "square.and.arrow.up")
                                     .font(.caption.weight(.bold))
+                                    .frame(width: 38, height: 38)
+                                    .contentShape(.rect)
                             }
                         }
                         .padding(.horizontal, 12)
@@ -3387,6 +3429,8 @@ struct TripDetailView: View {
                         .padding(.horizontal, 12).padding(.vertical, 6)
                         .background(Theme.accent.opacity(0.16), in: .capsule)
                         .foregroundStyle(Theme.accent)
+                        .frame(minHeight: 44)
+                        .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
             }
@@ -4837,54 +4881,139 @@ struct ItemSplitConfigView: View {
 
 // MARK: - Shared pieces
 
-/// A row wrapper that reveals a destructive delete button when swiped left, giving the
-/// app's custom card rows the `List` swipe-to-delete affordance without adopting `List`.
-struct SwipeToDeleteRow<Content: View>: View {
-    let onDelete: () -> Void
+/// One button revealed by swiping a `SwipeActionsRow` left.
+struct RowSwipeAction: Identifiable {
+    let id = UUID()
+    /// Accessibility name for the action (e.g. "Delete", "Archive").
+    let label: LocalizedStringKey
+    let icon: String
+    let tint: Color
+    let handler: () -> Void
+}
+
+/// A row wrapper that reveals action buttons when swiped left, giving the app's custom
+/// card rows the `List` swipe-actions affordance without adopting `List`. Actions are
+/// ordered inner → outer; the outermost (last) one hugs the screen edge and also fires
+/// on a Mail-style full swipe. A flick opens/closes the row even short of halfway, and
+/// tapping an open row closes it instead of activating the row's own button.
+struct SwipeActionsRow<Content: View>: View {
+    let actions: [RowSwipeAction]
     @ViewBuilder var content: Content
 
     @State private var offset: CGFloat = 0
     @State private var startOffset: CGFloat = 0
+    @State private var rowWidth: CGFloat = 0
+    /// Dragged far enough that releasing fires the edge action.
+    @State private var isPastFullSwipe = false
     private let actionWidth: CGFloat = 76
     private let settle = Animation.spring(response: 0.3, dampingFraction: 0.8)
 
+    private var openWidth: CGFloat { CGFloat(actions.count) * actionWidth }
+    private var fullSwipeThreshold: CGFloat { max(openWidth + 76, rowWidth * 0.55) }
+
     var body: some View {
         ZStack(alignment: .trailing) {
-            // The red action is sized to exactly the swiped-open width and only drawn while
-            // open, so it never sits behind (and bleeds through) a translucent glass row.
+            // The actions are sized to exactly the swiped-open width and only drawn while
+            // open, so they never sit behind (and bleed through) a translucent glass row.
             if offset < 0 {
-                Button(role: .destructive) {
-                    withAnimation(settle) { offset = 0 }
-                    startOffset = 0
-                    onDelete()
-                } label: {
-                    Image(systemName: "trash.fill")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: min(-offset, actionWidth))
-                        .frame(maxHeight: .infinity)
-                        .background(Theme.negative, in: .rect(cornerRadius: 20))
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
+                actionButtons
             }
 
             content
                 .offset(x: offset)
-                .highPriorityGesture(
-                    DragGesture(minimumDistance: 20)
-                        .onChanged { value in
-                            // Only react to predominantly-horizontal drags so vertical
-                            // scrolling still wins inside the enclosing ScrollView.
-                            guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                            offset = min(0, max(startOffset + value.translation.width, -actionWidth))
-                        }
-                        .onEnded { _ in
-                            let opened = offset < -actionWidth / 2
-                            withAnimation(settle) { offset = opened ? -actionWidth : 0 }
-                            startOffset = opened ? -actionWidth : 0
-                        }
-                )
+                .overlay {
+                    // First tap on an open row closes it instead of triggering the
+                    // row's own tap/navigation.
+                    if offset != 0 {
+                        Color.clear
+                            .contentShape(.rect)
+                            .onTapGesture { close() }
+                            .offset(x: offset)
+                    }
+                }
+                .highPriorityGesture(drag)
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { rowWidth = $0 }
+    }
+
+    private var actionButtons: some View {
+        let revealed = -offset
+        return HStack(spacing: isPastFullSwipe ? 0 : 5) {
+            ForEach(Array(actions.enumerated()), id: \.element.id) { index, action in
+                let isEdge = index == actions.count - 1
+                let width: CGFloat = isPastFullSwipe
+                    ? (isEdge ? revealed : 0)
+                    : max((revealed - 5 * CGFloat(actions.count - 1)) / CGFloat(actions.count), 0)
+                Button {
+                    trigger(action)
+                } label: {
+                    Image(systemName: action.icon)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: width)
+                        .frame(maxHeight: .infinity)
+                        .background(action.tint, in: .rect(cornerRadius: 20))
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text(action.label))
+            }
+        }
+    }
+
+    private var drag: some Gesture {
+        DragGesture(minimumDistance: 20)
+            .onChanged { value in
+                // Only react to predominantly-horizontal drags so vertical
+                // scrolling still wins inside the enclosing ScrollView.
+                guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                let travelLimit = rowWidth > 0 ? rowWidth : openWidth
+                offset = min(0, max(startOffset + value.translation.width, -travelLimit))
+                let nowPast = rowWidth > 0 && offset < -fullSwipeThreshold
+                if nowPast != isPastFullSwipe {
+                    withAnimation(settle) { isPastFullSwipe = nowPast }
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                }
+            }
+            .onEnded { value in
+                if isPastFullSwipe, let edge = actions.last {
+                    trigger(edge)
+                    return
+                }
+                // Settle using the projected end point so a quick flick opens or
+                // closes the row without needing to drag past halfway.
+                let projected = startOffset + value.predictedEndTranslation.width
+                let opened = projected < -openWidth / 2
+                withAnimation(settle) { offset = opened ? -openWidth : 0 }
+                startOffset = opened ? -openWidth : 0
+            }
+    }
+
+    private func trigger(_ action: RowSwipeAction) {
+        close()
+        action.handler()
+    }
+
+    private func close() {
+        withAnimation(settle) {
+            offset = 0
+            isPastFullSwipe = false
+        }
+        startOffset = 0
+    }
+}
+
+/// A `SwipeActionsRow` with the single destructive delete action, preserving the
+/// original swipe-to-delete call sites.
+struct SwipeToDeleteRow<Content: View>: View {
+    let onDelete: () -> Void
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        SwipeActionsRow(actions: [
+            RowSwipeAction(label: "Delete", icon: "trash.fill", tint: Theme.negative, handler: onDelete)
+        ]) {
+            content
         }
     }
 }
