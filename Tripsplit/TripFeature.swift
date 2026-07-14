@@ -223,6 +223,11 @@ struct Trip: Identifiable, Codable {
     /// for anyone else on it.
     var archivedBy: [Person.ID] = []
 
+    /// User-built day-by-day plan (Explore tab). Optional so trips saved before the
+    /// planner existed keep loading; trips carrying one also surface as itinerary
+    /// cards in Explore.
+    var itinerary: Itinerary? = nil
+
     init(
         id: UUID = UUID(),
         name: String,
@@ -239,7 +244,8 @@ struct Trip: Identifiable, Codable {
         endDate: Date? = nil,
         coverImageURL: String? = nil,
         allowMembersToPayForOthers: Bool = false,
-        archivedBy: [Person.ID] = []
+        archivedBy: [Person.ID] = [],
+        itinerary: Itinerary? = nil
     ) {
         self.id = id
         self.name = name
@@ -257,11 +263,12 @@ struct Trip: Identifiable, Codable {
         self.coverImageURL = coverImageURL
         self.allowMembersToPayForOthers = allowMembersToPayForOthers
         self.archivedBy = archivedBy
+        self.itinerary = itinerary
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, currencyCode, creatorID, members, budgets, expenses, deletedExpenses, settlementRecords, comments
-        case location, startDate, endDate, coverImageURL, allowMembersToPayForOthers, archivedBy
+        case location, startDate, endDate, coverImageURL, allowMembersToPayForOthers, archivedBy, itinerary
     }
 
     // Custom decoder so trips saved before `settlementRecords` (and the new expense
@@ -284,6 +291,7 @@ struct Trip: Identifiable, Codable {
         coverImageURL = try c.decodeIfPresent(String.self, forKey: .coverImageURL)
         allowMembersToPayForOthers = try c.decodeIfPresent(Bool.self, forKey: .allowMembersToPayForOthers) ?? false
         archivedBy = try c.decodeIfPresent([Person.ID].self, forKey: .archivedBy) ?? []
+        itinerary = try c.decodeIfPresent(Itinerary.self, forKey: .itinerary)
     }
 
     /// Whether `userID` has archived this trip for themselves.
@@ -928,6 +936,19 @@ final class TripStore {
                 r.amount = conv(r.amount)
                 return r
             }
+        }
+        if var itinerary = converted.itinerary {
+            itinerary.totalBudget = conv(itinerary.totalBudget)
+            itinerary.days = itinerary.days.map { day in
+                var d = day
+                d.stops = d.stops.map { stop in
+                    var s = stop
+                    s.cost = conv(s.cost)
+                    return s
+                }
+                return d
+            }
+            converted.itinerary = itinerary
         }
         return converted
     }

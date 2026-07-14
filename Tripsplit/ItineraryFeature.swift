@@ -1,0 +1,1201 @@
+import SwiftUI
+
+// MARK: - Models
+
+/// What kind of place a planned stop is, driving its icon and tint in the timeline.
+enum ItineraryStopKind: String, Codable, CaseIterable, Identifiable {
+    case location
+    case activity
+    case restaurant
+
+    var id: Self { self }
+
+    var icon: String {
+        switch self {
+        case .location: "mappin.and.ellipse"
+        case .activity: "figure.hiking"
+        case .restaurant: "fork.knife"
+        }
+    }
+
+    var label: LocalizedStringKey {
+        switch self {
+        case .location: "Location"
+        case .activity: "Thing to do"
+        case .restaurant: "Restaurant"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .location: Color(hex: 0x5B8DBE)
+        case .activity: Color(hex: 0x5FA98C)
+        case .restaurant: Color(hex: 0xC0895E)
+        }
+    }
+}
+
+/// One planned entry in a day's timeline: a location to visit, a thing to do, or a
+/// restaurant to eat at, optionally pinned to a time of day with an estimated cost
+/// in the trip's currency.
+struct ItineraryStop: Identifiable, Codable {
+    var id = UUID()
+    var name: String
+    var kind: ItineraryStopKind = .activity
+    /// Optional time-of-day slot; only the hour/minute components are meaningful.
+    var time: Date? = nil
+    var notes: String = ""
+    var cost: Double = 0
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        kind: ItineraryStopKind = .activity,
+        time: Date? = nil,
+        notes: String = "",
+        cost: Double = 0
+    ) {
+        self.id = id
+        self.name = name
+        self.kind = kind
+        self.time = time
+        self.notes = notes
+        self.cost = cost
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, name, kind, time, notes, cost }
+
+    // Every field decodes with a default so trips stored before a field existed keep loading.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        kind = try c.decodeIfPresent(ItineraryStopKind.self, forKey: .kind) ?? .activity
+        time = try c.decodeIfPresent(Date.self, forKey: .time)
+        notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
+        cost = try c.decodeIfPresent(Double.self, forKey: .cost) ?? 0
+    }
+
+    /// Minutes past midnight for timeline ordering; compares only the time-of-day
+    /// components so stops picked on different calendar days still sort sensibly.
+    var minutesOfDay: Int? {
+        guard let time else { return nil }
+        let c = Calendar.current.dateComponents([.hour, .minute], from: time)
+        return (c.hour ?? 0) * 60 + (c.minute ?? 0)
+    }
+}
+
+/// One day of the plan, holding that day's timeline of stops.
+struct ItineraryDay: Identifiable, Codable {
+    var id = UUID()
+    var stops: [ItineraryStop] = []
+
+    init(id: UUID = UUID(), stops: [ItineraryStop] = []) {
+        self.id = id
+        self.stops = stops
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, stops }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        stops = try c.decodeIfPresent([ItineraryStop].self, forKey: .stops) ?? []
+    }
+
+    /// Timed stops first (by time of day), then untimed stops in insertion order.
+    var sortedStops: [ItineraryStop] {
+        let timed = stops.filter { $0.time != nil }
+            .sorted { ($0.minutesOfDay ?? 0) < ($1.minutesOfDay ?? 0) }
+        return timed + stops.filter { $0.time == nil }
+    }
+}
+
+/// A user-built day-by-day plan attached to a trip: a total budget divided evenly
+/// across the days, each day holding a timeline of locations, activities, and
+/// restaurants. Lives inside the trip's JSON blob so it syncs (and is shared with
+/// invited members) exactly like expenses do.
+struct Itinerary: Codable {
+    /// Planning budget for the whole itinerary, in the trip's currency.
+    var totalBudget: Double = 0
+    var days: [ItineraryDay] = []
+
+    init(totalBudget: Double = 0, days: [ItineraryDay] = []) {
+        self.totalBudget = totalBudget
+        self.days = days
+    }
+
+    private enum CodingKeys: String, CodingKey { case totalBudget, days }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        totalBudget = try c.decodeIfPresent(Double.self, forKey: .totalBudget) ?? 0
+        days = try c.decodeIfPresent([ItineraryDay].self, forKey: .days) ?? []
+    }
+
+    /// Each day's slice of the total budget. Uses the same exact-cent
+    /// largest-remainder split as expense shares, so the slices always sum
+    /// back to the total.
+    var dailyBudgets: [Double] { SplitEngine.equalShares(total: totalBudget, count: days.count) }
+
+    func budget(forDay index: Int) -> Double {
+        let shares = dailyBudgets
+        guard shares.indices.contains(index) else { return 0 }
+        return shares[index]
+    }
+
+    /// Sum of the estimated stop costs for one day.
+    func plannedCost(forDay index: Int) -> Double {
+        guard days.indices.contains(index) else { return 0 }
+        return SplitEngine.roundToTwo(days[index].stops.reduce(0) { $0 + $1.cost })
+    }
+
+    /// Sum of every stop's estimated cost across the whole plan.
+    var plannedCost: Double {
+        SplitEngine.roundToTwo(days.reduce(0) { total, day in
+            total + day.stops.reduce(0) { $0 + $1.cost }
+        })
+    }
+}
+
+// MARK: - Store helpers
+
+extension TripStore {
+    /// Trips carrying a user-built itinerary, surfaced in the Explore tab.
+    var itineraryTrips: [Trip] { myTrips.filter { $0.itinerary != nil } }
+
+    /// Replaces a trip's itinerary and syncs the trip like any other edit.
+    func updateItinerary(_ itinerary: Itinerary, in tripID: Trip.ID) {
+        guard var trip = trip(tripID) else { return }
+        trip.itinerary = itinerary
+        updateTrip(trip)
+    }
+}
+
+// MARK: - Explore section
+
+/// The "Your itineraries" block on the Explore tab: a create call-to-action plus a
+/// horizontal rail of the user's planned itineraries.
+struct ItineraryPlannerSection: View {
+    @Environment(TripStore.self) private var store
+    let onCreate: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Your itineraries")
+                    .font(.title2.bold())
+                Spacer()
+                if !store.itineraryTrips.isEmpty {
+                    Button(action: onCreate) {
+                        Label("New", systemImage: "plus")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+                }
+            }
+
+            if store.itineraryTrips.isEmpty {
+                Button(action: onCreate) {
+                    HStack(spacing: 14) {
+                        Image(systemName: "map.fill")
+                            .font(.title2)
+                            .foregroundStyle(.white)
+                            .frame(width: 52, height: 52)
+                            .background(
+                                LinearGradient(
+                                    colors: [Theme.accent, Theme.accentSecondary],
+                                    startPoint: .topLeading, endPoint: .bottomTrailing
+                                ),
+                                in: .rect(cornerRadius: 16)
+                            )
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Build your own itinerary")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.primary)
+                            Text("Set a budget and days, plan places to go, things to do, and where to eat.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.leading)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(14)
+                    .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 20))
+                }
+                .buttonStyle(.plain)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 14) {
+                        ForEach(store.itineraryTrips) { trip in
+                            NavigationLink(value: trip.id) {
+                                ItineraryTripCard(trip: trip)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .scrollTargetLayout()
+                    .padding(.horizontal)
+                }
+                .scrollTargetBehavior(.viewAligned)
+                .padding(.horizontal, -16)
+            }
+        }
+    }
+}
+
+/// Rail card for one planned itinerary: cover (or gradient), name, location, and the
+/// day count / daily budget summary.
+struct ItineraryTripCard: View {
+    let trip: Trip
+
+    private var dayCount: Int { trip.itinerary?.days.count ?? 0 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ZStack(alignment: .topTrailing) {
+                TripCoverView(trip: trip)
+                    .frame(height: 108)
+                    .clipShape(.rect(cornerRadius: 16))
+                Text("\(dayCount) day\(dayCount == 1 ? "" : "s")")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(.black.opacity(0.45), in: .capsule)
+                    .padding(8)
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                Text(verbatim: trip.name)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                if let location = trip.location, !location.isEmpty {
+                    Text(verbatim: location)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                if let itinerary = trip.itinerary, itinerary.totalBudget > 0 {
+                    Text(verbatim: "\(money(itinerary.totalBudget, trip.currencyCode)) · \(money(itinerary.budget(forDay: 0), trip.currencyCode))/day")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(Theme.accent)
+                        .lineLimit(1)
+                }
+            }
+            .padding(.horizontal, 4)
+        }
+        .padding(8)
+        .frame(width: 230)
+        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 22))
+    }
+}
+
+// MARK: - Create itinerary
+
+/// Sheet that builds a new itinerary from scratch: name, destination, total budget,
+/// number of days (the budget divides evenly across them), and tripmates. Creates a
+/// regular trip under the hood so syncing, expenses, and email invites all work.
+struct CreateItineraryView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(TripStore.self) private var store
+    /// Called with the new trip's id after a successful create, before dismissing.
+    var onCreated: (Trip.ID) -> Void = { _ in }
+
+    @State private var name = ""
+    @State private var location = ""
+    @State private var currency = "USD"
+    @State private var budgetText = ""
+    @State private var dayCount = 3
+    @State private var hasStartDate = false
+    @State private var startDate = Date()
+    @State private var memberName = ""
+    @State private var members: [Person] = []
+
+    private var budget: Double { Double(budgetText) ?? 0 }
+
+    private var canCreate: Bool {
+        !name.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                AppBackground()
+
+                ScrollView {
+                    VStack(spacing: 18) {
+                        header
+                        whereCard
+                        budgetCard
+                        daysCard
+                        friendsCard
+                    }
+                    .padding()
+                    .padding(.bottom, 12)
+                }
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+            .safeAreaInset(edge: .bottom) { createButton }
+        }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Build an itinerary")
+                .font(.system(.largeTitle).weight(.bold))
+            Text("Plan each day: where to go, what to do, and where to eat.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var whereCard: some View {
+        TripCard(title: "Where to?", icon: "mappin.and.ellipse") {
+            HStack(spacing: 10) {
+                Image(systemName: "map.fill").foregroundStyle(.secondary)
+                TextField("Itinerary name (e.g. Tokyo Highlights)", text: $name)
+                    .font(.body.weight(.semibold))
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+
+            LocationField(text: $location)
+
+            HStack {
+                Text("Currency").font(.subheadline).foregroundStyle(.secondary)
+                Spacer()
+                Menu {
+                    Picker("Currency", selection: $currency) {
+                        ForEach(supportedCurrencies, id: \.self) { Text($0).tag($0) }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(currency).font(.subheadline.weight(.semibold))
+                        Image(systemName: "chevron.down").font(.caption2.weight(.bold))
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.secondary.opacity(0.12), in: .capsule)
+                }
+            }
+        }
+    }
+
+    private var budgetCard: some View {
+        TripCard(title: "Total budget", icon: "wallet.bifold.fill") {
+            Text("Divided evenly across the days of your itinerary.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 2) {
+                Text(verbatim: currencySymbol(currency)).foregroundStyle(.secondary)
+                TextField("0.00", text: $budgetText)
+                    .keyboardType(.decimalPad)
+            }
+            .font(.title3.weight(.semibold))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+        }
+    }
+
+    private var daysCard: some View {
+        TripCard(title: "How many days?", icon: "calendar") {
+            Stepper(value: $dayCount, in: 1...30) {
+                Text("\(dayCount) day\(dayCount == 1 ? "" : "s")")
+                    .font(.subheadline.weight(.semibold))
+            }
+            if budget > 0 {
+                HStack(spacing: 6) {
+                    Image(systemName: "chart.pie.fill")
+                        .font(.caption)
+                        .foregroundStyle(Theme.accent)
+                    Text("About \(money(budget / Double(dayCount), currency)) per day")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Toggle("Add a start date", isOn: $hasStartDate.animation(.snappy))
+                .font(.subheadline.weight(.medium))
+                .tint(Theme.accent)
+            if hasStartDate {
+                DatePicker("Starts", selection: $startDate, displayedComponents: .date)
+                    .font(.subheadline)
+            }
+        }
+    }
+
+    private var friendsCard: some View {
+        TripCard(title: "Who's coming?", icon: "person.2.fill") {
+            Text("Add friends by name now — you can invite people with an account by email once the itinerary is created.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
+            FlowLayout(spacing: 8) {
+                friendChip(person: store.currentUser,
+                           label: store.currentUser.name.isEmpty
+                               ? Text("You")
+                               : Text("\(store.currentUser.name) (You)"),
+                           removable: false)
+                ForEach(members) { member in
+                    friendChip(person: member, label: Text(verbatim: member.name), removable: true)
+                }
+            }
+
+            HStack(spacing: 10) {
+                TextField("Add friend's name", text: $memberName)
+                    .submitLabel(.done)
+                    .onSubmit { addMember() }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+                Button { addMember() } label: {
+                    Image(systemName: "plus")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 40, height: 40)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.tint(Theme.accent).interactive(), in: .circle)
+                .disabled(memberName.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+    }
+
+    private func friendChip(person: Person, label: Text, removable: Bool) -> some View {
+        HStack(spacing: 6) {
+            AvatarView(person: person, imageData: person.id == store.currentUser.id ? store.profileImageData : nil, size: 24)
+            label
+                .font(.footnote.weight(.medium))
+                .lineLimit(1)
+            if removable {
+                Button {
+                    members.removeAll { $0.id == person.id }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.leading, 5)
+        .padding(.trailing, removable ? 8 : 11)
+        .padding(.vertical, 5)
+        .background(person.color.opacity(0.12), in: .capsule)
+    }
+
+    private var createButton: some View {
+        Button {
+            create()
+        } label: {
+            Label("Create itinerary", systemImage: "arrow.right")
+                .labelStyle(.titleAndIcon)
+                .font(.headline)
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 15)
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+        .disabled(!canCreate)
+        .opacity(canCreate ? 1 : 0.5)
+        .padding(.horizontal)
+        .padding(.top, 6)
+        .padding(.bottom, 10)
+    }
+
+    private func addMember() {
+        let trimmed = memberName.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        let color = Color(hex: memberPalette[members.count % memberPalette.count])
+        members.append(Person(name: trimmed, color: color))
+        memberName = ""
+    }
+
+    private func create() {
+        let me = store.currentUser
+        let trimmedLocation = location.trimmingCharacters(in: .whitespaces)
+        let itinerary = Itinerary(
+            totalBudget: SplitEngine.roundToTwo(budget),
+            days: (0..<dayCount).map { _ in ItineraryDay() }
+        )
+        let endDate = Calendar.current.date(byAdding: .day, value: dayCount - 1, to: startDate)
+        let trip = Trip(
+            name: name.trimmingCharacters(in: .whitespaces),
+            currencyCode: currency,
+            creatorID: me.id,
+            members: [me] + members,
+            budgets: [me.id: SplitEngine.roundToTwo(budget)],
+            location: trimmedLocation.isEmpty ? nil : trimmedLocation,
+            startDate: hasStartDate ? startDate : nil,
+            endDate: hasStartDate ? endDate : nil,
+            itinerary: itinerary
+        )
+        store.addTrip(trip)
+        onCreated(trip.id)
+        dismiss()
+    }
+}
+
+// MARK: - Itinerary detail
+
+/// Day-by-day planner for one itinerary: budget summary, a day selector, the selected
+/// day's timeline of stops, and the tripmates card with email/link invites.
+struct ItineraryDetailView: View {
+    @Environment(TripStore.self) private var store
+    let tripID: Trip.ID
+
+    @State private var selectedDayIndex = 0
+    @State private var isAddingStop = false
+    @State private var editingStop: ItineraryStop?
+    @State private var isEditingBudget = false
+    @State private var budgetText = ""
+    @State private var dayPendingDeletion: Int?
+
+    // Tripmates card state, mirroring TripDetailView's invite flow.
+    @State private var manualMemberName = ""
+    @State private var inviteEmail = ""
+    @State private var inviteMessage: String?
+    @State private var isInviting = false
+    @State private var inviteLink: URL?
+    @State private var isGeneratingLink = false
+
+    var body: some View {
+        Group {
+            if let trip = store.trip(tripID), let itinerary = trip.itinerary {
+                content(trip, itinerary)
+            } else {
+                ContentUnavailableView(
+                    "Itinerary unavailable",
+                    systemImage: "map",
+                    description: Text("This itinerary may have been deleted.")
+                )
+            }
+        }
+        .background { AppBackground() }
+    }
+
+    private func content(_ trip: Trip, _ itinerary: Itinerary) -> some View {
+        let dayIndex = min(selectedDayIndex, max(itinerary.days.count - 1, 0))
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                budgetSummaryCard(trip, itinerary)
+                daySelector(trip, itinerary, selected: dayIndex)
+                dayTimelineCard(trip, itinerary, dayIndex: dayIndex)
+                tripmatesCard(trip)
+            }
+            .padding()
+            .padding(.bottom, 80)
+        }
+        .navigationTitle(trip.name)
+        .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $isAddingStop) {
+            ItineraryStopEditorView(currencyCode: trip.currencyCode) { stop in
+                appendStop(stop, toDay: dayIndex)
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
+        .sheet(item: $editingStop) { stop in
+            ItineraryStopEditorView(stop: stop, currencyCode: trip.currencyCode) { updated in
+                replaceStop(updated, inDay: dayIndex)
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
+        .alert("Total budget", isPresented: $isEditingBudget) {
+            TextField("Amount", text: $budgetText)
+                .keyboardType(.decimalPad)
+            Button("Save") { saveBudget() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Divided evenly across your \(itinerary.days.count) day\(itinerary.days.count == 1 ? "" : "s").")
+        }
+        .confirmationDialog(
+            "Remove this day?",
+            isPresented: Binding(
+                get: { dayPendingDeletion != nil },
+                set: { if !$0 { dayPendingDeletion = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Remove Day", role: .destructive) {
+                if let index = dayPendingDeletion { removeDay(at: index) }
+                dayPendingDeletion = nil
+            }
+        } message: {
+            Text("Its planned stops are removed too, and the budget re-splits across the remaining days.")
+        }
+    }
+
+    // MARK: Budget summary
+
+    private func budgetSummaryCard(_ trip: Trip, _ itinerary: Itinerary) -> some View {
+        TripCard(title: "Budget", icon: "wallet.bifold.fill") {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(verbatim: money(itinerary.totalBudget, trip.currencyCode))
+                        .font(.title2.bold())
+                        .monospacedDigit()
+                    Text("Total budget")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(verbatim: money(itinerary.budget(forDay: 0), trip.currencyCode))
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(Theme.accent)
+                        .monospacedDigit()
+                    Text("Per day · \(itinerary.days.count) day\(itinerary.days.count == 1 ? "" : "s")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if itinerary.plannedCost > 0 {
+                let over = itinerary.plannedCost > itinerary.totalBudget && itinerary.totalBudget > 0
+                HStack(spacing: 6) {
+                    Image(systemName: over ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(over ? Theme.negative : Theme.positive)
+                    Text("Planned so far: \(money(itinerary.plannedCost, trip.currencyCode))")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Button {
+                budgetText = itinerary.totalBudget > 0 ? String(format: "%.2f", itinerary.totalBudget) : ""
+                isEditingBudget = true
+            } label: {
+                Label("Edit budget", systemImage: "pencil")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+            }
+            .buttonStyle(.plain)
+            .glassEffect(.regular.interactive(), in: .capsule)
+        }
+    }
+
+    // MARK: Day selector
+
+    private func daySelector(_ trip: Trip, _ itinerary: Itinerary, selected: Int) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(itinerary.days.indices, id: \.self) { index in
+                    let isOn = index == selected
+                    Button {
+                        selectedDayIndex = index
+                    } label: {
+                        VStack(spacing: 1) {
+                            Text("Day \(index + 1)")
+                                .font(.subheadline.weight(.semibold))
+                            if let date = dayDate(trip, index: index) {
+                                Text(verbatim: date.formatted(.dateTime.month(.abbreviated).day()))
+                                    .font(.system(size: 10, weight: .medium))
+                                    .opacity(0.8)
+                            }
+                        }
+                        .foregroundStyle(isOn ? .white : .primary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(
+                        isOn ? .regular.tint(Theme.accent).interactive() : .regular.interactive(),
+                        in: .capsule
+                    )
+                    .contextMenu {
+                        if itinerary.days.count > 1 {
+                            Button(role: .destructive) {
+                                dayPendingDeletion = index
+                            } label: {
+                                Label("Remove Day", systemImage: "trash")
+                            }
+                        }
+                    }
+                }
+
+                Button {
+                    addDay()
+                } label: {
+                    Label("Add day", systemImage: "plus")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: .capsule)
+            }
+            .padding(.horizontal)
+        }
+        .padding(.horizontal, -16)
+    }
+
+    /// Calendar date of a day when the trip has a start date, so chips can show
+    /// "Day 2 · Apr 9".
+    private func dayDate(_ trip: Trip, index: Int) -> Date? {
+        guard let start = trip.startDate else { return nil }
+        return Calendar.current.date(byAdding: .day, value: index, to: start)
+    }
+
+    // MARK: Day timeline
+
+    private func dayTimelineCard(_ trip: Trip, _ itinerary: Itinerary, dayIndex: Int) -> some View {
+        TripCard(title: "Day \(dayIndex + 1) plan", icon: "list.bullet.rectangle.fill") {
+            let dayBudget = itinerary.budget(forDay: dayIndex)
+            let planned = itinerary.plannedCost(forDay: dayIndex)
+            HStack {
+                Text("Day budget")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(verbatim: planned > 0
+                        ? "\(money(planned, trip.currencyCode)) / \(money(dayBudget, trip.currencyCode))"
+                        : money(dayBudget, trip.currencyCode))
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(planned > dayBudget && dayBudget > 0 ? Theme.negative : Theme.accent)
+                    .monospacedDigit()
+            }
+
+            if let day = itinerary.days.indices.contains(dayIndex) ? itinerary.days[dayIndex] : nil {
+                if day.stops.isEmpty {
+                    VStack(spacing: 8) {
+                        Image(systemName: "sparkles")
+                            .font(.title3)
+                            .foregroundStyle(.tertiary)
+                        Text("Nothing planned yet. Add a location, an activity, or a restaurant.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                } else {
+                    VStack(spacing: 8) {
+                        ForEach(day.sortedStops) { stop in
+                            SwipeToDeleteRow {
+                                removeStop(stop.id, fromDay: dayIndex)
+                            } content: {
+                                Button {
+                                    editingStop = stop
+                                } label: {
+                                    stopRow(stop, currencyCode: trip.currencyCode)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+            }
+
+            Button {
+                isAddingStop = true
+            } label: {
+                Label("Add to this day", systemImage: "plus")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            }
+            .buttonStyle(.plain)
+            .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+        }
+    }
+
+    private func stopRow(_ stop: ItineraryStop, currencyCode: String) -> some View {
+        HStack(spacing: 12) {
+            VStack(spacing: 2) {
+                if let time = stop.time {
+                    Text(verbatim: time.formatted(date: .omitted, time: .shortened))
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Anytime")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .frame(width: 58)
+
+            Image(systemName: stop.kind.icon)
+                .font(.subheadline)
+                .foregroundStyle(.white)
+                .frame(width: 32, height: 32)
+                .background(stop.kind.tint, in: .circle)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: stop.name)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                if !stop.notes.isEmpty {
+                    Text(verbatim: stop.notes)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            Spacer(minLength: 0)
+            if stop.cost > 0 {
+                Text(verbatim: money(stop.cost, currencyCode))
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            Image(systemName: "chevron.right")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(10)
+        .background(Theme.fieldBackground, in: .rect(cornerRadius: 14))
+        .contentShape(.rect)
+    }
+
+    // MARK: Tripmates
+
+    private func tripmatesCard(_ trip: Trip) -> some View {
+        TripCard(title: "Tripmates", icon: "person.2.fill") {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 14) {
+                    ForEach(trip.members) { member in
+                        VStack(spacing: 6) {
+                            AvatarView(
+                                person: member,
+                                imageData: member.id == store.currentUser.id ? store.profileImageData : nil,
+                                size: 40
+                            )
+                            Text(LocalizedStringKey(member.id == store.currentUser.id ? "You" : member.name))
+                                .font(.caption)
+                                .lineLimit(1)
+                        }
+                        .frame(width: 74)
+                    }
+                }
+            }
+
+            if store.isCreator(of: trip) {
+                Divider()
+
+                HStack(spacing: 10) {
+                    TextField("Add friend's name", text: $manualMemberName)
+                        .font(.subheadline)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+                    Button {
+                        store.addManualMember(name: manualMemberName, to: trip.id)
+                        manualMemberName = ""
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 40, height: 40)
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.tint(Theme.accent).interactive(), in: .circle)
+                    .disabled(manualMemberName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+
+                TextField("Invite by email", text: $inviteEmail)
+                    .textInputAutocapitalization(.never)
+                    .keyboardType(.emailAddress)
+                    .autocorrectionDisabled()
+                    .font(.subheadline)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+
+                Button { invite(trip) } label: {
+                    HStack(spacing: 8) {
+                        if isInviting { ProgressView().tint(.white) }
+                        Label("Invite Member", systemImage: "person.badge.plus")
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+                .disabled(inviteEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isInviting)
+                .opacity(inviteEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isInviting ? 0.55 : 1)
+
+                Button { generateInviteLink(trip) } label: {
+                    HStack(spacing: 8) {
+                        if isGeneratingLink { ProgressView().tint(.white) }
+                        Label("Generate Invitation Link", systemImage: "link")
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.tint(Color(hex: 0x10B981)).interactive(), in: .capsule)
+                .disabled(isGeneratingLink)
+
+                if let inviteLink {
+                    HStack(spacing: 8) {
+                        Text(verbatim: inviteLink.absoluteString)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Button {
+                            UIPasteboard.general.string = inviteLink.absoluteString
+                            inviteMessage = String(localized: "Invitation link copied.")
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                                .font(.caption.weight(.bold))
+                                .frame(width: 38, height: 38)
+                                .contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                        ShareLink(item: inviteLink) {
+                            Image(systemName: "square.and.arrow.up")
+                                .font(.caption.weight(.bold))
+                                .frame(width: 38, height: 38)
+                                .contentShape(.rect)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+                }
+
+                if let inviteMessage {
+                    Text(verbatim: inviteMessage)
+                        .font(.caption)
+                        .foregroundStyle(inviteMessage.localizedCaseInsensitiveContains("invited") || inviteMessage.localizedCaseInsensitiveContains("copied") || inviteMessage.localizedCaseInsensitiveContains("ready") ? Theme.positive : Theme.negative)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+    }
+
+    private func invite(_ trip: Trip) {
+        inviteMessage = nil
+        isInviting = true
+        let email = inviteEmail
+        Task {
+            do {
+                try await store.inviteMember(email: email, displayName: "", to: trip.id)
+                inviteEmail = ""
+                inviteMessage = String(localized: "Member invited and added to this itinerary.")
+            } catch {
+                inviteMessage = (error as? AuthError)?.message ?? error.localizedDescription
+            }
+            isInviting = false
+        }
+    }
+
+    private func generateInviteLink(_ trip: Trip) {
+        inviteMessage = nil
+        isGeneratingLink = true
+        Task {
+            do {
+                inviteLink = try await store.createInvitationLink(for: trip.id)
+                inviteMessage = String(localized: "Invitation link ready to share.")
+            } catch {
+                inviteMessage = (error as? AuthError)?.message ?? error.localizedDescription
+            }
+            isGeneratingLink = false
+        }
+    }
+
+    // MARK: Mutations
+
+    private func appendStop(_ stop: ItineraryStop, toDay dayIndex: Int) {
+        guard var itinerary = store.trip(tripID)?.itinerary,
+              itinerary.days.indices.contains(dayIndex) else { return }
+        itinerary.days[dayIndex].stops.append(stop)
+        store.updateItinerary(itinerary, in: tripID)
+    }
+
+    private func replaceStop(_ stop: ItineraryStop, inDay dayIndex: Int) {
+        guard var itinerary = store.trip(tripID)?.itinerary,
+              itinerary.days.indices.contains(dayIndex),
+              let stopIndex = itinerary.days[dayIndex].stops.firstIndex(where: { $0.id == stop.id }) else { return }
+        itinerary.days[dayIndex].stops[stopIndex] = stop
+        store.updateItinerary(itinerary, in: tripID)
+    }
+
+    private func removeStop(_ stopID: ItineraryStop.ID, fromDay dayIndex: Int) {
+        guard var itinerary = store.trip(tripID)?.itinerary,
+              itinerary.days.indices.contains(dayIndex) else { return }
+        itinerary.days[dayIndex].stops.removeAll { $0.id == stopID }
+        store.updateItinerary(itinerary, in: tripID)
+    }
+
+    private func addDay() {
+        guard var itinerary = store.trip(tripID)?.itinerary else { return }
+        itinerary.days.append(ItineraryDay())
+        store.updateItinerary(itinerary, in: tripID)
+        selectedDayIndex = itinerary.days.count - 1
+    }
+
+    private func removeDay(at index: Int) {
+        guard var itinerary = store.trip(tripID)?.itinerary,
+              itinerary.days.count > 1,
+              itinerary.days.indices.contains(index) else { return }
+        itinerary.days.remove(at: index)
+        store.updateItinerary(itinerary, in: tripID)
+        selectedDayIndex = min(selectedDayIndex, itinerary.days.count - 1)
+    }
+
+    private func saveBudget() {
+        guard var itinerary = store.trip(tripID)?.itinerary,
+              let amount = Double(budgetText.trimmingCharacters(in: .whitespaces)) else { return }
+        itinerary.totalBudget = SplitEngine.roundToTwo(max(amount, 0))
+        store.updateItinerary(itinerary, in: tripID)
+    }
+}
+
+// MARK: - Stop editor
+
+/// Add/edit form for one timeline stop: what kind it is, its name, an optional time
+/// of day, an estimated cost, and notes.
+struct ItineraryStopEditorView: View {
+    /// The stop being edited; `nil` when adding a new one.
+    var stop: ItineraryStop? = nil
+    let currencyCode: String
+    let onSave: (ItineraryStop) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = ""
+    @State private var kind: ItineraryStopKind = .location
+    @State private var hasTime = false
+    @State private var time = Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: Date()) ?? Date()
+    @State private var costText = ""
+    @State private var notes = ""
+
+    private var canSave: Bool {
+        !name.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    private var namePlaceholder: LocalizedStringKey {
+        switch kind {
+        case .location: "Place to visit (e.g. Senso-ji Temple)"
+        case .activity: "Thing to do (e.g. TeamLab Planets)"
+        case .restaurant: "Where to eat (e.g. Ichiran Ramen)"
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                AppBackground()
+
+                ScrollView {
+                    VStack(spacing: 18) {
+                        TripCard(title: "What is it?", icon: "square.grid.2x2.fill") {
+                            Picker("Kind", selection: $kind) {
+                                ForEach(ItineraryStopKind.allCases) { kind in
+                                    Text(kind.label).tag(kind)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+
+                            HStack(spacing: 10) {
+                                Image(systemName: kind.icon)
+                                    .foregroundStyle(kind.tint)
+                                TextField(namePlaceholder, text: $name)
+                                    .font(.body.weight(.semibold))
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+                            .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+                        }
+
+                        TripCard(title: "When?", icon: "clock.fill") {
+                            Toggle("Set a time", isOn: $hasTime.animation(.snappy))
+                                .font(.subheadline.weight(.medium))
+                                .tint(Theme.accent)
+                            if hasTime {
+                                DatePicker("Time", selection: $time, displayedComponents: .hourAndMinute)
+                                    .font(.subheadline)
+                            }
+                        }
+
+                        TripCard(title: "Estimated cost", icon: "wallet.bifold.fill") {
+                            HStack(spacing: 2) {
+                                Text(verbatim: currencySymbol(currencyCode)).foregroundStyle(.secondary)
+                                TextField("0.00", text: $costText)
+                                    .keyboardType(.decimalPad)
+                            }
+                            .font(.title3.weight(.semibold))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+                            .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+                        }
+
+                        TripCard(title: "Notes", icon: "note.text") {
+                            TextField("Anything to remember (tickets, reservations…)", text: $notes, axis: .vertical)
+                                .lineLimit(2...5)
+                                .font(.subheadline)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 12)
+                                .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+                        }
+                    }
+                    .padding()
+                }
+            }
+            .navigationTitle(stop == nil ? "Add to plan" : "Edit stop")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { save() }
+                        .fontWeight(.semibold)
+                        .disabled(!canSave)
+                }
+            }
+            .onAppear {
+                guard let stop else { return }
+                name = stop.name
+                kind = stop.kind
+                if let stopTime = stop.time {
+                    hasTime = true
+                    time = stopTime
+                }
+                costText = stop.cost > 0 ? String(format: "%.2f", stop.cost) : ""
+                notes = stop.notes
+            }
+        }
+    }
+
+    private func save() {
+        let saved = ItineraryStop(
+            id: stop?.id ?? UUID(),
+            name: name.trimmingCharacters(in: .whitespaces),
+            kind: kind,
+            time: hasTime ? time : nil,
+            notes: notes.trimmingCharacters(in: .whitespacesAndNewlines),
+            cost: SplitEngine.roundToTwo(max(Double(costText) ?? 0, 0))
+        )
+        onSave(saved)
+        dismiss()
+    }
+}

@@ -1648,6 +1648,9 @@ struct RecScreen: View {
     /// Saved destinations live on the cloud-backed profile so they survive reinstalls.
     @Environment(TripStore.self) private var store
 
+    /// Presents the build-your-own-itinerary flow (ItineraryFeature.swift).
+    @State private var showCreateItinerary = false
+
     // Filters
     @State private var showFilterSheet = false
     @State private var tripLength: TripLengthFilter = .any
@@ -1741,6 +1744,8 @@ struct RecScreen: View {
                         filterBar
 
                         if !isFiltering {
+                            ItineraryPlannerSection(onCreate: { showCreateItinerary = true })
+
                             sectionHeader("Plan your next adventure")
                             ScrollView(.horizontal, showsIndicators: false) {
                                 LazyHStack(spacing: 14) {
@@ -1862,6 +1867,15 @@ struct RecScreen: View {
                         isSaved: savedIDs.contains(id),
                         onToggleSave: { toggleSaved(id) }
                     )
+                }
+            }
+            .navigationDestination(for: Trip.ID.self) { tripID in
+                ItineraryDetailView(tripID: tripID)
+            }
+            .sheet(isPresented: $showCreateItinerary) {
+                // Push the new itinerary's planner as the sheet closes.
+                CreateItineraryView { newTripID in
+                    navigationPath.append(newTripID)
                 }
             }
             .sheet(isPresented: $showFilterSheet) {
