@@ -17,6 +17,66 @@ import UIKit
     }
 }
 
+// MARK: - Tap anywhere to dismiss the keyboard
+
+/// A window-level tap recognizer that resigns the first responder, so tapping any
+/// empty space hides the keyboard app-wide (sheets included — they present in the
+/// same window). `cancelsTouchesInView = false` plus simultaneous recognition means
+/// buttons, rows, and scroll views keep working exactly as before; the delegate only
+/// skips taps that land on a text input itself, so tapping the active field doesn't
+/// dismiss its own keyboard mid-edit.
+private final class KeyboardDismissGesture: NSObject, UIGestureRecognizerDelegate {
+    static let shared = KeyboardDismissGesture()
+    private static let name = "tripsplit.tapToDismissKeyboard"
+
+    func install(on window: UIWindow) {
+        guard !(window.gestureRecognizers ?? []).contains(where: { $0.name == Self.name }) else { return }
+        let tap = UITapGestureRecognizer(target: self, action: #selector(dismissKeyboard))
+        tap.name = Self.name
+        tap.cancelsTouchesInView = false
+        tap.delegate = self
+        window.addGestureRecognizer(tap)
+    }
+
+    @objc private func dismissKeyboard() {
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil
+        )
+    }
+
+    func gestureRecognizer(_ recognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        // Ignore taps on the text input being edited (or any other text input).
+        var view = touch.view
+        while let current = view {
+            if current is UITextField || current is UITextView { return false }
+            view = current.superview
+        }
+        return true
+    }
+
+    func gestureRecognizer(
+        _ recognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+    ) -> Bool { true }
+}
+
+/// Zero-size helper view whose only job is to find the hosting window and install
+/// the app-wide keyboard-dismiss tap. Attach once via `.background(...)` at the root.
+struct KeyboardDismissInstaller: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.isUserInteractionEnabled = false
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        // The window isn't attached yet during `makeUIView`; hop to the next runloop.
+        DispatchQueue.main.async {
+            if let window = view.window { KeyboardDismissGesture.shared.install(on: window) }
+        }
+    }
+}
+
 /// The destinations shown in the floating dock.
 enum DockTab: String, CaseIterable, Identifiable, Hashable {
     case home = "Home"
@@ -1722,6 +1782,14 @@ struct RecScreen: View {
         maxBudget = Self.budgetCap
     }
 
+    /// Seeds a new editable itinerary from a curated trip and pushes its planner on
+    /// top of the detail page, so the curated plan becomes the starting point.
+    private func startItinerary(from destination: Destination) {
+        let trip = destination.starterTrip(creator: store.currentUser)
+        store.addTrip(trip)
+        navigationPath.append(trip.id)
+    }
+
     var body: some View {
         Group {
             if isActive {
@@ -1865,7 +1933,8 @@ struct RecScreen: View {
                     DestinationDetailView(
                         destination: destination,
                         isSaved: savedIDs.contains(id),
-                        onToggleSave: { toggleSaved(id) }
+                        onToggleSave: { toggleSaved(id) },
+                        onUseAsPlan: { startItinerary(from: destination) }
                     )
                 }
             }
@@ -2839,6 +2908,36 @@ extension Destination {
         }
     }
 
+    /// A ready-to-edit trip seeded from this curated plan, for users who'd rather
+    /// start from a template than a blank itinerary: the curated budget becomes the
+    /// itinerary budget, and the curated places/restaurants are spread round-robin
+    /// across the trip's days (each day tends to get a sight and a meal). Everything
+    /// is a normal `ItineraryStop` afterwards — rename, retime, or delete freely.
+    func starterTrip(creator me: Person) -> Trip {
+        let dayCount = min(max(days, 1), 30)
+        var itineraryDays = (0..<dayCount).map { _ in ItineraryDay() }
+        for (index, place) in places.enumerated() {
+            itineraryDays[index % dayCount].stops.append(
+                ItineraryStop(name: place.name, kind: .location, notes: place.detail)
+            )
+        }
+        for (index, restaurant) in restaurants.enumerated() {
+            itineraryDays[index % dayCount].stops.append(
+                ItineraryStop(name: restaurant.name, kind: .restaurant, notes: restaurant.detail)
+            )
+        }
+        let budget = SplitEngine.roundToTwo(budgetValue)
+        return Trip(
+            name: title,
+            currencyCode: "USD",
+            creatorID: me.id,
+            members: [me],
+            budgets: [me.id: budget],
+            location: "\(city), \(country)",
+            itinerary: Itinerary(totalBudget: budget, days: itineraryDays)
+        )
+    }
+
     /// Continents in display order, limited to ones that actually have trips.
     static var continents: [String] {
         let order = ["Asia", "Europe", "North America", "South America", "Middle East & Africa", "Oceania", "Other"]
@@ -3054,6 +3153,11 @@ struct DestinationDetailView: View {
     let destination: Destination
     let isSaved: Bool
     let onToggleSave: () -> Void
+    /// Creates an editable itinerary seeded from this curated trip and navigates to
+    /// it, so users don't have to start planning from scratch.
+    var onUseAsPlan: () -> Void = {}
+
+    @State private var showUseAsPlanConfirm = false
 
     private enum DetailTab: String, CaseIterable, Identifiable {
         case overview = "Overview"
@@ -3167,6 +3271,8 @@ struct DestinationDetailView: View {
                 statTile(value: "\(destination.stops)", label: "Stops")
             }
 
+            useAsPlanButton
+
             VStack(alignment: .leading, spacing: 6) {
                 Label("Planned by \(destination.planner)", systemImage: "person.circle.fill")
                     .font(.subheadline.weight(.semibold))
@@ -3179,6 +3285,31 @@ struct DestinationDetailView: View {
             .glassEffect(.regular, in: .rect(cornerRadius: 18))
 
             planningEssentials
+        }
+    }
+
+    /// Primary call-to-action: turn this curated trip into the user's own editable
+    /// itinerary instead of starting from a blank plan.
+    private var useAsPlanButton: some View {
+        Button {
+            showUseAsPlanConfirm = true
+        } label: {
+            Label("Use as my starting plan", systemImage: "wand.and.stars")
+                .font(.headline)
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+        .confirmationDialog(
+            "Start your itinerary from \(destination.title)?",
+            isPresented: $showUseAsPlanConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Create my itinerary") { onUseAsPlan() }
+        } message: {
+            Text("Copies this trip's spots into an editable \(destination.days)-day plan with a \(destination.price) budget — nothing is set in stone.")
         }
     }
 

@@ -28,6 +28,8 @@ struct RootView: View {
         // In-app language selection: expose the manager and drive SwiftUI's locale so
         // every `Text` re-renders in the chosen language without an app restart. Reading
         // `localization.locale` here re-runs this body when the user picks a new language.
+        // Tapping empty space anywhere in the app hides the keyboard.
+        .background(KeyboardDismissInstaller())
         .environment(localization)
         .environment(\.locale, localization.locale)
         .preferredColorScheme(appearance.colorScheme)

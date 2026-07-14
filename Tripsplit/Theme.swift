@@ -83,7 +83,9 @@ enum AppTheme: String, CaseIterable, Identifiable {
     /// Deliberately desaturated so tinted glass materials stay legible over it.
     var accent: Color {
         switch self {
-        case .classic: Color(hex: 0x6D70C9)
+        // Classic: a clear "ocean blue" — warmer and friendlier than the old muted
+        // indigo, but still soft enough that tinted glass stays legible over it.
+        case .classic: Color(hex: 0x3E86B8)
         case .matcha: Color(hex: 0x6F9163)
         case .butter: Color(hex: 0xC29B3E)
         case .chocolate: Color(hex: 0x96755A)
@@ -95,7 +97,8 @@ enum AppTheme: String, CaseIterable, Identifiable {
     /// Companion accent used where the design pairs two hues in a gradient.
     var accentSecondary: Color {
         switch self {
-        case .classic: Color(hex: 0x9789D4)
+        // Seafoam companion: blue → aqua gradients read "coastline", not corporate.
+        case .classic: Color(hex: 0x5BB49E)
         case .matcha: Color(hex: 0x9DB884)
         case .butter: Color(hex: 0xDCC17E)
         case .chocolate: Color(hex: 0xB39B84)
@@ -110,10 +113,12 @@ enum AppTheme: String, CaseIterable, Identifiable {
     var homeGradient: [Color] {
         switch self {
         case .classic:
+            // Soft sky wash: a hint of daylight blue at the top settling into the
+            // shared near-neutral base, so the default look feels open and airy.
             [
-                Color(light: 0xE9EEFA, dark: 0x14161F),
-                Color(light: 0xF3F5FC, dark: 0x0F1017),
-                Color(light: 0xFAFAFC, dark: 0x0B0B10),
+                Color(light: 0xE2EEF6, dark: 0x101A22),
+                Color(light: 0xEFF6FA, dark: 0x0C1218),
+                Color(light: 0xFAFBFC, dark: 0x0B0C10),
             ]
         case .matcha:
             [
