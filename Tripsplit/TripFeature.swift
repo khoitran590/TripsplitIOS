@@ -948,6 +948,18 @@ final class TripStore {
                 }
                 return d
             }
+            if var suggestion = itinerary.suggestion {
+                suggestion.days = suggestion.days.map { day in
+                    var d = day
+                    d.stops = d.stops.map { stop in
+                        var s = stop
+                        s.cost = conv(s.cost)
+                        return s
+                    }
+                    return d
+                }
+                itinerary.suggestion = suggestion
+            }
             converted.itinerary = itinerary
         }
         return converted

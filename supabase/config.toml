@@ -7,3 +7,6 @@ verify_jwt = true
 
 [functions.ocr-receipt]
 verify_jwt = true
+
+[functions.suggest-itinerary]
+verify_jwt = true

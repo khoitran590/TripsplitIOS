@@ -113,6 +113,88 @@ struct ItineraryDay: Identifiable, Codable {
     }
 }
 
+/// One AI-suggested stop, kept separate from `ItineraryStop` because it isn't part of
+/// the plan yet: the time is the model's "HH:mm" string and nothing has an anchor in
+/// the user's timeline until the suggestion is applied.
+struct ItinerarySuggestionStop: Identifiable, Codable {
+    var id = UUID()
+    var kind: ItineraryStopKind = .activity
+    var name: String = ""
+    /// 24-hour "HH:mm" as returned by the model; nil when untimed.
+    var time: String? = nil
+    var notes: String = ""
+    var cost: Double = 0
+
+    private enum CodingKeys: String, CodingKey { case id, kind, name, time, notes, cost }
+
+    init(id: UUID = UUID(), kind: ItineraryStopKind = .activity, name: String = "", time: String? = nil, notes: String = "", cost: Double = 0) {
+        self.id = id
+        self.kind = kind
+        self.name = name
+        self.time = time
+        self.notes = notes
+        self.cost = cost
+    }
+
+    // Tolerant decoding on purpose: this decodes both the Edge Function's wire JSON
+    // (no ids, plain kind strings) and the copy persisted in the trip blob.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        let kindRaw = try c.decodeIfPresent(String.self, forKey: .kind) ?? ""
+        kind = ItineraryStopKind(rawValue: kindRaw) ?? .activity
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        time = try c.decodeIfPresent(String.self, forKey: .time)
+        notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
+        cost = try c.decodeIfPresent(Double.self, forKey: .cost) ?? 0
+    }
+}
+
+/// One AI-suggested day: a short theme title plus its proposed timeline.
+struct ItinerarySuggestionDay: Identifiable, Codable {
+    var id = UUID()
+    var title: String = ""
+    var stops: [ItinerarySuggestionStop] = []
+
+    private enum CodingKeys: String, CodingKey { case id, title, stops }
+
+    init(id: UUID = UUID(), title: String = "", stops: [ItinerarySuggestionStop] = []) {
+        self.id = id
+        self.title = title
+        self.stops = stops
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        stops = try c.decodeIfPresent([ItinerarySuggestionStop].self, forKey: .stops) ?? []
+    }
+}
+
+/// A full AI-drafted day-by-day plan. Persisted inside the itinerary (and therefore the
+/// trip blob) so an unused suggestion survives app restarts and syncs across devices —
+/// the user can come back and apply it later.
+struct ItinerarySuggestion: Codable {
+    var generatedAt = Date()
+    var days: [ItinerarySuggestionDay] = []
+
+    private enum CodingKeys: String, CodingKey { case generatedAt, days }
+
+    init(generatedAt: Date = Date(), days: [ItinerarySuggestionDay] = []) {
+        self.generatedAt = generatedAt
+        self.days = days
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        generatedAt = try c.decodeIfPresent(Date.self, forKey: .generatedAt) ?? Date()
+        days = try c.decodeIfPresent([ItinerarySuggestionDay].self, forKey: .days) ?? []
+    }
+
+    var stopCount: Int { days.reduce(0) { $0 + $1.stops.count } }
+}
+
 /// A user-built day-by-day plan attached to a trip: a total budget divided evenly
 /// across the days, each day holding a timeline of locations, activities, and
 /// restaurants. Lives inside the trip's JSON blob so it syncs (and is shared with
@@ -121,18 +203,23 @@ struct Itinerary: Codable {
     /// Planning budget for the whole itinerary, in the trip's currency.
     var totalBudget: Double = 0
     var days: [ItineraryDay] = []
+    /// The latest AI-drafted plan, if the user asked for one and hasn't applied or
+    /// discarded it yet.
+    var suggestion: ItinerarySuggestion? = nil
 
-    init(totalBudget: Double = 0, days: [ItineraryDay] = []) {
+    init(totalBudget: Double = 0, days: [ItineraryDay] = [], suggestion: ItinerarySuggestion? = nil) {
         self.totalBudget = totalBudget
         self.days = days
+        self.suggestion = suggestion
     }
 
-    private enum CodingKeys: String, CodingKey { case totalBudget, days }
+    private enum CodingKeys: String, CodingKey { case totalBudget, days, suggestion }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         totalBudget = try c.decodeIfPresent(Double.self, forKey: .totalBudget) ?? 0
         days = try c.decodeIfPresent([ItineraryDay].self, forKey: .days) ?? []
+        suggestion = try c.decodeIfPresent(ItinerarySuggestion.self, forKey: .suggestion)
     }
 
     /// Each day's slice of the total budget. Uses the same exact-cent
@@ -178,6 +265,72 @@ extension TripStore {
         guard var trip = trip(tripID) else { return }
         trip.itinerary = nil
         updateTrip(trip)
+    }
+}
+
+// MARK: - AI suggestions (Gemini via Edge Function)
+
+/// Client for the `suggest-itinerary` Supabase Edge Function. The Gemini key lives
+/// server-side only (hard rule: no API keys in the app bundle); the app sends the
+/// trip context plus the signed-in user's JWT and gets back a structured plan.
+enum ItineraryAI {
+    static func suggest(trip: Trip, itinerary: Itinerary, accessToken: String) async throws -> ItinerarySuggestion {
+        guard let url = URL(string: "\(SupabaseConfig.url)/functions/v1/suggest-itinerary") else {
+            throw AuthError(message: "AI suggestions are not configured.")
+        }
+
+        var payload: [String: Any] = [
+            "location": trip.location?.isEmpty == false ? trip.location! : trip.name,
+            "days": max(itinerary.days.count, 1),
+            "currency": trip.currencyCode,
+            "totalBudget": itinerary.totalBudget,
+        ]
+        if let start = trip.startDate {
+            payload["startDate"] = start.formatted(.iso8601.year().month().day())
+        }
+        let existing = existingPlanSummary(itinerary)
+        if !existing.isEmpty {
+            payload["existingPlan"] = existing
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(SupabaseConfig.anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+
+        let (data, response) = try await BackendSecurity.secureSession.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw AuthError(message: "The suggestion service didn't respond.")
+        }
+        switch http.statusCode {
+        case 200:
+            var suggestion = try JSONDecoder().decode(ItinerarySuggestion.self, from: data)
+            suggestion.generatedAt = Date()
+            guard !suggestion.days.isEmpty else {
+                throw AuthError(message: "The AI couldn't draft a plan. Try again.")
+            }
+            return suggestion
+        case 401, 403:
+            throw AuthError(message: "Sign in to get AI suggestions.")
+        case 429:
+            throw AuthError(message: "You've generated a few plans in a row — try again in a couple of minutes.")
+        default:
+            let detail = ReceiptStorage.messageField(from: String(data: data, encoding: .utf8) ?? "")
+            throw AuthError(message: detail ?? "Suggestion service error (HTTP \(http.statusCode)).")
+        }
+    }
+
+    /// Compact text summary of what's already planned, so the model schedules around
+    /// it instead of repeating it.
+    private static func existingPlanSummary(_ itinerary: Itinerary) -> String {
+        var lines: [String] = []
+        for (index, day) in itinerary.days.enumerated() where !day.stops.isEmpty {
+            let stops = day.stops.map { "\($0.name) (\($0.kind.rawValue))" }.joined(separator: ", ")
+            lines.append("Day \(index + 1): \(stops)")
+        }
+        return String(lines.joined(separator: "\n").prefix(4_000))
     }
 }
 
@@ -591,6 +744,15 @@ struct ItineraryDetailView: View {
     /// Jump to the in-progress day once per appearance, not on every re-render.
     @State private var didAutoSelectDay = false
 
+    // AI planner state.
+    @State private var isGeneratingPlan = false
+    @State private var aiMessage: String?
+    @State private var showApplyConfirm = false
+    /// Which suggested days are expanded in the AI card.
+    @State private var expandedSuggestionDays: Set<ItinerarySuggestionDay.ID> = []
+    /// Long drafts (7+ days) start truncated to a few days so the card stays scrollable.
+    @State private var showAllSuggestionDays = false
+
     // Tripmates card state, mirroring TripDetailView's invite flow.
     @State private var manualMemberName = ""
     @State private var inviteEmail = ""
@@ -622,6 +784,7 @@ struct ItineraryDetailView: View {
                 budgetSummaryCard(trip, itinerary)
                 daySelector(trip, itinerary, selected: dayIndex)
                 dayTimelineCard(trip, itinerary, dayIndex: dayIndex)
+                aiPlannerCard(trip, itinerary)
                 tripmatesCard(trip)
             }
             .padding()
@@ -1022,6 +1185,289 @@ struct ItineraryDetailView: View {
         .padding(10)
         .background(Theme.fieldBackground, in: .rect(cornerRadius: 14))
         .contentShape(.rect)
+    }
+
+    // MARK: AI planner
+
+    /// The Gemini-backed planner: drafts a full day-by-day plan (places to go, things
+    /// to do, restaurants, times, and costs). The draft is saved on the itinerary until
+    /// the user applies it to their plan or discards it, so it can be revisited later.
+    private func aiPlannerCard(_ trip: Trip, _ itinerary: Itinerary) -> some View {
+        TripCard(title: "AI Trip Planner", icon: "sparkles") {
+            if let suggestion = itinerary.suggestion {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Drafted \(suggestion.generatedAt.formatted(.relative(presentation: .named)))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button(role: .destructive) {
+                        discardSuggestion()
+                    } label: {
+                        Label("Discard", systemImage: "trash")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.negative)
+                }
+
+                let previewLimit = 4
+                let isTruncatable = suggestion.days.count > previewLimit + 2
+                let visibleDays = (showAllSuggestionDays || !isTruncatable)
+                    ? Array(suggestion.days.enumerated())
+                    : Array(suggestion.days.enumerated().prefix(previewLimit))
+                VStack(spacing: 8) {
+                    ForEach(visibleDays, id: \.element.id) { index, day in
+                        suggestionDaySection(day, number: index + 1, currencyCode: trip.currencyCode)
+                    }
+                }
+                if isTruncatable {
+                    Button {
+                        withAnimation(.snappy) { showAllSuggestionDays.toggle() }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: showAllSuggestionDays ? "chevron.up" : "chevron.down")
+                                .font(.caption2.weight(.bold))
+                            Text(showAllSuggestionDays
+                                ? "Show fewer days"
+                                : "Show all \(suggestion.days.count) days")
+                        }
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(Theme.accent)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.interactive(), in: .capsule)
+                }
+
+                Button {
+                    showApplyConfirm = true
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.circle.fill")
+                        Text("Add to my plan")
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+                .confirmationDialog(
+                    "Add this suggestion to your plan?",
+                    isPresented: $showApplyConfirm,
+                    titleVisibility: .visible
+                ) {
+                    Button("Add \(suggestion.stopCount) stops to my days") {
+                        applySuggestion()
+                    }
+                } message: {
+                    Text("The suggested stops are added to your day-by-day plan. You can edit or remove any of them afterwards.")
+                }
+
+                Button {
+                    generateSuggestion(trip, itinerary)
+                } label: {
+                    HStack(spacing: 8) {
+                        if isGeneratingPlan { ProgressView() }
+                        Label("Suggest a different plan", systemImage: "arrow.clockwise")
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: .capsule)
+                .disabled(isGeneratingPlan)
+
+                Text("Not ready to decide? This draft stays saved right here until you add or discard it.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            } else if isGeneratingPlan {
+                HStack(spacing: 10) {
+                    ProgressView()
+                    Text("Planning your days — places to go, things to do, where to eat…")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 6)
+            } else {
+                Text("Let AI draft your whole trip: a day-by-day timeline of places to go, activities worth checking out, and where to eat — with times and estimated costs. You decide whether to use it.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Button {
+                    generateSuggestion(trip, itinerary)
+                } label: {
+                    Label("Suggest a day-by-day plan", systemImage: "sparkles")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+            }
+
+            if let aiMessage {
+                Text(verbatim: aiMessage)
+                    .font(.caption)
+                    .foregroundStyle(Theme.negative)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    /// One suggested day, collapsible so long drafts stay scannable.
+    private func suggestionDaySection(_ day: ItinerarySuggestionDay, number: Int, currencyCode: String) -> some View {
+        let isExpanded = Binding(
+            get: { expandedSuggestionDays.contains(day.id) },
+            set: { expanded in
+                if expanded {
+                    expandedSuggestionDays.insert(day.id)
+                } else {
+                    expandedSuggestionDays.remove(day.id)
+                }
+            }
+        )
+        let dayCost = SplitEngine.roundToTwo(day.stops.reduce(0) { $0 + $1.cost })
+        return DisclosureGroup(isExpanded: isExpanded) {
+            VStack(spacing: 8) {
+                ForEach(day.stops) { stop in
+                    suggestionStopRow(stop, currencyCode: currencyCode)
+                }
+            }
+            .padding(.top, 8)
+        } label: {
+            // Skimmable while collapsed: theme, stop count, and the day's estimated
+            // cost are all visible without expanding.
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 8) {
+                    Text("Day \(number)")
+                        .font(.subheadline.weight(.bold))
+                    if !day.title.isEmpty {
+                        Text(verbatim: day.title)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Text(verbatim: dayCost > 0
+                        ? "\(day.stops.count) stop\(day.stops.count == 1 ? "" : "s") · \(money(dayCost, currencyCode))"
+                        : "\(day.stops.count) stop\(day.stops.count == 1 ? "" : "s")")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .monospacedDigit()
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Theme.fieldBackground, in: .rect(cornerRadius: 14))
+    }
+
+    private func suggestionStopRow(_ stop: ItinerarySuggestionStop, currencyCode: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(verbatim: displayTime(stop.time) ?? "—")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+                .frame(width: 52, alignment: .leading)
+                .padding(.top, 3)
+            Image(systemName: stop.kind.icon)
+                .font(.caption)
+                .foregroundStyle(stop.kind.tint)
+                .frame(width: 20)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(verbatim: stop.name)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                if !stop.notes.isEmpty {
+                    Text(verbatim: stop.notes)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            Spacer(minLength: 0)
+            if stop.cost > 0 {
+                Text(verbatim: money(stop.cost, currencyCode))
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .padding(.top, 3)
+            }
+        }
+    }
+
+    /// Localized display for the model's "HH:mm" time string.
+    private func displayTime(_ hhmm: String?) -> String? {
+        guard let date = Self.timeDate(hhmm) else { return nil }
+        return date.formatted(date: .omitted, time: .shortened)
+    }
+
+    /// Converts the model's "HH:mm" into a time-of-day `Date` for `ItineraryStop.time`.
+    static func timeDate(_ hhmm: String?) -> Date? {
+        guard let hhmm else { return nil }
+        let parts = hhmm.split(separator: ":")
+        guard parts.count == 2, let hour = Int(parts[0]), let minute = Int(parts[1]),
+              (0...23).contains(hour), (0...59).contains(minute) else { return nil }
+        return Calendar.current.date(bySettingHour: hour, minute: minute, second: 0, of: Date())
+    }
+
+    private func generateSuggestion(_ trip: Trip, _ itinerary: Itinerary) {
+        aiMessage = nil
+        isGeneratingPlan = true
+        Task {
+            do {
+                guard let token = try await store.authorizedAccessToken() else {
+                    throw AuthError(message: "Sign in to get AI suggestions.")
+                }
+                let suggestion = try await ItineraryAI.suggest(trip: trip, itinerary: itinerary, accessToken: token)
+                if var current = store.trip(tripID)?.itinerary {
+                    current.suggestion = suggestion
+                    store.updateItinerary(current, in: tripID)
+                    expandedSuggestionDays = suggestion.days.first.map { [$0.id] } ?? []
+                    showAllSuggestionDays = false
+                }
+            } catch {
+                aiMessage = (error as? AuthError)?.message ?? error.localizedDescription
+            }
+            isGeneratingPlan = false
+        }
+    }
+
+    /// Fills the suggestion into the user's plan: stops are appended to the matching
+    /// day (extra suggested days are added at the end), then the draft is cleared.
+    private func applySuggestion() {
+        guard var itinerary = store.trip(tripID)?.itinerary,
+              let suggestion = itinerary.suggestion else { return }
+        for (index, day) in suggestion.days.enumerated() {
+            while itinerary.days.count <= index && itinerary.days.count < 30 {
+                itinerary.days.append(ItineraryDay())
+            }
+            guard itinerary.days.indices.contains(index) else { break }
+            let stops = day.stops.map { suggested in
+                ItineraryStop(
+                    name: suggested.name,
+                    kind: suggested.kind,
+                    time: Self.timeDate(suggested.time),
+                    notes: suggested.notes,
+                    cost: SplitEngine.roundToTwo(suggested.cost)
+                )
+            }
+            itinerary.days[index].stops.append(contentsOf: stops)
+        }
+        itinerary.suggestion = nil
+        store.updateItinerary(itinerary, in: tripID)
+    }
+
+    private func discardSuggestion() {
+        guard var itinerary = store.trip(tripID)?.itinerary else { return }
+        itinerary.suggestion = nil
+        store.updateItinerary(itinerary, in: tripID)
     }
 
     // MARK: Tripmates
