@@ -2622,6 +2622,7 @@ struct TripDetailView: View {
                                     switch detailTab {
                                     case .overview:
                                         tripDetailsCard(trip)
+                                        itineraryCard(trip)
                                         budgetOverviewCard(trip)
                                         if trip.members.count >= 2 && !trip.expenses.isEmpty {
                                             OneTimeTipBanner(
@@ -3367,6 +3368,76 @@ struct TripDetailView: View {
             }
             isGeneratingLink = false
         }
+    }
+
+    /// Entry point to the day-by-day planner (ItineraryFeature.swift): opens the plan
+    /// when one exists, or seeds one from the trip's dates and budget so itineraries
+    /// are reachable from the Trips side, not just Explore.
+    @ViewBuilder
+    private func itineraryCard(_ trip: Trip) -> some View {
+        TripCard(title: "Itinerary", icon: "map.fill") {
+            if let itinerary = trip.itinerary {
+                let stopCount = itinerary.days.reduce(0) { $0 + $1.stops.count }
+                NavigationLink {
+                    ItineraryDetailView(tripID: trip.id, showsTripLink: false)
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "calendar.day.timeline.left")
+                            .font(.title3)
+                            .foregroundStyle(Theme.accent)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Day-by-day plan")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.primary)
+                            Text("\(itinerary.days.count) day\(itinerary.days.count == 1 ? "" : "s") · \(stopCount) stop\(stopCount == 1 ? "" : "s") planned")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(12)
+                    .background(Theme.fieldBackground, in: .rect(cornerRadius: 14))
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+            } else {
+                Text("Plan each day of this trip: places to go, things to do, and where to eat.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Button {
+                    seedItinerary(trip)
+                } label: {
+                    Label("Plan day-by-day itinerary", systemImage: "map.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+            }
+        }
+    }
+
+    /// Creates an empty plan sized to the trip's date range (or 3 days without dates),
+    /// budgeted with the signed-in user's trip budget.
+    private func seedItinerary(_ trip: Trip) {
+        let dayCount: Int
+        if let start = trip.startDate, let end = trip.endDate {
+            let cal = Calendar.current
+            let span = cal.dateComponents([.day], from: cal.startOfDay(for: start), to: cal.startOfDay(for: end)).day ?? 0
+            dayCount = min(max(span + 1, 1), 30)
+        } else {
+            dayCount = 3
+        }
+        let itinerary = Itinerary(
+            totalBudget: trip.budget(for: store.currentUser.id),
+            days: (0..<dayCount).map { _ in ItineraryDay() }
+        )
+        store.updateItinerary(itinerary, in: trip.id)
     }
 
     private func expensesCard(_ trip: Trip) -> some View {

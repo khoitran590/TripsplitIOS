@@ -1,4 +1,6 @@
 import SwiftUI
+import MapKit
+import Combine
 
 // MARK: - Models
 
@@ -170,6 +172,13 @@ extension TripStore {
         trip.itinerary = itinerary
         updateTrip(trip)
     }
+
+    /// Detaches the day-by-day plan from a trip; the trip and its expenses are kept.
+    func removeItinerary(from tripID: Trip.ID) {
+        guard var trip = trip(tripID) else { return }
+        trip.itinerary = nil
+        updateTrip(trip)
+    }
 }
 
 // MARK: - Explore section
@@ -239,6 +248,13 @@ struct ItineraryPlannerSection: View {
                                 ItineraryTripCard(trip: trip)
                             }
                             .buttonStyle(.plain)
+                            .contextMenu {
+                                Button(role: .destructive) {
+                                    store.removeItinerary(from: trip.id)
+                                } label: {
+                                    Label("Remove Itinerary", systemImage: "trash")
+                                }
+                            }
                         }
                     }
                     .scrollTargetLayout()
@@ -558,7 +574,11 @@ struct CreateItineraryView: View {
 /// day's timeline of stops, and the tripmates card with email/link invites.
 struct ItineraryDetailView: View {
     @Environment(TripStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
     let tripID: Trip.ID
+    /// Hidden when the planner is opened from inside the trip detail screen, where a
+    /// "Trip Details" shortcut would just nest another copy of that screen.
+    var showsTripLink = true
 
     @State private var selectedDayIndex = 0
     @State private var isAddingStop = false
@@ -566,6 +586,10 @@ struct ItineraryDetailView: View {
     @State private var isEditingBudget = false
     @State private var budgetText = ""
     @State private var dayPendingDeletion: Int?
+    @State private var showTripDetails = false
+    @State private var showRemoveConfirm = false
+    /// Jump to the in-progress day once per appearance, not on every re-render.
+    @State private var didAutoSelectDay = false
 
     // Tripmates card state, mirroring TripDetailView's invite flow.
     @State private var manualMemberName = ""
@@ -594,6 +618,7 @@ struct ItineraryDetailView: View {
         let dayIndex = min(selectedDayIndex, max(itinerary.days.count - 1, 0))
         return ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                heroBanner(trip, itinerary)
                 budgetSummaryCard(trip, itinerary)
                 daySelector(trip, itinerary, selected: dayIndex)
                 dayTimelineCard(trip, itinerary, dayIndex: dayIndex)
@@ -604,15 +629,58 @@ struct ItineraryDetailView: View {
         }
         .navigationTitle(trip.name)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    if showsTripLink {
+                        Button {
+                            showTripDetails = true
+                        } label: {
+                            Label("Trip Details & Expenses", systemImage: "suitcase.fill")
+                        }
+                    }
+                    Button {
+                        budgetText = itinerary.totalBudget > 0 ? String(format: "%.2f", itinerary.totalBudget) : ""
+                        isEditingBudget = true
+                    } label: {
+                        Label("Edit Budget", systemImage: "pencil")
+                    }
+                    Divider()
+                    Button(role: .destructive) {
+                        showRemoveConfirm = true
+                    } label: {
+                        Label("Remove Itinerary", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+            }
+        }
+        .onAppear { autoSelectCurrentDay(trip, itinerary) }
+        .sheet(isPresented: $showTripDetails) {
+            TripDetailView(tripID: tripID)
+        }
+        .confirmationDialog(
+            "Remove this itinerary?",
+            isPresented: $showRemoveConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Remove Itinerary", role: .destructive) {
+                store.removeItinerary(from: tripID)
+                dismiss()
+            }
+        } message: {
+            Text("The trip and its expenses are kept — only the day-by-day plan is removed.")
+        }
         .sheet(isPresented: $isAddingStop) {
-            ItineraryStopEditorView(currencyCode: trip.currencyCode) { stop in
+            ItineraryStopEditorView(currencyCode: trip.currencyCode, locationHint: trip.location ?? trip.name) { stop in
                 appendStop(stop, toDay: dayIndex)
             }
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
         .sheet(item: $editingStop) { stop in
-            ItineraryStopEditorView(stop: stop, currencyCode: trip.currencyCode) { updated in
+            ItineraryStopEditorView(stop: stop, currencyCode: trip.currencyCode, locationHint: trip.location ?? trip.name) { updated in
                 replaceStop(updated, inDay: dayIndex)
             }
             .presentationDetents([.medium, .large])
@@ -640,6 +708,65 @@ struct ItineraryDetailView: View {
             }
         } message: {
             Text("Its planned stops are removed too, and the budget re-splits across the remaining days.")
+        }
+    }
+
+    // MARK: Hero banner
+
+    /// Compact cover header: destination, dates, and the day count at a glance.
+    private func heroBanner(_ trip: Trip, _ itinerary: Itinerary) -> some View {
+        ZStack(alignment: .bottomLeading) {
+            TripCoverView(trip: trip)
+                .frame(height: 150)
+                .clipShape(.rect(cornerRadius: 24))
+
+            LinearGradient(colors: [.clear, .black.opacity(0.55)], startPoint: .center, endPoint: .bottom)
+                .clipShape(.rect(cornerRadius: 24))
+
+            VStack(alignment: .leading, spacing: 3) {
+                if let location = trip.location, !location.isEmpty {
+                    HStack(spacing: 5) {
+                        Image(systemName: "mappin.and.ellipse")
+                            .font(.caption.weight(.semibold))
+                        Text(verbatim: location)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(.white)
+                }
+                if let range = trip.dateRangeText {
+                    Text(verbatim: range)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.85))
+                }
+            }
+            .padding(14)
+        }
+        .overlay(alignment: .topTrailing) {
+            Text("\(itinerary.days.count) day\(itinerary.days.count == 1 ? "" : "s")")
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4)
+                .background(.black.opacity(0.45), in: .capsule)
+                .padding(10)
+        }
+    }
+
+    /// If the trip is underway (has a start date and today falls inside the plan),
+    /// open on the current day instead of Day 1.
+    private func autoSelectCurrentDay(_ trip: Trip, _ itinerary: Itinerary) {
+        guard !didAutoSelectDay else { return }
+        didAutoSelectDay = true
+        guard let start = trip.startDate else { return }
+        let cal = Calendar.current
+        let elapsed = cal.dateComponents(
+            [.day],
+            from: cal.startOfDay(for: start),
+            to: cal.startOfDay(for: Date())
+        ).day ?? 0
+        if (0..<itinerary.days.count).contains(elapsed) {
+            selectedDayIndex = elapsed
         }
     }
 
@@ -678,6 +805,10 @@ struct ItineraryDetailView: View {
                         .font(.footnote.weight(.medium))
                         .foregroundStyle(.secondary)
                 }
+                if itinerary.totalBudget > 0 {
+                    ProgressView(value: min(itinerary.plannedCost / itinerary.totalBudget, 1))
+                        .tint(over ? Theme.negative : Theme.accent)
+                }
             }
 
             Button {
@@ -709,6 +840,10 @@ struct ItineraryDetailView: View {
                                 .font(.subheadline.weight(.semibold))
                             if let date = dayDate(trip, index: index) {
                                 Text(verbatim: date.formatted(.dateTime.month(.abbreviated).day()))
+                                    .font(.system(size: 10, weight: .medium))
+                                    .opacity(0.8)
+                            } else if !itinerary.days[index].stops.isEmpty {
+                                Text("\(itinerary.days[index].stops.count) stop\(itinerary.days[index].stops.count == 1 ? "" : "s")")
                                     .font(.system(size: 10, weight: .medium))
                                     .opacity(0.8)
                             }
@@ -775,6 +910,10 @@ struct ItineraryDetailView: View {
                     .foregroundStyle(planned > dayBudget && dayBudget > 0 ? Theme.negative : Theme.accent)
                     .monospacedDigit()
             }
+            if dayBudget > 0 && planned > 0 {
+                ProgressView(value: min(planned / dayBudget, 1))
+                    .tint(planned > dayBudget ? Theme.negative : Theme.accent)
+            }
 
             if let day = itinerary.days.indices.contains(dayIndex) ? itinerary.days[dayIndex] : nil {
                 if day.stops.isEmpty {
@@ -819,6 +958,21 @@ struct ItineraryDetailView: View {
             .buttonStyle(.plain)
             .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
         }
+        // Swipe the plan card left/right to flip between days without reaching up
+        // to the chips.
+        .gesture(
+            DragGesture(minimumDistance: 25)
+                .onEnded { value in
+                    guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                    withAnimation(.snappy) {
+                        if value.translation.width < 0 {
+                            selectedDayIndex = min(dayIndex + 1, itinerary.days.count - 1)
+                        } else {
+                            selectedDayIndex = max(dayIndex - 1, 0)
+                        }
+                    }
+                }
+        )
     }
 
     private func stopRow(_ stop: ItineraryStop, currencyCode: String) -> some View {
@@ -1072,21 +1226,103 @@ struct ItineraryDetailView: View {
 
 // MARK: - Stop editor
 
-/// Add/edit form for one timeline stop: what kind it is, its name, an optional time
-/// of day, an estimated cost, and notes.
+/// Apple Maps autocomplete for planned stops, filtered to the kind of place being
+/// added (any point of interest, attractions, or food) and biased toward the
+/// itinerary's destination so results are local to the trip.
+@MainActor
+final class StopPlaceCompleter: NSObject, ObservableObject {
+    @Published var suggestions: [MKLocalSearchCompletion] = []
+    private let completer = MKLocalSearchCompleter()
+
+    override init() {
+        super.init()
+        completer.delegate = self
+        completer.resultTypes = .pointOfInterest
+    }
+
+    func setKind(_ kind: ItineraryStopKind) {
+        switch kind {
+        case .location:
+            completer.pointOfInterestFilter = nil
+        case .activity:
+            completer.pointOfInterestFilter = MKPointOfInterestFilter(including: [
+                .amusementPark, .aquarium, .beach, .campground, .fitnessCenter,
+                .marina, .movieTheater, .museum, .nationalPark, .nightlife,
+                .park, .stadium, .theater, .winery, .zoo,
+            ])
+        case .restaurant:
+            completer.pointOfInterestFilter = MKPointOfInterestFilter(including: [
+                .restaurant, .cafe, .bakery, .brewery, .winery, .foodMarket,
+            ])
+        }
+        suggestions = []
+    }
+
+    /// Centers results around the trip's destination instead of the device location.
+    func bias(to region: MKCoordinateRegion) { completer.region = region }
+
+    func update(query: String) {
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else {
+            suggestions = []
+            return
+        }
+        completer.queryFragment = trimmed
+    }
+
+    func clear() { suggestions = [] }
+}
+
+extension StopPlaceCompleter: MKLocalSearchCompleterDelegate {
+    // Completer callbacks are delivered on the main thread, so it's safe to read results
+    // and update published state directly via `assumeIsolated`.
+    nonisolated func completerDidUpdateResults(_ completer: MKLocalSearchCompleter) {
+        MainActor.assumeIsolated { suggestions = completer.results }
+    }
+
+    nonisolated func completer(_ completer: MKLocalSearchCompleter, didFailWithError error: Error) {
+        MainActor.assumeIsolated { suggestions = [] }
+    }
+}
+
+/// Add/edit form for one timeline stop: what kind it is, its name (with Apple Maps
+/// place suggestions), an optional time of day, an estimated cost, and notes.
 struct ItineraryStopEditorView: View {
     /// The stop being edited; `nil` when adding a new one.
     var stop: ItineraryStop? = nil
     let currencyCode: String
+    /// The trip's destination, used to bias place suggestions to the area.
+    var locationHint: String? = nil
     let onSave: (ItineraryStop) -> Void
 
     @Environment(\.dismiss) private var dismiss
-    @State private var name = ""
+    /// Draft name per kind, so typing a location doesn't leak into the
+    /// thing-to-do or restaurant tabs — each keeps its own text.
+    @State private var names: [ItineraryStopKind: String] = [:]
     @State private var kind: ItineraryStopKind = .location
     @State private var hasTime = false
     @State private var time = Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: Date()) ?? Date()
     @State private var costText = ""
     @State private var notes = ""
+
+    @StateObject private var placeCompleter = StopPlaceCompleter()
+    @FocusState private var nameFocused: Bool
+    /// True while filling the field from a tapped suggestion, so `onChange` doesn't
+    /// immediately re-query and reopen the list.
+    @State private var isSelectingPlace = false
+
+    private var name: String { names[kind] ?? "" }
+
+    private var nameBinding: Binding<String> {
+        Binding(
+            get: { names[kind] ?? "" },
+            set: { names[kind] = $0 }
+        )
+    }
+
+    private var visibleSuggestions: [MKLocalSearchCompletion] {
+        Array(placeCompleter.suggestions.prefix(5))
+    }
 
     private var canSave: Bool {
         !name.trimmingCharacters(in: .whitespaces).isEmpty
@@ -1118,12 +1354,58 @@ struct ItineraryStopEditorView: View {
                             HStack(spacing: 10) {
                                 Image(systemName: kind.icon)
                                     .foregroundStyle(kind.tint)
-                                TextField(namePlaceholder, text: $name)
+                                TextField(namePlaceholder, text: nameBinding)
                                     .font(.body.weight(.semibold))
+                                    .focused($nameFocused)
+                                    .autocorrectionDisabled()
+                                if !name.isEmpty {
+                                    Button {
+                                        names[kind] = ""
+                                        placeCompleter.clear()
+                                    } label: {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
                             }
                             .padding(.horizontal, 14)
                             .padding(.vertical, 12)
                             .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+
+                            if nameFocused && !visibleSuggestions.isEmpty {
+                                VStack(spacing: 0) {
+                                    ForEach(Array(visibleSuggestions.enumerated()), id: \.offset) { index, suggestion in
+                                        Button { select(suggestion) } label: {
+                                            HStack(spacing: 10) {
+                                                Image(systemName: kind.icon)
+                                                    .font(.footnote)
+                                                    .foregroundStyle(kind.tint)
+                                                    .frame(width: 22)
+                                                VStack(alignment: .leading, spacing: 1) {
+                                                    Text(verbatim: suggestion.title)
+                                                        .font(.subheadline)
+                                                        .foregroundStyle(.primary)
+                                                    if !suggestion.subtitle.isEmpty {
+                                                        Text(verbatim: suggestion.subtitle)
+                                                            .font(.caption)
+                                                            .foregroundStyle(.secondary)
+                                                            .lineLimit(1)
+                                                    }
+                                                }
+                                                Spacer(minLength: 0)
+                                            }
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .padding(.horizontal, 12)
+                                            .padding(.vertical, 10)
+                                            .contentShape(.rect)
+                                        }
+                                        .buttonStyle(.plain)
+                                        if index < visibleSuggestions.count - 1 { Divider() }
+                                    }
+                                }
+                                .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+                            }
                         }
 
                         TripCard(title: "When?", icon: "clock.fill") {
@@ -1174,8 +1456,8 @@ struct ItineraryStopEditorView: View {
             }
             .onAppear {
                 guard let stop else { return }
-                name = stop.name
                 kind = stop.kind
+                names[stop.kind] = stop.name
                 if let stopTime = stop.time {
                     hasTime = true
                     time = stopTime
@@ -1183,7 +1465,42 @@ struct ItineraryStopEditorView: View {
                 costText = stop.cost > 0 ? String(format: "%.2f", stop.cost) : ""
                 notes = stop.notes
             }
+            .task {
+                placeCompleter.setKind(kind)
+                await biasToDestination()
+            }
+            .onChange(of: kind) { _, newKind in
+                placeCompleter.setKind(newKind)
+                placeCompleter.update(query: names[newKind] ?? "")
+            }
+            .onChange(of: names) {
+                if isSelectingPlace {
+                    isSelectingPlace = false
+                    return
+                }
+                placeCompleter.update(query: name)
+            }
         }
+    }
+
+    private func select(_ suggestion: MKLocalSearchCompletion) {
+        isSelectingPlace = true
+        names[kind] = suggestion.title
+        placeCompleter.clear()
+        nameFocused = false
+    }
+
+    /// Geocodes the trip's destination once so suggestions rank places there rather
+    /// than around the device's current location.
+    private func biasToDestination() async {
+        guard let locationHint, !locationHint.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        let request = MKLocalSearch.Request()
+        request.naturalLanguageQuery = locationHint
+        guard let item = try? await MKLocalSearch(request: request).start().mapItems.first else { return }
+        placeCompleter.bias(to: MKCoordinateRegion(
+            center: item.placemark.coordinate,
+            span: MKCoordinateSpan(latitudeDelta: 1, longitudeDelta: 1)
+        ))
     }
 
     private func save() {
