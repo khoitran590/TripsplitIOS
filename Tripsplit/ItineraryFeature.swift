@@ -1391,11 +1391,11 @@ struct ItineraryDetailView: View {
                     isPresented: $showApplyConfirm,
                     titleVisibility: .visible
                 ) {
-                    Button("Add \(suggestion.stopCount) stops to my days") {
+                    Button("Replace my plan with \(suggestion.stopCount) stops", role: .destructive) {
                         applySuggestion()
                     }
                 } message: {
-                    Text("The suggested stops are added to your day-by-day plan. You can edit or remove any of them afterwards.")
+                    Text("The suggested stops replace whatever is currently in your day-by-day plan. You can edit or remove any of them afterwards.")
                 }
 
                 Button {
@@ -1571,11 +1571,15 @@ struct ItineraryDetailView: View {
         }
     }
 
-    /// Fills the suggestion into the user's plan: stops are appended to the matching
-    /// day (extra suggested days are added at the end), then the draft is cleared.
+    /// Fills the suggestion into the user's plan: the suggested stops replace whatever
+    /// is currently in each day (extra suggested days are added at the end, extra
+    /// existing days are cleared), then the draft is cleared.
     private func applySuggestion() {
         guard var itinerary = store.trip(tripID)?.itinerary,
               let suggestion = itinerary.suggestion else { return }
+        for index in itinerary.days.indices {
+            itinerary.days[index].stops.removeAll()
+        }
         for (index, day) in suggestion.days.enumerated() {
             while itinerary.days.count <= index && itinerary.days.count < 30 {
                 itinerary.days.append(ItineraryDay())
@@ -1590,7 +1594,7 @@ struct ItineraryDetailView: View {
                     cost: SplitEngine.roundToTwo(suggested.cost)
                 )
             }
-            itinerary.days[index].stops.append(contentsOf: stops)
+            itinerary.days[index].stops = stops
         }
         itinerary.suggestion = nil
         store.updateItinerary(itinerary, in: tripID)
