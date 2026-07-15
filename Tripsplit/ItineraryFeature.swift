@@ -274,6 +274,21 @@ extension TripStore {
 /// server-side only (hard rule: no API keys in the app bundle); the app sends the
 /// trip context plus the signed-in user's JWT and gets back a structured plan.
 enum ItineraryAI {
+    /// Dedicated session for plan generation: same hardening as
+    /// `BackendSecurity.secureSession` (ephemeral, no cookies/cache, auth-preserving
+    /// redirects) but with timeouts sized for a search-grounded Gemini call — the
+    /// shared session's 20s request / 60s resource limits time out long drafts.
+    nonisolated static let session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 150
+        configuration.timeoutIntervalForResource = 150
+        configuration.waitsForConnectivity = true
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: configuration, delegate: RedirectAuthPreserver(), delegateQueue: nil)
+    }()
+
     static func suggest(trip: Trip, itinerary: Itinerary, accessToken: String) async throws -> ItinerarySuggestion {
         guard let url = URL(string: "\(SupabaseConfig.url)/functions/v1/suggest-itinerary") else {
             throw AuthError(message: "AI suggestions are not configured.")
@@ -300,7 +315,7 @@ enum ItineraryAI {
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
-        let (data, response) = try await BackendSecurity.secureSession.data(for: request)
+        let (data, response) = try await Self.session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw AuthError(message: "The suggestion service didn't respond.")
         }
