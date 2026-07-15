@@ -1,6 +1,7 @@
 import SwiftUI
 import MapKit
 import Combine
+import PhotosUI
 
 // MARK: - Models
 
@@ -786,6 +787,12 @@ struct ItineraryDetailView: View {
     /// Jump to the in-progress day once per appearance, not on every re-render.
     @State private var didAutoSelectDay = false
 
+    // Trip photo state. The itinerary shares `Trip.coverImageURL` with the trip
+    // detail screen, so a photo set on either side shows on both.
+    @State private var coverPick: PhotosPickerItem?
+    @State private var isUploadingCover = false
+    @State private var coverError: String?
+
     // AI planner state.
     @State private var isGeneratingPlan = false
     @State private var aiMessage: String?
@@ -872,6 +879,22 @@ struct ItineraryDetailView: View {
         }
         .sheet(isPresented: $showTripDetails) {
             TripDetailView(tripID: tripID)
+        }
+        .onChange(of: coverPick) { _, pick in
+            guard let pick else { return }
+            coverPick = nil
+            uploadCover(pick)
+        }
+        .alert(
+            "Couldn't set the trip photo",
+            isPresented: Binding(
+                get: { coverError != nil },
+                set: { if !$0 { coverError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(verbatim: coverError ?? "")
         }
         .confirmationDialog(
             "Remove this itinerary?",
@@ -963,6 +986,65 @@ struct ItineraryDetailView: View {
                 .padding(.vertical, 4)
                 .background(.black.opacity(0.45), in: .capsule)
                 .padding(10)
+        }
+        .overlay(alignment: .topLeading) {
+            PhotosPicker(selection: $coverPick, matching: .images) {
+                HStack(spacing: 5) {
+                    if isUploadingCover {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .tint(.white)
+                    } else {
+                        Image(systemName: "camera.fill")
+                            .font(.caption2.weight(.bold))
+                    }
+                    if !hasCover(trip) {
+                        Text("Add photo")
+                            .font(.caption2.weight(.bold))
+                    }
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .background(.black.opacity(0.45), in: .capsule)
+                .padding(10)
+            }
+            .buttonStyle(.plain)
+            .disabled(isUploadingCover)
+            .accessibilityLabel(hasCover(trip) ? "Change trip photo" : "Add trip photo")
+        }
+    }
+
+    private func hasCover(_ trip: Trip) -> Bool {
+        if let stored = trip.coverImageURL, !stored.isEmpty { return true }
+        return false
+    }
+
+    /// Uploads a newly picked photo as the trip cover. This writes the same
+    /// `Trip.coverImageURL` the trip detail / edit screen uses, so whichever side
+    /// sets a photo first, both show it.
+    private func uploadCover(_ pick: PhotosPickerItem) {
+        isUploadingCover = true
+        Task {
+            defer { isUploadingCover = false }
+            guard let data = try? await pick.loadTransferable(type: Data.self),
+                  let jpeg = await UploadImagePreparation.jpegData(
+                      from: data,
+                      maxPixelSize: 1_600,
+                      compressionQuality: 0.72
+                  )
+            else {
+                coverError = "Couldn't prepare that photo. Try a different one."
+                return
+            }
+            do {
+                let path = try await store.uploadTripCover(jpeg, tripID: tripID)
+                guard var updated = store.trip(tripID) else { return }
+                updated.coverImageURL = path
+                store.updateTrip(updated)
+            } catch {
+                coverError = (error as? AuthError)?.message ?? "Couldn't upload the photo. Check your connection and try again."
+            }
         }
     }
 
