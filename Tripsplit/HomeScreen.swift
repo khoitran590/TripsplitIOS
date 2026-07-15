@@ -280,25 +280,7 @@ struct HomeScreen: View {
             .padding(.horizontal, 14).padding(.vertical, 10)
             .glassEffect(.regular, in: .rect(cornerRadius: 14))
         case .failed:
-            HStack(spacing: 10) {
-                Image(systemName: "exclamationmark.icloud.fill").foregroundStyle(.white)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Couldn't save to cloud").font(.caption.weight(.bold)).foregroundStyle(.white)
-                    Text(store.syncErrorMessage ?? "Changes are saved on this device only.")
-                        .font(.caption2).foregroundStyle(.white.opacity(0.85))
-                }
-                Spacer()
-                Button { store.retrySync() } label: {
-                    Text("Retry").font(.caption.weight(.bold)).foregroundStyle(Color(hex: 0xDC2626))
-                        .padding(.horizontal, 12).padding(.vertical, 6)
-                        .background(.white, in: .capsule)
-                        .frame(minWidth: 44, minHeight: 44)
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 14).padding(.vertical, 10)
-            .background(Color(hex: 0xDC2626), in: .rect(cornerRadius: 14))
+            SyncFailureBanner()
         }
     }
 
@@ -604,6 +586,35 @@ struct HomeScreen: View {
 
 /// The gradient budget card. Totals are aggregated across every trip the user is part of.
 /// Tapping the convert button flips the card to reveal a live currency converter on the back.
+/// Retryable "couldn't save to cloud" banner. Shown inline on Home and overlaid on
+/// every other tab (see `ContentView`), so a failed trip save is never silent no
+/// matter where the edit happened — itinerary edits in Explore included.
+struct SyncFailureBanner: View {
+    @Environment(TripStore.self) private var store
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.icloud.fill").foregroundStyle(.white)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Couldn't save to cloud").font(.caption.weight(.bold)).foregroundStyle(.white)
+                Text(store.syncErrorMessage ?? "Changes are saved on this device only.")
+                    .font(.caption2).foregroundStyle(.white.opacity(0.85))
+            }
+            Spacer()
+            Button { store.retrySync() } label: {
+                Text("Retry").font(.caption.weight(.bold)).foregroundStyle(Color(hex: 0xDC2626))
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .background(.white, in: .capsule)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(Color(hex: 0xDC2626), in: .rect(cornerRadius: 14))
+    }
+}
+
 struct BalanceCard: View {
     @Environment(TripStore.self) private var store
     @State private var showConverter = false

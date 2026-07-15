@@ -1325,9 +1325,20 @@ final class TripStore {
             }
             healed.append(anchored)
         }
-        await MainActor.run { self.trips = healed }
+        // Never let the reload clobber local state the cloud hasn't seen yet:
+        // - a trip with a save still in flight keeps its local (newer) copy rather
+        //   than briefly rolling back to the stale cloud version;
+        // - a trip missing from the cloud entirely (its first save failed, e.g.
+        //   while the session was broken) is kept and re-uploaded instead of
+        //   silently dropped — dropping it here destroyed the only copy.
+        let cloudIDs = Set(healed.map(\.id))
+        var merged = healed.map { pendingTripSaves[$0.id] ?? $0 }
+        let localOnly = trips.filter { !cloudIDs.contains($0.id) && !pendingDeletions.contains($0.id) }
+        merged.append(contentsOf: localOnly)
+        await MainActor.run { self.trips = merged }
         cacheTripsLocally()
-        for trip in healed where toPersist.contains(trip.id) { persist(trip) }
+        for trip in merged where toPersist.contains(trip.id) { persist(trip) }
+        for trip in localOnly { persist(trip) }
     }
 
     /// Pushes a single shared trip (members, budgets, and expenses) to Supabase, updating
@@ -1637,6 +1648,24 @@ final class TripStore {
 
     func isFullySettled(tripID: Trip.ID, _ settlement: Settlement) -> Bool {
         remaining(tripID: tripID, for: settlement) <= 0.005
+    }
+
+    /// The creditor's one-tap "they paid me back": records the full remaining balance
+    /// of a transfer as an already-confirmed payment, so the debt drops out of the
+    /// Settle Up card and shows under the trip's History.
+    func confirmSettled(tripID: Trip.ID, settlement: Settlement) {
+        guard let index = trips.firstIndex(where: { $0.id == tripID }) else { return }
+        let rem = remaining(tripID: tripID, for: settlement)
+        guard rem > 0.005 else { return }
+        trips[index].settlementRecords[settleKey(settlement), default: []].insert(
+            SettlementRecord(
+                amount: rem, method: .cash,
+                note: String(localized: "Marked as paid"),
+                status: .confirmed, date: Date()
+            ),
+            at: 0
+        )
+        persist(trips[index])
     }
 
     // MARK: Comments
@@ -2599,6 +2628,7 @@ struct TripDetailView: View {
     @State private var showSignInAlert = false
     @State private var scrollToSettle = false
     @State private var activeSettlement: Settlement?
+    @State private var settlementToConfirm: Settlement?
     @State private var expandedCreditors: Set<Person.ID> = []
     @State private var showSettleInfo = false
     @State private var manualMemberName = ""
@@ -2699,6 +2729,23 @@ struct TripDetailView: View {
                     currencyCode: trip?.currencyCode ?? "USD",
                     currentUserID: store.currentUser.id
                 )
+            }
+            .alert(
+                "Confirm payment",
+                isPresented: Binding(
+                    get: { settlementToConfirm != nil },
+                    set: { if !$0 { settlementToConfirm = nil } }
+                ),
+                presenting: settlementToConfirm
+            ) { settlement in
+                Button("Mark as Paid") {
+                    withAnimation(.snappy) {
+                        store.confirmSettled(tripID: tripID, settlement: settlement)
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { settlement in
+                Text("Did \(settlement.from.name) pay you back \(money(store.remaining(tripID: tripID, for: settlement), trip?.currencyCode ?? "USD"))?")
             }
         }
     }
@@ -3035,7 +3082,8 @@ struct TripDetailView: View {
     }
 
     private func settleCard(_ trip: Trip) -> some View {
-        let settlements = trip.settlements()
+        // Confirmed-paid transfers drop out of this card and reappear under History.
+        let settlements = trip.settlements().filter { !store.isFullySettled(tripID: tripID, $0) }
         return TripCard(title: "Settle Up", icon: "arrow.left.arrow.right.circle.fill") {
             if settlements.isEmpty {
                 Text("All settled up — no transfers needed.")
@@ -3153,6 +3201,20 @@ struct TripDetailView: View {
                 Text(money(store.remaining(tripID: tripID, for: settlement), trip.currencyCode))
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Color(hex: 0x10B981))
+                // Only the creditor can confirm they were actually paid back.
+                if settlement.to.id == me {
+                    Button {
+                        settlementToConfirm = settlement
+                    } label: {
+                        Text("Mark Paid")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Color(hex: 0x10B981))
+                            .padding(.horizontal, 10).padding(.vertical, 6)
+                            .background(Color(hex: 0x10B981).opacity(0.15), in: .capsule)
+                            .contentShape(.capsule)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
             Image(systemName: "chevron.right")
                 .font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
@@ -3453,7 +3515,8 @@ struct TripDetailView: View {
     }
 
     private func expensesCard(_ trip: Trip) -> some View {
-        TripCard(title: "Expenses (\(trip.expenses.count))", icon: "list.bullet.rectangle.fill") {
+        let settled = trip.settlements().filter { store.isFullySettled(tripID: tripID, $0) }
+        return TripCard(title: "History", icon: "clock.arrow.circlepath") {
             if trip.expenses.isEmpty {
                 Text("No expenses yet. Tap Add Expense to log one.")
                     .font(.subheadline).italic()
@@ -3461,9 +3524,12 @@ struct TripDetailView: View {
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 8)
             } else {
-                // Lazy so a trip with hundreds of expenses only builds the rows that
-                // scroll into view, instead of all of them on the first body pass.
-                LazyVStack(spacing: 8) {
+                Text("Expenses (\(trip.expenses.count))")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                // Eager (not Lazy) on purpose: a LazyVStack here re-measured rows as
+                // they scrolled back into view, hitching the scroll-up out of this card.
+                VStack(spacing: 8) {
                     ForEach(trip.expenses) { expense in
                         let link = NavigationLink {
                             ExpenseDetailView(tripID: tripID, expense: expense)
@@ -3484,7 +3550,54 @@ struct TripDetailView: View {
                     }
                 }
             }
+
+            if !settled.isEmpty {
+                Divider()
+                Text("Settled payments")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                ForEach(settled) { settlement in
+                    Button {
+                        activeSettlement = settlement
+                    } label: {
+                        settledPaymentRow(trip, settlement)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
         }
+    }
+
+    /// A confirmed-paid transfer, shown under History once the creditor marks it paid.
+    private func settledPaymentRow(_ trip: Trip, _ settlement: Settlement) -> some View {
+        let me = store.currentUser.id
+        let fromLabel = settlement.from.id == me ? String(localized: "You") : settlement.from.name
+        let toLabel = settlement.to.id == me ? String(localized: "you") : settlement.to.name
+        let paidDate = store.history(tripID: tripID, for: settlement)
+            .filter { $0.status == .confirmed }
+            .map(\.date).max()
+        return HStack(spacing: 8) {
+            avatar(settlement.from, size: 30)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(fromLabel) paid \(toLabel)")
+                    .font(.subheadline).fontWeight(.semibold)
+                if let paidDate {
+                    Text(paidDate.formatted(date: .abbreviated, time: .omitted))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            Text(money(settlement.amount, trip.currencyCode))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Label("Paid", systemImage: "checkmark.seal.fill")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color(hex: 0x10B981))
+            Image(systemName: "chevron.right")
+                .font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
+        }
+        .padding(.vertical, 4)
+        .contentShape(.rect)
     }
 
     /// Whether the signed-in account may edit or delete an expense. The trip owner may

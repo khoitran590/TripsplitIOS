@@ -128,6 +128,17 @@ struct ContentView: View {
                 .contentShape(.rect)
                 .padding(.bottom, 8)
         }
+        // A failed cloud save must be visible wherever the edit happened, not only on
+        // Home (which shows the same banner inline in its scroll content) — itinerary
+        // edits in Explore used to fail without any feedback at all.
+        .overlay(alignment: .top) {
+            if store.syncState == .failed && selectedTab != .home {
+                SyncFailureBanner()
+                    .padding(.horizontal)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.snappy, value: store.syncState)
         .onChange(of: selectedTab) { _, tab in visitedTabs.insert(tab) }
         // Sign-in happens in the profile sheet (it hosts `AuthView` when signed out);
         // once authentication succeeds, land the user on Home.
