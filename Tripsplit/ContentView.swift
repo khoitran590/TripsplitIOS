@@ -1721,6 +1721,10 @@ struct RecScreen: View {
 
     /// Presents the build-your-own-itinerary flow (ItineraryFeature.swift).
     @State private var showCreateItinerary = false
+    /// A short, Explore-specific walkthrough shown the first time a member opens
+    /// this tab. It ends at the itinerary builder so discovery turns into action.
+    @AppStorage("hasSeenExploreOnboarding") private var hasSeenExploreOnboarding = false
+    @State private var showExploreOnboarding = false
 
     // Filters
     @State private var showFilterSheet = false
@@ -1958,6 +1962,20 @@ struct RecScreen: View {
                     navigationPath.append(newTripID)
                 }
             }
+            .fullScreenCover(isPresented: $showExploreOnboarding) {
+                ExploreOnboardingView {
+                    hasSeenExploreOnboarding = true
+                    showExploreOnboarding = false
+                } onBuildItinerary: {
+                    hasSeenExploreOnboarding = true
+                    showExploreOnboarding = false
+                    // Wait for the full-screen cover to finish handing control back
+                    // before presenting the itinerary sheet.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        showCreateItinerary = true
+                    }
+                }
+            }
             .sheet(isPresented: $showFilterSheet) {
                 ExploreFilterSheet(
                     tripLength: $tripLength,
@@ -1968,6 +1986,11 @@ struct RecScreen: View {
                 )
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
+            }
+            .onAppear {
+                if !hasSeenExploreOnboarding {
+                    showExploreOnboarding = true
+                }
             }
         }
     }
@@ -3807,49 +3830,53 @@ struct PlaceholderScreen: View {
 
 // MARK: - Dock
 
-/// A Liquid Glass floating dock that morphs a tinted highlight onto the active tab.
+/// Compact bordered capsule inspired by the supplied expanding-label navigation:
+/// inactive tabs stay icon-only and the active tab springs open to reveal its name.
 struct FloatingDock: View {
     @Binding var selectedTab: DockTab
-    @Namespace private var glassNamespace
 
     var body: some View {
-        GlassEffectContainer(spacing: 18) {
-            HStack(spacing: 8) {
-                ForEach(DockTab.allCases, id: \.self) { tab in
-                    let isActive = tab == selectedTab
+        HStack(spacing: 4) {
+            ForEach(DockTab.allCases, id: \.self) { tab in
+                let isActive = tab == selectedTab
 
-                    Button {
-                        select(tab)
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: tab.systemImage)
-                                .font(.system(size: 19, weight: .semibold))
-                            if isActive {
-                                // rawValue is the English key; wrap so it localizes.
-                                Text(LocalizedStringKey(tab.rawValue))
-                                    .font(.subheadline.weight(.semibold))
-                                    .fixedSize()
-                                    .transition(.opacity.combined(with: .scale))
-                            }
+                Button { select(tab) } label: {
+                    HStack(spacing: isActive ? 8 : 0) {
+                        Image(systemName: tab.systemImage)
+                            .font(.system(size: 19, weight: .semibold))
+                            .frame(width: 22)
+                        if isActive {
+                            Text(LocalizedStringKey(tab.rawValue))
+                                .font(.caption.weight(.semibold))
+                                .lineLimit(1)
+                                .fixedSize()
+                                .transition(.opacity.combined(with: .move(edge: .leading)))
                         }
-                        // Enforce a comfortable ≥44pt tap target per tab and make the
-                        // whole capsule (not just the glyph) tappable, so neighboring
-                        // tabs are harder to hit by accident.
-                        .frame(minWidth: isActive ? 0 : 48, minHeight: 48)
-                        .padding(.horizontal, isActive ? 18 : 14)
-                        .foregroundStyle(isActive ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
-                        .contentShape(.capsule)
                     }
-                    .buttonStyle(.plain)
-                    .glassEffect(
-                        isActive ? .regular.tint(.accentColor).interactive() : .regular.interactive(),
+                    .foregroundStyle(
+                        isActive ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.secondary)
+                    )
+                    .frame(minWidth: 44, minHeight: 44)
+                    .padding(.horizontal, isActive ? 13 : 4)
+                    .background(
+                        isActive ? Theme.accent.opacity(0.13) : Color.clear,
                         in: .capsule
                     )
-                    .glassEffectID(tab, in: glassNamespace)
+                    .contentShape(.capsule)
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text(LocalizedStringKey(tab.rawValue)))
+                .accessibilityAddTraits(isActive ? .isSelected : [])
             }
-            .padding(6)
         }
+        .padding(6)
+        .background(.regularMaterial, in: .capsule)
+        .overlay {
+            Capsule().strokeBorder(.primary.opacity(0.12), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.14), radius: 14, y: 6)
+        .frame(maxWidth: .infinity)
+        .animation(.spring(response: 0.38, dampingFraction: 0.82), value: selectedTab)
         // Make the whole bottom strip swipeable, not just the capsule itself, so a
         // thumb swipe anywhere along the dock changes tabs — while staying confined
         // to the dock area (a screen-wide gesture would steal map pans and Explore's
@@ -3887,11 +3914,8 @@ struct FloatingDock: View {
 
     private func select(_ tab: DockTab) {
         guard tab != selectedTab else { return }
-        // Dock selection is state-only. Removing the layout animation keeps taps
-        // responsive even while a map or photo view is busy.
-        var transaction = SwiftUI.Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
+        UISelectionFeedbackGenerator().selectionChanged()
+        withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
             selectedTab = tab
         }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
