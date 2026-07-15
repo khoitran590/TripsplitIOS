@@ -467,6 +467,15 @@ struct ItineraryTripCard: View {
     }
 }
 
+/// Trips whose planner should kick off an AI draft as soon as it first opens —
+/// set by `CreateItineraryView` when the user opts in during the build flow, and
+/// consumed once by `ItineraryDetailView.onAppear`. Session-scoped on purpose:
+/// if the app quits before the planner opens, the user can still tap the AI card.
+@MainActor
+enum ItineraryAutoPlan {
+    static var pending: Set<Trip.ID> = []
+}
+
 // MARK: - Create itinerary
 
 /// Sheet that builds a new itinerary from scratch: name, destination, total budget,
@@ -487,6 +496,8 @@ struct CreateItineraryView: View {
     @State private var startDate = Date()
     @State private var memberName = ""
     @State private var members: [Person] = []
+    /// Whether the AI planner should draft a day-by-day plan right after creation.
+    @State private var wantsAIPlan = false
 
     private var budget: Double { Double(budgetText) ?? 0 }
 
@@ -505,6 +516,7 @@ struct CreateItineraryView: View {
                         whereCard
                         budgetCard
                         daysCard
+                        aiPlanCard
                         friendsCard
                     }
                     .padding()
@@ -605,6 +617,20 @@ struct CreateItineraryView: View {
                 DatePicker("Starts", selection: $startDate, displayedComponents: .date)
                     .font(.subheadline)
             }
+        }
+    }
+
+    /// Asks — right after the day count is set — whether the AI planner should put
+    /// together a day-to-day plan. Opting in queues an automatic draft that starts
+    /// the moment the new itinerary's planner opens.
+    private var aiPlanCard: some View {
+        TripCard(title: "AI trip planner", icon: "sparkles") {
+            Text("Want AI to put together a day-to-day plan for your \(dayCount) day\(dayCount == 1 ? "" : "s")? It drafts places to go, things to do, and where to eat — you choose whether to add or discard it.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            Toggle("Draft my days with AI", isOn: $wantsAIPlan)
+                .font(.subheadline.weight(.medium))
+                .tint(Theme.accent)
         }
     }
 
@@ -716,6 +742,7 @@ struct CreateItineraryView: View {
             itinerary: itinerary
         )
         store.addTrip(trip)
+        if wantsAIPlan { ItineraryAutoPlan.pending.insert(trip.id) }
         onCreated(trip.id)
         dismiss()
     }
@@ -819,7 +846,15 @@ struct ItineraryDetailView: View {
                 }
             }
         }
-        .onAppear { autoSelectCurrentDay(trip, itinerary) }
+        .onAppear {
+            autoSelectCurrentDay(trip, itinerary)
+            // Opted into an AI draft while building this itinerary: start it now, so
+            // the planner opens straight into the "Planning your days…" state.
+            if ItineraryAutoPlan.pending.remove(tripID) != nil,
+               itinerary.suggestion == nil, !isGeneratingPlan {
+                generateSuggestion(trip, itinerary)
+            }
+        }
         .sheet(isPresented: $showTripDetails) {
             TripDetailView(tripID: tripID)
         }

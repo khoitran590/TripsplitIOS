@@ -79,16 +79,24 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: "AI suggestions are not configured." }, 503);
   }
 
-  // 5. Call Gemini with the server-side key; retry once on the fallback model when the
-  // preferred model id isn't recognized.
+  // 5. Call Gemini with the server-side key. Best case first: the preferred model
+  // grounded with Google Search so places, hours, and prices come from the live web.
+  // Degrade gracefully — same model without search (older models reject the
+  // search-tool + JSON-schema combination), then the fallback model — but don't
+  // burn retries when the failure was quota (429): that hits every variant alike.
   const prompt = buildPrompt({ location, days, currency, totalBudget, startDate, existingPlan });
-  const first = await callGemini(SUGGEST_MODEL, prompt);
+  const first = await callGemini(SUGGEST_MODEL, prompt, { useSearch: true });
   let plan = first.plan;
   let upstreamStatus = first.status;
-  if (!plan && SUGGEST_MODEL !== FALLBACK_MODEL) {
-    const second = await callGemini(FALLBACK_MODEL, prompt);
+  if (!plan && upstreamStatus !== 429) {
+    const second = await callGemini(SUGGEST_MODEL, prompt, { useSearch: false });
     plan = second.plan;
     if (!plan) upstreamStatus = second.status;
+  }
+  if (!plan && upstreamStatus !== 429 && SUGGEST_MODEL !== FALLBACK_MODEL) {
+    const third = await callGemini(FALLBACK_MODEL, prompt, { useSearch: false });
+    plan = third.plan;
+    if (!plan) upstreamStatus = third.status;
   }
   if (!plan) {
     // Surface quota exhaustion distinctly — it's an account/billing condition the
@@ -153,6 +161,11 @@ ${budgetLine}
 ${dateLine}
 ${existingBlock}
 
+RESEARCH — you have Google Search available; use it
+- Before choosing stops, search for the currently best-reviewed restaurants, attractions, and things to do in ${input.location}, including well-loved local spots that aren't in every guidebook.
+- Verify every place you include still exists and is open — skip anything permanently or temporarily closed, and prefer what you find in search results over memory.
+- Check current opening days/hours, entry fees, and typical meal prices, and use those real numbers for "time" feasibility and "cost".
+
 OUTPUT RULES
 - Output exactly ${input.days} days, in order.
 - Give each day a short theme title, 2–4 words (e.g. "Old town & markets").
@@ -173,11 +186,14 @@ PLANNING RULES — how a professional builds a day
 - If stops are already planned (listed above), never repeat them; fill the same day's remaining hours around their times and keep that day's geography coherent with them.`;
 }
 
-// Calls Gemini once with constrained JSON decoding. Returns the normalized plan, or a
-// null plan plus the upstream HTTP status so quota errors can be reported distinctly.
+// Calls Gemini once with constrained JSON decoding, optionally grounded with Google
+// Search so the plan draws on live web results (real opening hours, current prices,
+// still-open restaurants). Returns the normalized plan, or a null plan plus the
+// upstream HTTP status so quota errors can be reported distinctly.
 async function callGemini(
   model: string,
   prompt: string,
+  options: { useSearch: boolean },
 ): Promise<{ plan: Record<string, unknown> | null; status: number }> {
   let geminiResponse: Response;
   try {
@@ -188,6 +204,7 @@ async function callGemini(
         headers: JSON_HEADERS,
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
+          ...(options.useSearch ? { tools: [{ google_search: {} }] } : {}),
           generationConfig: {
             responseMimeType: "application/json",
             temperature: 0.7,
@@ -235,8 +252,12 @@ async function callGemini(
   }
 
   const geminiJson = await geminiResponse.json().catch(() => null);
-  const rawText = geminiJson?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (typeof rawText !== "string") return { plan: null, status: 200 };
+  // Grounded responses can split the answer across several parts; join every text part.
+  const parts = geminiJson?.candidates?.[0]?.content?.parts;
+  const rawText = Array.isArray(parts)
+    ? parts.map((p) => (typeof p?.text === "string" ? p.text : "")).join("")
+    : null;
+  if (typeof rawText !== "string" || rawText.length === 0) return { plan: null, status: 200 };
 
   try {
     return { plan: normalizePlan(JSON.parse(stripFences(rawText))), status: 200 };
