@@ -6,8 +6,19 @@
 	objectVersion = 90;
 	objects = {
 
+/* Begin PBXContainerItemProxy section */
+		000000000000000150000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 000000000000000000000000 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 000000000000000100000000;
+			remoteInfo = Tripsplit;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		000000000000000000000120 /* Tripsplit.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Tripsplit.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		000000000000000000000121 /* TripsplitAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TripsplitAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -29,10 +40,20 @@
 			path = Tripsplit;
 			sourceTree = "<group>";
 		};
+		000000000000000000000011 /* TripsplitAppTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = TripsplitAppTests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		000000000000000130000000 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
+		000000000000000130000001 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
 			);
@@ -44,6 +65,7 @@
 			isa = PBXGroup;
 			children = (
 				000000000000000000000010 /* Tripsplit */,
+				000000000000000000000011 /* TripsplitAppTests */,
 				000000000000000000000020 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -52,6 +74,7 @@
 			isa = PBXGroup;
 			children = (
 				000000000000000000000120 /* Tripsplit.app */,
+				000000000000000000000121 /* TripsplitAppTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -77,6 +100,27 @@
 			productReference = 000000000000000000000120 /* Tripsplit.app */;
 			productType = "com.apple.product-type.application";
 		};
+		000000000000000100000001 /* TripsplitAppTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 000000000000000110000001 /* Build configuration list for PBXNativeTarget "TripsplitAppTests" */;
+			buildPhases = (
+				000000000000000120000001 /* Sources */,
+				000000000000000130000001 /* Frameworks */,
+				000000000000000140000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				000000000000000160000001 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				000000000000000000000011 /* TripsplitAppTests */,
+			);
+			name = TripsplitAppTests;
+			productName = TripsplitAppTests;
+			productReference = 000000000000000000000121 /* TripsplitAppTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -89,6 +133,10 @@
 				TargetAttributes = {
 					000000000000000100000000 = {
 						CreatedOnToolsVersion = 26.3;
+					};
+					000000000000000100000001 = {
+						CreatedOnToolsVersion = 26.3;
+						TestTargetID = 000000000000000100000000;
 					};
 				};
 			};
@@ -109,12 +157,18 @@
 			projectRoot = "";
 			targets = (
 				000000000000000100000000 /* Tripsplit */,
+				000000000000000100000001 /* TripsplitAppTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		000000000000000140000000 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+		000000000000000140000001 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
 			);
@@ -127,7 +181,20 @@
 			files = (
 			);
 		};
+		000000000000000120000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		000000000000000160000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 000000000000000100000000 /* Tripsplit */;
+			targetProxy = 000000000000000150000001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		000000000000000011000000 /* Debug configuration for PBXProject "Tripsplit" */ = {
@@ -311,6 +378,25 @@
 			};
 			name = Debug;
 		};
+		000000000000000111000001 /* Debug configuration for PBXNativeTarget "TripsplitAppTests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = Q93JX79T7M;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.Petertran.tripsplit.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Tripsplit.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Tripsplit";
+			};
+			name = Debug;
+		};
 		000000000000000112000000 /* Release configuration for PBXNativeTarget "Tripsplit" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -360,6 +446,25 @@
 			};
 			name = Release;
 		};
+		000000000000000112000001 /* Release configuration for PBXNativeTarget "TripsplitAppTests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = Q93JX79T7M;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.Petertran.tripsplit.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Tripsplit.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Tripsplit";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -376,6 +481,14 @@
 			buildConfigurations = (
 				000000000000000111000000 /* Debug configuration for PBXNativeTarget "Tripsplit" */,
 				000000000000000112000000 /* Release configuration for PBXNativeTarget "Tripsplit" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		000000000000000110000001 /* Build configuration list for PBXNativeTarget "TripsplitAppTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				000000000000000111000001 /* Debug configuration for PBXNativeTarget "TripsplitAppTests" */,
+				000000000000000112000001 /* Release configuration for PBXNativeTarget "TripsplitAppTests" */,
 			);
 			defaultConfigurationName = Release;
 		};

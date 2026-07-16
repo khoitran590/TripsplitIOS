@@ -1,287 +1,6 @@
 import SwiftUI
 
-// MARK: - Models
 
-/// A trip member who can pay for or share in an expense.
-struct Person: Identifiable, Hashable, Codable {
-    var id = UUID()
-    var name: String
-    var color: Color
-    /// Public URL of the member's profile picture in Supabase Storage, if they have one.
-    var avatarURL: String? = nil
-
-    var initials: String {
-        let parts = name.split(separator: " ")
-        let letters = parts.prefix(2).compactMap { $0.first }
-        return String(letters).uppercased()
-    }
-
-    // `Color` isn't `Codable`, so members persist their color as a hex integer.
-    private enum CodingKeys: String, CodingKey { case id, name, colorHex, avatarURL }
-
-    init(id: UUID = UUID(), name: String, color: Color, avatarURL: String? = nil) {
-        self.id = id
-        self.name = name
-        self.color = color
-        self.avatarURL = avatarURL
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(UUID.self, forKey: .id)
-        name = try container.decode(String.self, forKey: .name)
-        color = Color(hex: try container.decode(UInt32.self, forKey: .colorHex))
-        avatarURL = try container.decodeIfPresent(String.self, forKey: .avatarURL)
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(id, forKey: .id)
-        try container.encode(name, forKey: .name)
-        try container.encode(color.hexValue, forKey: .colorHex)
-        try container.encodeIfPresent(avatarURL, forKey: .avatarURL)
-    }
-}
-
-/// The supported ways to split an expense, mirroring TripSplit's `splitMethods`.
-enum SplitMethod: String, CaseIterable, Identifiable, Codable {
-    case equalAll = "Split Equally (All)"
-    case equalSelected = "Split Equally (Selected)"
-    case noSplit = "No Split (Single Payer)"
-    case percentage = "Split by Percentage"
-    case amount = "Split by Amount"
-
-    var id: Self { self }
-
-    var shortLabel: String {
-        switch self {
-        case .equalAll: "Equal"
-        case .equalSelected: "Selected"
-        case .noSplit: "Single"
-        case .percentage: "Percent"
-        case .amount: "Amount"
-        }
-    }
-
-    /// Menu icons: consistent-weight, instantly readable metaphors — everyone,
-    /// a checked subset, one person, a proportional pie, and exact dollars.
-    var icon: String {
-        switch self {
-        case .equalAll: "person.3.fill"
-        case .equalSelected: "checkmark.circle.fill"
-        case .noSplit: "person.circle.fill"
-        case .percentage: "chart.pie.fill"
-        case .amount: "dollarsign.circle.fill"
-        }
-    }
-}
-
-// MARK: - Split Engine
-
-/// The result of computing a split: each person's share, net balance, and validity.
-struct SplitResult {
-    /// Each person's share of the bill.
-    var owed: [Person.ID: Double] = [:]
-    /// Net balance per person: what they paid minus what they owe.
-    /// Positive means the group owes them; negative means they owe the group.
-    var net: [Person.ID: Double] = [:]
-    var isValid: Bool = true
-    var message: String?
-}
-
-/// Suggested transfer to settle up: `from` pays `to` the given `amount`.
-struct Settlement: Identifiable {
-    let id = UUID()
-    let from: Person
-    let to: Person
-    let amount: Double
-}
-
-/// How a settlement payment was made, mirroring TripSplit's settlement payment methods.
-enum PaymentMethod: String, CaseIterable, Identifiable, Codable {
-    case cash = "Cash"
-    case venmo = "Venmo"
-    case paypal = "PayPal"
-    case cashapp = "Cash App"
-
-    var id: Self { self }
-
-    var icon: String {
-        switch self {
-        case .cash: "banknote.fill"
-        case .venmo: "v.circle.fill"
-        case .paypal: "p.circle.fill"
-        case .cashapp: "dollarsign.circle.fill"
-        }
-    }
-}
-
-/// The lifecycle of a settlement request, mirroring TripSplit's `status` field:
-/// the debtor records a `pending` payment and the creditor confirms or declines it.
-enum SettlementStatus: String, Codable {
-    case pending, confirmed, rejected
-}
-
-/// A recorded settlement payment toward a debt between two people.
-struct SettlementRecord: Identifiable, Codable {
-    let id = UUID()
-    var amount: Double
-    var method: PaymentMethod
-    var note: String
-    var status: SettlementStatus
-    let date: Date
-}
-
-/// Pure split calculation, faithful to TripSplit's `calculateSplitPreview` +
-/// `splitService` rounding, with exact-cent remainder distribution added so the
-/// per-person shares always reconcile to the bill total.
-enum SplitEngine {
-
-    /// Rounds to two decimals using the same epsilon trick as `mathHelpers.roundToTwo`.
-    static func roundToTwo(_ value: Double) -> Double {
-        guard value.isFinite else { return 0 }
-        return ((value + Double.ulpOfOne) * 100).rounded() / 100
-    }
-
-    /// Splits `total` across `count` people, distributing leftover cents to the
-    /// first people so the parts sum exactly to `total` (largest-remainder method).
-    static func equalShares(total: Double, count: Int) -> [Double] {
-        guard count > 0 else { return [] }
-        let totalCents = Int((total * 100).rounded())
-        let base = totalCents / count
-        let remainder = totalCents - base * count
-        return (0..<count).map { index in
-            Double(base + (index < remainder ? 1 : 0)) / 100.0
-        }
-    }
-
-    /// Splits `amount` across people in proportion to `weights` (e.g. allocating tax/tip
-    /// by each person's subtotal share), distributing leftover cents by largest remainder
-    /// so the parts sum exactly to `amount`. Returns an empty map if there's no weight.
-    static func allocateProportionally(_ amount: Double, weights: [Person.ID: Double]) -> [Person.ID: Double] {
-        let totalWeight = weights.values.reduce(0, +)
-        let cents = Int((amount * 100).rounded())
-        guard totalWeight > 0, cents != 0 else { return [:] }
-
-        let keys = Array(weights.keys)
-        let exact = keys.map { Double(cents) * ((weights[$0] ?? 0) / totalWeight) }
-        var base = exact.map { Int($0.rounded(.down)) }
-        var leftover = cents - base.reduce(0, +)
-
-        // Hand the remaining cents to the largest fractional remainders first.
-        for index in (0..<keys.count).sorted(by: { (exact[$0] - Double(base[$0])) > (exact[$1] - Double(base[$1])) }) {
-            guard leftover > 0 else { break }
-            base[index] += 1
-            leftover -= 1
-        }
-
-        return Dictionary(uniqueKeysWithValues: zip(keys, base.map { Double($0) / 100.0 }))
-    }
-
-    /// Computes the per-person shares and net balances for the given configuration.
-    static func calculate(
-        total: Double,
-        method: SplitMethod,
-        people: [Person],
-        payer: Person.ID,
-        selected: Set<Person.ID>,
-        noSplitAssignee: Person.ID?,
-        percentages: [Person.ID: Double],
-        amounts: [Person.ID: Double]
-    ) -> SplitResult {
-        var result = SplitResult()
-        var owed: [Person.ID: Double] = [:]
-        people.forEach { owed[$0.id] = 0 }
-
-        switch method {
-        case .equalAll:
-            let shares = equalShares(total: total, count: people.count)
-            for (person, share) in zip(people, shares) { owed[person.id] = share }
-
-        case .equalSelected:
-            let chosen = people.filter { selected.contains($0.id) }
-            guard !chosen.isEmpty else {
-                result.isValid = false
-                result.message = "Select at least one person to split between."
-                result.owed = owed
-                return result
-            }
-            let shares = equalShares(total: total, count: chosen.count)
-            for (person, share) in zip(chosen, shares) { owed[person.id] = share }
-
-        case .noSplit:
-            guard let assignee = noSplitAssignee else {
-                result.isValid = false
-                result.message = "Choose who this expense belongs to."
-                result.owed = owed
-                return result
-            }
-            owed[assignee] = roundToTwo(total)
-
-        case .percentage:
-            let sum = people.reduce(0) { $0 + (percentages[$1.id] ?? 0) }
-            for person in people {
-                owed[person.id] = roundToTwo(total * (percentages[person.id] ?? 0) / 100.0)
-            }
-            if abs(sum - 100) > 0.01 {
-                result.isValid = false
-                result.message = String(format: "Percentages must add up to 100%% (now %.1f%%).", sum)
-            }
-
-        case .amount:
-            let sum = people.reduce(0) { $0 + (amounts[$1.id] ?? 0) }
-            for person in people {
-                owed[person.id] = roundToTwo(amounts[person.id] ?? 0)
-            }
-            if abs(sum - total) > 0.01 {
-                result.isValid = false
-                result.message = String(format: "Amounts must add up to %.2f (now %.2f).", total, sum)
-            }
-        }
-
-        // Net balance: the payer fronted the whole bill, everyone owes their share.
-        var net: [Person.ID: Double] = [:]
-        for person in people {
-            let paid = person.id == payer ? total : 0
-            net[person.id] = roundToTwo(paid - (owed[person.id] ?? 0))
-        }
-
-        result.owed = owed
-        result.net = net
-        return result
-    }
-
-    /// Greedy debt simplification: produces the minimum-ish set of transfers that
-    /// settles every net balance. (TripSplit settles manually; this is a helper.)
-    static func settleUp(net: [Person.ID: Double], people: [Person]) -> [Settlement] {
-        let lookup = Dictionary(uniqueKeysWithValues: people.map { ($0.id, $0) })
-        // Walk in `people` order (not dictionary order) and tie-break equal amounts by
-        // that order, so the same balances always produce the same transfer pairs —
-        // recorded payments are keyed by pair and must survive relaunches.
-        let ordered = people.enumerated().compactMap { index, person in
-            net[person.id].map { (id: person.id, amount: $0, order: index) }
-        }
-        var creditors = ordered.filter { $0.amount > 0.005 }
-            .sorted { $0.amount != $1.amount ? $0.amount > $1.amount : $0.order < $1.order }
-        var debtors = ordered.filter { $0.amount < -0.005 }
-            .map { (id: $0.id, amount: -$0.amount, order: $0.order) }
-            .sorted { $0.amount != $1.amount ? $0.amount > $1.amount : $0.order < $1.order }
-
-        var settlements: [Settlement] = []
-        var ci = 0, di = 0
-        while ci < creditors.count && di < debtors.count {
-            let pay = min(creditors[ci].amount, debtors[di].amount)
-            if let from = lookup[debtors[di].id], let to = lookup[creditors[ci].id] {
-                settlements.append(Settlement(from: from, to: to, amount: roundToTwo(pay)))
-            }
-            creditors[ci].amount -= pay
-            debtors[di].amount -= pay
-            if creditors[ci].amount <= 0.005 { ci += 1 }
-            if debtors[di].amount <= 0.005 { di += 1 }
-        }
-        return settlements
-    }
-}
 
 // MARK: - Split View
 
@@ -712,12 +431,14 @@ struct SettleView: View {
     @Binding var history: [SettlementRecord]
     /// Currency code used to format amounts; defaults to USD for the split review.
     var currencyCode: String = "USD"
+    var tripName: String? = nil
     /// When set, only this user (the debtor) may record new payments; others can only approve/decline.
     var currentUserID: Person.ID? = nil
 
     @State private var amountText = ""
     @State private var note = ""
     @State private var method: PaymentMethod = .cash
+    @AppStorage("defaultPaymentMethod") private var defaultPaymentMethod = PaymentMethod.cash.rawValue
 
     /// Only confirmed payments count toward the settled total (faithful to TripSplit).
     private var confirmedSettled: Double {
@@ -761,8 +482,15 @@ struct SettleView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
                 }
+                ToolbarItem(placement: .primaryAction) {
+                    ShareLink(item: settlementShareText) {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                    .accessibilityLabel("Share payment request")
+                }
             }
         }
+        .onAppear { method = PaymentMethod(rawValue: defaultPaymentMethod) ?? .cash }
     }
 
     // MARK: Cards
@@ -983,6 +711,13 @@ struct SettleView: View {
 
     private func currency(_ value: Double) -> String {
         money(value, currencyCode)
+    }
+
+    private var settlementShareText: String {
+        let debtor = settlement.from.name.isEmpty ? "A tripmate" : settlement.from.name
+        let creditor = settlement.to.name.isEmpty ? "a tripmate" : settlement.to.name
+        let context = tripName.map { " for \($0)" } ?? ""
+        return "\(debtor) owes \(creditor) \(money(remaining, currencyCode))\(context)."
     }
 
     // MARK: Actions

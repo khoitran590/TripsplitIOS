@@ -617,6 +617,7 @@ struct SyncFailureBanner: View {
 
 struct BalanceCard: View {
     @Environment(TripStore.self) private var store
+    @AppStorage("displayCurrency") private var displayCurrency = "USD"
     @State private var showConverter = false
     @State private var showBudgetInfo = false
 
@@ -641,7 +642,7 @@ struct BalanceCard: View {
 
     private var budgetFace: some View {
         // One pass over the trips for all four figures (see `TripStore.homeTotals`).
-        let totals = store.homeTotals
+        let totals = store.homeTotals(in: displayCurrency)
         let hasBudget = totals.budget > 0
         let fraction = hasBudget ? totals.spent / totals.budget : 0
         let isOver = hasBudget && totals.spent > totals.budget
@@ -651,8 +652,8 @@ struct BalanceCard: View {
             : isNear ? Color(hex: 0xD97706)
             : Theme.accent
         let heroValue = hasBudget
-            ? (isOver ? money(totals.spent - totals.budget, "USD") : money(totals.available, "USD"))
-            : money(totals.spent, "USD")
+            ? (isOver ? money(totals.spent - totals.budget, displayCurrency) : money(totals.available, displayCurrency))
+            : money(totals.spent, displayCurrency)
         // Without a budget the hero figure is a spending total, not headroom — say so
         // plainly, and title the card "Spending" so it doesn't promise a budget it
         // doesn't have.
@@ -730,14 +731,14 @@ struct BalanceCard: View {
                 .frame(height: 10)
 
                 HStack {
-                    barLabel("Spent", money(totals.spent, "USD"))
+                    barLabel("Spent", money(totals.spent, displayCurrency))
                     Spacer()
                     if hasBudget {
                         Text("\(Int((fraction * 100).rounded()))%")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(ringColor)
                         Spacer()
-                        barLabel("Budget", money(totals.budget, "USD"), trailing: true)
+                        barLabel("Budget", money(totals.budget, displayCurrency), trailing: true)
                     } else {
                         // No budget anywhere: say what's missing instead of a bare "—".
                         VStack(alignment: .trailing, spacing: 1) {
@@ -754,9 +755,15 @@ struct BalanceCard: View {
 
             HStack(spacing: 10) {
                 oweTile(icon: "arrow.up.right", label: "You owe",
-                        value: money(totals.youOwe, "USD"), tint: Color(hex: 0xDC2626))
+                        value: money(totals.youOwe, displayCurrency), tint: Color(hex: 0xDC2626))
                 oweTile(icon: "arrow.down.left", label: "People owe",
-                        value: money(totals.owedToYou, "USD"), tint: Color(hex: 0x16A34A))
+                        value: money(totals.owedToYou, displayCurrency), tint: Color(hex: 0x16A34A))
+            }
+
+            if !totals.unavailableCurrencies.isEmpty {
+                Label("Some trips are hidden until exchange rates refresh.", systemImage: "wifi.exclamationmark")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .padding(16)
@@ -1024,6 +1031,7 @@ struct CurrencyConverterCard: View {
     @State private var rates: [String: Double] = [:]
     @State private var isLoading = false
     @State private var errorMessage: String?
+    @AppStorage("displayCurrency") private var displayCurrency = "USD"
 
     private var rate: Double? { rates[to] }
 
@@ -1097,7 +1105,10 @@ struct CurrencyConverterCard: View {
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassEffect(.regular, in: .rect(cornerRadius: 34))
-        .task { await loadRates() }
+        .task {
+            to = displayCurrency
+            await loadRates()
+        }
     }
 
     private func currencyMenu(selection: Binding<String>) -> some View {

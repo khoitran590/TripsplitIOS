@@ -779,6 +779,7 @@ struct ItineraryDetailView: View {
     @State private var selectedDayIndex = 0
     @State private var isAddingStop = false
     @State private var editingStop: ItineraryStop?
+    @State private var expenseStop: ItineraryStop?
     @State private var isEditingBudget = false
     @State private var budgetText = ""
     @State private var dayPendingDeletion: Int?
@@ -928,6 +929,9 @@ struct ItineraryDetailView: View {
             }
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
+        }
+        .sheet(item: $expenseStop) { stop in
+            AddExpenseView(tripID: tripID, prefillTitle: stop.name, prefillAmount: stop.cost)
         }
         .alert("Total budget", isPresented: $isEditingBudget) {
             TextField("Amount", text: $budgetText)
@@ -1290,6 +1294,15 @@ struct ItineraryDetailView: View {
                                     stopRow(stop, currencyCode: trip.currencyCode)
                                 }
                                 .buttonStyle(.plain)
+                                .contextMenu {
+                                    if stop.cost > 0 {
+                                        Button {
+                                            expenseStop = stop
+                                        } label: {
+                                            Label("Add as expense", systemImage: "creditcard.fill")
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
