@@ -63,7 +63,7 @@ enum AppearancePreference: String, CaseIterable, Identifiable {
 /// home-screen backdrop for *both* light and dark appearances, so switching the
 /// system scheme never changes the chosen theme — only how bright it renders.
 enum AppTheme: String, CaseIterable, Identifiable {
-    case classic, matcha, butter, chocolate, gothic, y2k
+    case classic, matcha, butter, chocolate, gothic, y2k, paper, pop
 
     var id: Self { self }
 
@@ -76,6 +76,8 @@ enum AppTheme: String, CaseIterable, Identifiable {
         case .chocolate: "Chocolate"
         case .gothic: "Gothic"
         case .y2k: "Y2K"
+        case .paper: "Paper"
+        case .pop: "Pop"
         }
     }
 
@@ -91,6 +93,12 @@ enum AppTheme: String, CaseIterable, Identifiable {
         case .chocolate: Color(hex: 0x96755A)
         case .gothic: Color(hex: 0x6B7688)
         case .y2k: Color(hex: 0x9C92DE)
+        // Paper: warm editorial cream with a terracotta accent that reads the
+        // same over both the light parchment and dark charcoal backdrops.
+        case .paper: Color(hex: 0xF26A4B)
+        // Pop: saturated indigo, lifted to periwinkle in dark mode so it stays
+        // legible on near-black.
+        case .pop: Color(light: 0x4F46E5, dark: 0x818CF8)
         }
     }
 
@@ -104,6 +112,10 @@ enum AppTheme: String, CaseIterable, Identifiable {
         case .chocolate: Color(hex: 0xB39B84)
         case .gothic: Color(hex: 0x9AA5B4)
         case .y2k: Color(hex: 0xDBA3C3)
+        // Warm taupe companion so terracotta → sand gradients feel like paper stock.
+        case .paper: Color(hex: 0xA89F8F)
+        // Teal companion (brightened in dark mode to match the lifted indigo).
+        case .pop: Color(light: 0x14B8A6, dark: 0x2DD4BF)
         }
     }
 
@@ -149,6 +161,22 @@ enum AppTheme: String, CaseIterable, Identifiable {
                 Color(light: 0xEEE9FA, dark: 0x181425),
                 Color(light: 0xF6EFF8, dark: 0x110F1B),
                 Color(light: 0xFCF7FA, dark: 0x0C0B12),
+            ]
+        case .paper:
+            // Parchment wash (light) / warm charcoal (dark), from the reference
+            // palette's #E9E4D8 background and #141414/#101010 dark surfaces.
+            [
+                Color(light: 0xE9E4D8, dark: 0x1B1916),
+                Color(light: 0xF1EDE3, dark: 0x131210),
+                Color(light: 0xFAF9F5, dark: 0x0C0B0A),
+            ]
+        case .pop:
+            // Indigo-tinted top settling into the palette's off-white #F7F9F3
+            // (light) and near-black (dark) bases.
+            [
+                Color(light: 0xE6E6F9, dark: 0x161430),
+                Color(light: 0xF0F3EE, dark: 0x0F0E1C),
+                Color(light: 0xFAFBF7, dark: 0x0A0A0D),
             ]
         }
     }

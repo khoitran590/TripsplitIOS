@@ -210,24 +210,22 @@ struct ProfileDetailView: View {
     private var detailsCard: some View {
         VStack(spacing: 0) {
             if let dob = store.userProfile.dateOfBirth {
-                detailRow(icon: "birthday.cake", title: "Birthday",
+                detailRow(icon: "birthday.cake.fill", color: Color(hex: 0xEC4899), title: "Birthday",
                           value: dob.formatted(date: .long, time: .omitted))
             }
-            detailRow(icon: "suitcase", title: "Trips", value: "\(store.trips.count)")
-            detailRow(icon: "mappin.and.ellipse", title: "Places visited",
+            detailRow(icon: "suitcase.fill", color: Theme.accent, title: "Trips",
+                      value: "\(store.trips.count)")
+            detailRow(icon: "mappin.and.ellipse", color: Theme.positive, title: "Places visited",
                       value: "\(visitedPlaces.count)", showsDivider: false)
         }
         .padding(.horizontal, 16)
         .glassEffect(.regular, in: .rect(cornerRadius: 20))
     }
 
-    private func detailRow(icon: String, title: LocalizedStringKey, value: String, showsDivider: Bool = true) -> some View {
+    private func detailRow(icon: String, color: Color, title: LocalizedStringKey, value: String, showsDivider: Bool = true) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 14) {
-                Image(systemName: icon)
-                    .font(.system(size: 18))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 26)
+                SettingsIconBadge(icon: icon, color: color)
                 Text(title)
                     .font(.body)
                 Spacer()

@@ -3515,13 +3515,16 @@ struct SettingsScreen: View {
                         .font(.title2.bold())
                         .padding(.bottom, 8)
 
-                    PlainSettingsRow(icon: "person.crop.circle", title: "Personal information") {
+                    PlainSettingsRow(icon: "person.fill", title: "Personal information",
+                                     iconColor: Theme.accent) {
                         showPersonalInfo = true
                     }
-                    PlainSettingsRow(icon: "shield", title: "Login & security") {
+                    PlainSettingsRow(icon: "lock.shield.fill", title: "Login & security",
+                                     iconColor: Theme.positive) {
                         showChangePassword = true
                     }
-                    PlainSettingsRow(icon: "creditcard", title: "Payments")
+                    PlainSettingsRow(icon: "creditcard.fill", title: "Payments",
+                                     iconColor: Color(hex: 0x8B5CF6))
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
@@ -3529,7 +3532,8 @@ struct SettingsScreen: View {
                         .font(.title2.bold())
                         .padding(.bottom, 8)
 
-                    PlainSettingsRow(icon: "bell", title: "Notifications")
+                    PlainSettingsRow(icon: "bell.fill", title: "Notifications",
+                                     iconColor: Theme.warning)
                     Menu {
                         Picker("Appearance", selection: $appearance) {
                             ForEach(AppearancePreference.allCases) { option in
@@ -3537,12 +3541,14 @@ struct SettingsScreen: View {
                             }
                         }
                     } label: {
-                        PlainSettingsRow(icon: "paintpalette", title: "Appearance",
-                                         value: appearance.label)
+                        PlainSettingsRow(icon: "circle.lefthalf.filled", title: "Appearance",
+                                         value: appearance.label,
+                                         iconColor: Color(hex: 0xEC4899))
                     }
                     .buttonStyle(.plain)
                     PlainSettingsRow(icon: "globe", title: "Language",
-                                     value: localization.language.endonym) {
+                                     value: localization.language.endonym,
+                                     iconColor: Color(hex: 0x3B82F6)) {
                         showLanguagePicker = true
                     }
                     themePicker
@@ -3580,9 +3586,21 @@ struct SettingsScreen: View {
     private var themePicker: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 16) {
-                Image(systemName: "swatchpalette")
-                    .font(.system(size: 21))
-                    .frame(width: 28)
+                // Two-hue badge so the Theme row previews the active accent pair.
+                RoundedRectangle(cornerRadius: 9)
+                    .fill(
+                        LinearGradient(
+                            colors: [Theme.accent, Theme.accentSecondary],
+                            startPoint: .topLeading, endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 32, height: 32)
+                    .overlay {
+                        Image(systemName: "swatchpalette.fill")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.white)
+                    }
+                    .shadow(color: Theme.accent.opacity(0.35), radius: 4, y: 2)
                 Text("Theme")
                     .font(.body)
                 Spacer()
@@ -3722,6 +3740,9 @@ struct PlainSettingsRow: View {
     var value: String? = nil
     var showsChevron = true
     var tint: Color? = nil
+    /// Badge color behind the icon (iOS-Settings style). Falls back to `tint`,
+    /// then the theme accent, so every row gets a colorful chip.
+    var iconColor: Color? = nil
     var action: (() -> Void)? = nil
 
     var body: some View {
@@ -3730,10 +3751,7 @@ struct PlainSettingsRow: View {
         } label: {
             VStack(spacing: 0) {
                 HStack(spacing: 16) {
-                    Image(systemName: icon)
-                        .font(.system(size: 21))
-                        .foregroundStyle(tint ?? .primary)
-                        .frame(width: 28)
+                    SettingsIconBadge(icon: icon, color: iconColor ?? tint ?? Theme.accent)
 
                     Text(title)
                         .font(.body)
@@ -3759,6 +3777,26 @@ struct PlainSettingsRow: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// The colorful rounded-square chip behind a settings-row icon: a soft vertical
+/// gradient of the given color with a white glyph, mirroring iOS Settings so the
+/// list gets pops of color that still follow the app's theme accents.
+struct SettingsIconBadge: View {
+    let icon: String
+    let color: Color
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 9)
+            .fill(color.gradient)
+            .frame(width: 32, height: 32)
+            .overlay {
+                Image(systemName: icon)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+            .shadow(color: color.opacity(0.35), radius: 4, y: 2)
     }
 }
 
