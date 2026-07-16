@@ -1531,6 +1531,16 @@ final class TripStore {
         return url
     }
 
+    /// Returns a cover as a UIKit image for editing. Reuses the stable-path cache
+    /// first, then refreshes from a signed URL when the image is not on this device.
+    func editableTripCover(from stored: String) async -> UIImage? {
+        let path = ReceiptStorage.storagePath(from: stored)
+        guard !path.isEmpty else { return nil }
+        if let cached = await ImageCache.shared.image(for: path) { return cached }
+        guard let url = await signedImageURL(for: path) else { return nil }
+        return await ImageCache.shared.download(from: url, for: path)
+    }
+
     /// Clears expired signed URL entries and completed coalescing tasks when the account
     /// changes, so a new user never waits on or reuses another account's image signing.
     private func resetSignedImageURLs() {
@@ -2543,6 +2553,7 @@ struct EditTripView: View {
     @State private var coverImage: UIImage?
     @State private var coverJPEG: Data?
     @State private var cropCandidate: CoverCropCandidate?
+    @State private var isLoadingCurrentCover = false
     @State private var allowMembersToPayForOthers = false
     @State private var isSaving = false
     @State private var errorMessage: String?
@@ -2649,6 +2660,38 @@ struct EditTripView: View {
             }
             .buttonStyle(.plain)
             .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+
+            if coverImage != nil || trip?.coverImageURL?.isEmpty == false {
+                Button { adjustCurrentCover() } label: {
+                    HStack(spacing: 7) {
+                        if isLoadingCurrentCover { ProgressView().controlSize(.small) }
+                        Label("Resize or reposition", systemImage: "crop")
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: .capsule)
+                .disabled(isLoadingCurrentCover)
+            }
+        }
+    }
+
+    private func adjustCurrentCover() {
+        if let coverImage {
+            cropCandidate = CoverCropCandidate(image: coverImage)
+            return
+        }
+        guard let stored = trip?.coverImageURL, !stored.isEmpty else { return }
+        isLoadingCurrentCover = true
+        Task {
+            defer { isLoadingCurrentCover = false }
+            if let image = await store.editableTripCover(from: stored) {
+                cropCandidate = CoverCropCandidate(image: image)
+            } else {
+                errorMessage = "Couldn't load the current cover photo. Check your connection and try again."
+            }
         }
     }
 

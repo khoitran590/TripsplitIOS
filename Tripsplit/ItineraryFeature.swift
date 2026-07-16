@@ -447,7 +447,7 @@ struct ItineraryTripCard: View {
         VStack(alignment: .leading, spacing: 10) {
             ZStack(alignment: .topTrailing) {
                 TripCoverView(trip: trip)
-                    .frame(height: 108)
+                    .frame(height: 150)
                     .clipShape(.rect(cornerRadius: 16))
                 Text("\(dayCount) day\(dayCount == 1 ? "" : "s")")
                     .font(.caption2.weight(.bold))
@@ -478,7 +478,7 @@ struct ItineraryTripCard: View {
             .padding(.horizontal, 4)
         }
         .padding(8)
-        .frame(width: 230)
+        .frame(width: 260)
         .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 22))
     }
 }
@@ -790,7 +790,9 @@ struct ItineraryDetailView: View {
     // Trip photo state. The itinerary shares `Trip.coverImageURL` with the trip
     // detail screen, so a photo set on either side shows on both.
     @State private var coverPick: PhotosPickerItem?
+    @State private var cropCandidate: CoverCropCandidate?
     @State private var isUploadingCover = false
+    @State private var isLoadingCurrentCover = false
     @State private var coverError: String?
 
     // AI planner state.
@@ -883,7 +885,12 @@ struct ItineraryDetailView: View {
         .onChange(of: coverPick) { _, pick in
             guard let pick else { return }
             coverPick = nil
-            uploadCover(pick)
+            prepareCoverForCropping(pick)
+        }
+        .fullScreenCover(item: $cropCandidate) { candidate in
+            CoverCropView(image: candidate.image) { cropped in
+                uploadCover(cropped)
+            }
         }
         .alert(
             "Couldn't set the trip photo",
@@ -953,7 +960,7 @@ struct ItineraryDetailView: View {
     private func heroBanner(_ trip: Trip, _ itinerary: Itinerary) -> some View {
         ZStack(alignment: .bottomLeading) {
             TripCoverView(trip: trip)
-                .frame(height: 150)
+                .frame(height: 220)
                 .clipShape(.rect(cornerRadius: 24))
 
             LinearGradient(colors: [.clear, .black.opacity(0.55)], startPoint: .center, endPoint: .bottom)
@@ -988,30 +995,47 @@ struct ItineraryDetailView: View {
                 .padding(10)
         }
         .overlay(alignment: .topLeading) {
-            PhotosPicker(selection: $coverPick, matching: .images) {
-                HStack(spacing: 5) {
-                    if isUploadingCover {
-                        ProgressView()
-                            .controlSize(.mini)
-                            .tint(.white)
-                    } else {
-                        Image(systemName: "camera.fill")
+            HStack(spacing: 8) {
+                PhotosPicker(selection: $coverPick, matching: .images) {
+                    HStack(spacing: 5) {
+                        if isUploadingCover {
+                            ProgressView().controlSize(.mini).tint(.white)
+                        } else {
+                            Image(systemName: "camera.fill")
+                                .font(.caption2.weight(.bold))
+                        }
+                        Text(hasCover(trip) ? "Replace" : "Add photo")
                             .font(.caption2.weight(.bold))
                     }
-                    if !hasCover(trip) {
-                        Text("Add photo")
-                            .font(.caption2.weight(.bold))
-                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 6)
+                    .background(.black.opacity(0.48), in: .capsule)
                 }
-                .foregroundStyle(.white)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
-                .background(.black.opacity(0.45), in: .capsule)
-                .padding(10)
+                .buttonStyle(.plain)
+                .disabled(isUploadingCover || isLoadingCurrentCover)
+
+                if hasCover(trip) {
+                    Button { adjustCurrentCover(trip) } label: {
+                        HStack(spacing: 5) {
+                            if isLoadingCurrentCover {
+                                ProgressView().controlSize(.mini).tint(.white)
+                            } else {
+                                Image(systemName: "crop")
+                                    .font(.caption2.weight(.bold))
+                            }
+                            Text("Adjust").font(.caption2.weight(.bold))
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 6)
+                        .background(.black.opacity(0.48), in: .capsule)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isUploadingCover || isLoadingCurrentCover)
+                }
             }
-            .buttonStyle(.plain)
-            .disabled(isUploadingCover)
-            .accessibilityLabel(hasCover(trip) ? "Change trip photo" : "Add trip photo")
+            .padding(10)
         }
     }
 
@@ -1020,20 +1044,51 @@ struct ItineraryDetailView: View {
         return false
     }
 
-    /// Uploads a newly picked photo as the trip cover. This writes the same
+    /// Reopens an existing uploaded cover in the cropper, allowing a created trip
+    /// to be reframed without making the user find the original in Photos again.
+    private func adjustCurrentCover(_ trip: Trip) {
+        guard let stored = trip.coverImageURL, !stored.isEmpty else { return }
+        isLoadingCurrentCover = true
+        Task {
+            defer { isLoadingCurrentCover = false }
+            if let image = await store.editableTripCover(from: stored) {
+                cropCandidate = CoverCropCandidate(image: image)
+            } else {
+                coverError = "Couldn't load the current photo. Check your connection and try again."
+            }
+        }
+    }
+
+    /// Normalizes a selected photo, then opens the shared pinch-to-zoom and drag
+    /// editor before anything is uploaded.
+    private func prepareCoverForCropping(_ pick: PhotosPickerItem) {
+        Task {
+            guard let data = try? await pick.loadTransferable(type: Data.self) else {
+                coverError = "Couldn't open that photo. Try a different one."
+                return
+            }
+            if let prepared = await UploadImagePreparation.preparedImage(
+                from: data,
+                maxPixelSize: 1_600,
+                compressionQuality: 0.82
+            ) {
+                cropCandidate = CoverCropCandidate(image: prepared.image)
+            } else if let image = UIImage(data: data) {
+                cropCandidate = CoverCropCandidate(image: image)
+            } else {
+                coverError = "Couldn't prepare that photo. Try a different one."
+            }
+        }
+    }
+
+    /// Uploads the user's final framing as the trip cover. This writes the same
     /// `Trip.coverImageURL` the trip detail / edit screen uses, so whichever side
     /// sets a photo first, both show it.
-    private func uploadCover(_ pick: PhotosPickerItem) {
+    private func uploadCover(_ image: UIImage) {
         isUploadingCover = true
         Task {
             defer { isUploadingCover = false }
-            guard let data = try? await pick.loadTransferable(type: Data.self),
-                  let jpeg = await UploadImagePreparation.jpegData(
-                      from: data,
-                      maxPixelSize: 1_600,
-                      compressionQuality: 0.72
-                  )
-            else {
+            guard let jpeg = image.jpegData(compressionQuality: 0.72) else {
                 coverError = "Couldn't prepare that photo. Try a different one."
                 return
             }
