@@ -2,9 +2,9 @@ import Foundation
 
 // MARK: - Trips repository (Supabase PostgREST)
 
-/// Persists shared trips to a single `trips` table in Supabase, storing each trip as a
-/// JSON blob in a `jsonb` column. Access is enforced by RLS through `trip_members`, so
-/// the client only ever sends the access token.
+/// Persists trip metadata and independently edited child records in normalized Supabase
+/// tables. During the B10 compatibility window the database also rebuilds `trips.data`,
+/// allowing older clients to keep reading without making it the source of truth.
 ///
 /// Run `supabase_schema.sql` (at the repo root) once in the Supabase SQL editor to
 /// create the table and its row-level-security policy.
@@ -13,6 +13,11 @@ actor TripsRepository {
 
     private let session = BackendSecurity.secureSession
     private var tripCache: (userID: UUID, timestamp: Date, trips: [Trip])?
+    /// The exact snapshot last read or successfully submitted by this process. It lets
+    /// PostgreSQL calculate a field-level delta, so a save only touches child rows this
+    /// client actually changed and preserves concurrent edits to other rows.
+    private var syncedSnapshots: [Trip.ID: Trip] = [:]
+    private var snapshotUserID: UUID?
     private let cacheLifetime: TimeInterval = 60
 
     private let encoder: JSONEncoder = {
@@ -61,13 +66,30 @@ actor TripsRepository {
     /// single malformed trip can't drop the entire list. Throws only on network/HTTP
     /// failure, letting callers distinguish "couldn't reach the server" from "no trips".
     func fetch(accessToken: String) async throws -> [Trip] {
+        alignSnapshots(with: accessToken)
         if let userID = TripStore.userID(fromJWT: accessToken),
            let cached = tripCache,
            cached.userID == userID,
            Date().timeIntervalSince(cached.timestamp) < cacheLifetime {
             return cached.trips
         }
-        let data = try await send("GET", "/rest/v1/trips?select=data&order=updated_at.desc", accessToken: accessToken)
+        let data: Data
+        do {
+            data = try await send(
+                "POST",
+                "/rest/v1/rpc/fetch_normalized_trips",
+                accessToken: accessToken,
+                body: Data("{}".utf8)
+            )
+        } catch let error as AuthError where error.statusCode == 404 {
+            // Safe rollout fallback: an app update can reach a project a few moments
+            // before its migration is applied. Once B10 exists, all reads use tables.
+            data = try await send(
+                "GET",
+                "/rest/v1/trips?select=data&order=updated_at.desc",
+                accessToken: accessToken
+            )
+        }
         guard let rows = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
         let trips: [Trip] = rows.compactMap { row in
             guard let dataValue = row["data"],
@@ -77,30 +99,60 @@ actor TripsRepository {
         if let userID = TripStore.userID(fromJWT: accessToken) {
             tripCache = (userID, Date(), trips)
         }
+        syncedSnapshots = Dictionary(uniqueKeysWithValues: trips.map { ($0.id, $0) })
         return trips
     }
 
     /// Inserts or updates a trip (keyed on its id) for any account that can access it.
     func upsert(_ trip: Trip, accessToken: String) async throws {
+        alignSnapshots(with: accessToken)
         let tripJSON = try JSONSerialization.jsonObject(with: encoder.encode(trip))
+        let previousJSON: Any
+        if let previous = syncedSnapshots[trip.id] {
+            previousJSON = try JSONSerialization.jsonObject(with: encoder.encode(previous))
+        } else {
+            previousJSON = NSNull()
+        }
         let body = try JSONSerialization.data(withJSONObject: [
             "p_id": trip.id.uuidString,
             "p_user_id": trip.creatorID.uuidString,
             "p_data": tripJSON,
+            "p_previous_data": previousJSON,
         ])
-        _ = try await send(
-            "POST",
-            "/rest/v1/rpc/upsert_trip",
-            accessToken: accessToken,
-            body: body,
-            extraHeaders: ["Prefer": "return=minimal"]
-        )
+        do {
+            _ = try await send(
+                "POST",
+                "/rest/v1/rpc/sync_trip_normalized",
+                accessToken: accessToken,
+                body: body
+            )
+        } catch let error as AuthError where error.statusCode == 404 {
+            // Compatibility only for the brief app-before-migration rollout window.
+            let legacyBody = try JSONSerialization.data(withJSONObject: [
+                "p_id": trip.id.uuidString,
+                "p_user_id": trip.creatorID.uuidString,
+                "p_data": tripJSON,
+            ])
+            _ = try await send(
+                "POST",
+                "/rest/v1/rpc/upsert_trip",
+                accessToken: accessToken,
+                body: legacyBody,
+                extraHeaders: ["Prefer": "return=minimal"]
+            )
+        }
+        // Keep the caller's submitted view—not the merged server projection—as the
+        // delta base. An unseen concurrent row must not look like a local deletion on
+        // this client's next save; it arrives on the next table-backed fetch instead.
+        syncedSnapshots[trip.id] = trip
         invalidateCache(accessToken: accessToken)
     }
 
     /// Deletes a trip the token's account owns.
     func delete(id: Trip.ID, accessToken: String) async throws {
+        alignSnapshots(with: accessToken)
         _ = try await send("DELETE", "/rest/v1/trips?id=eq.\(id.uuidString)", accessToken: accessToken)
+        syncedSnapshots[id] = nil
         invalidateCache(accessToken: accessToken)
     }
 
@@ -164,6 +216,15 @@ actor TripsRepository {
             return
         }
         if tripCache?.userID == userID { tripCache = nil }
+    }
+
+    /// The repository actor outlives sign-out. Never reuse one account's delta base for
+    /// another account, even when both happen to be members of the same trip.
+    private func alignSnapshots(with accessToken: String) {
+        let userID = TripStore.userID(fromJWT: accessToken)
+        guard snapshotUserID != userID else { return }
+        snapshotUserID = userID
+        syncedSnapshots = [:]
     }
 
     private func send(
