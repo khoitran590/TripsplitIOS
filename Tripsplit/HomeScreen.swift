@@ -584,8 +584,9 @@ struct HomeScreen: View {
 
 // MARK: - Balance Card
 
-/// The gradient budget card. Totals are aggregated across every trip the user is part of.
-/// Tapping the convert button flips the card to reveal a live currency converter on the back.
+/// A quiet budget summary. Totals are aggregated across every trip the user is part of;
+/// currency conversion stays available as a separate utility sheet so the summary never
+/// disappears or changes height.
 /// Retryable "couldn't save to cloud" banner. Shown inline on Home and overlaid on
 /// every other tab (see `ContentView`), so a failed trip save is never silent no
 /// matter where the edit happened — itinerary edits in Explore included.
@@ -622,21 +623,13 @@ struct BalanceCard: View {
     @State private var showBudgetInfo = false
 
     var body: some View {
-        ZStack {
-            budgetFace
-                .opacity(showConverter ? 0 : 1)
-                .allowsHitTesting(!showConverter)
-
-            CurrencyConverterCard(onClose: flip)
-                .opacity(showConverter ? 1 : 0)
-                .allowsHitTesting(showConverter)
-        }
+        budgetFace
         .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
-    }
-
-    private func flip() {
-        withAnimation(.easeInOut(duration: 0.28)) {
-            showConverter.toggle()
+        .sheet(isPresented: $showConverter) {
+            CurrencyConverterCard()
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(.regularMaterial)
         }
     }
 
@@ -647,23 +640,24 @@ struct BalanceCard: View {
         let fraction = hasBudget ? totals.spent / totals.budget : 0
         let isOver = hasBudget && totals.spent > totals.budget
         let isNear = hasBudget && !isOver && fraction >= 0.8
-        // Ring + accents mirror the trip cards: indigo healthy, amber near, red over.
-        let ringColor = isOver ? Color(hex: 0xDC2626)
+        // Accents mirror the trip cards: indigo healthy, amber near, red over.
+        let statusColor = isOver ? Color(hex: 0xDC2626)
             : isNear ? Color(hex: 0xD97706)
             : Theme.accent
         let heroValue = hasBudget
-            ? (isOver ? money(totals.spent - totals.budget, displayCurrency) : money(totals.available, displayCurrency))
-            : money(totals.spent, displayCurrency)
+            ? (isOver
+                ? summaryMoney(totals.spent - totals.budget, displayCurrency, compact: true)
+                : summaryMoney(totals.available, displayCurrency, compact: true))
+            : summaryMoney(totals.spent, displayCurrency, compact: true)
         // Without a budget the hero figure is a spending total, not headroom — say so
         // plainly, and title the card "Spending" so it doesn't promise a budget it
         // doesn't have.
         let heroLabel = !hasBudget ? "Total spent" : (isOver ? "Over budget" : "Remaining")
-        let statusText = isOver ? "Over budget" : isNear ? "Near limit" : "On track"
 
         return VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text(LocalizedStringKey(hasBudget ? "Budget" : "Spending"))
-                    .font(.title3.weight(.bold))
+            HStack(spacing: 4) {
+                Text("Overview")
+                    .font(.subheadline.weight(.semibold))
                 Button {
                     showBudgetInfo = true
                 } label: {
@@ -679,92 +673,84 @@ struct BalanceCard: View {
                     budgetInfoPopover
                         .presentationCompactAdaptation(.popover)
                 }
-                if hasBudget {
-                    Text(LocalizedStringKey(statusText))
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(ringColor)
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 4)
-                        .background(ringColor.opacity(0.12), in: .capsule)
-                }
                 Spacer()
-                Button(action: flip) {
-                    Image(systemName: "arrow.left.arrow.right")
-                        .font(.footnote.weight(.bold))
-                        .foregroundStyle(.primary)
-                        .frame(width: 44, height: 44)
+                Button {
+                    showConverter = true
+                } label: {
+                    Label("Convert", systemImage: "arrow.left.arrow.right")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.accent)
+                        .padding(.horizontal, 4)
+                        .frame(minHeight: 44)
+                        .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
-                .glassEffect(.regular.interactive(), in: .circle)
                 .accessibilityLabel("Currency converter")
             }
 
-            // Hero figure: the one number that answers "how am I doing?"
-            VStack(alignment: .leading, spacing: 2) {
-                Text(heroValue)
-                    .font(.largeTitle.weight(.bold))
-                    .foregroundStyle(isOver ? ringColor : .primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-                HStack(spacing: 6) {
-                    Text(LocalizedStringKey(heroLabel))
-                    Text(verbatim: "·")
-                    Text("\(store.myTrips.count) trips")
-                }
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            }
-
-            // Spent vs. budget as a full-width bar, with both figures anchored under it.
-            VStack(alignment: .leading, spacing: 6) {
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(Color.primary.opacity(0.08))
-                        // Without a budget the bar has no limit to measure against —
-                        // render it as a neutral full strip, not a "100% used" signal.
-                        Capsule()
-                            .fill(hasBudget ? AnyShapeStyle(ringColor) : AnyShapeStyle(Color.primary.opacity(0.18)))
-                            .frame(width: geo.size.width * min(1, max(0, hasBudget ? fraction : (totals.spent > 0 ? 1 : 0))))
-                            .animation(.easeInOut(duration: 0.4), value: fraction)
+            // VoiceOver receives the financial summary as one coherent element while the
+            // info and converter controls above remain independently actionable.
+            VStack(alignment: .leading, spacing: 14) {
+                // Hero figure: the one number that answers "how am I doing?"
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(verbatim: heroValue)
+                        .font(.largeTitle.weight(.bold))
+                        .foregroundStyle(isOver ? statusColor : .primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.78)
+                    HStack(spacing: 6) {
+                        Text(LocalizedStringKey(heroLabel))
+                        Text(verbatim: "·")
+                        Text(verbatim: displayCurrency)
                     }
-                }
-                .frame(height: 10)
-
-                HStack {
-                    barLabel("Spent", money(totals.spent, displayCurrency))
-                    Spacer()
-                    if hasBudget {
-                        Text("\(Int((fraction * 100).rounded()))%")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(ringColor)
-                        Spacer()
-                        barLabel("Budget", money(totals.budget, displayCurrency), trailing: true)
-                    } else {
-                        // No budget anywhere: say what's missing instead of a bare "—".
-                        VStack(alignment: .trailing, spacing: 1) {
-                            Text("No budget set")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                            Text("Set one inside a trip")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    HStack(spacing: 5) {
+                        Text("\(store.myTrips.count) trips")
+                        if isNear {
+                            Text(verbatim: "·")
+                            Text("Near limit")
+                                .foregroundStyle(statusColor)
                         }
                     }
-                }
-            }
-
-            HStack(spacing: 10) {
-                oweTile(icon: "arrow.up.right", label: "You owe",
-                        value: money(totals.youOwe, displayCurrency), tint: Color(hex: 0xDC2626))
-                oweTile(icon: "arrow.down.left", label: "People owe",
-                        value: money(totals.owedToYou, displayCurrency), tint: Color(hex: 0x16A34A))
-            }
-
-            if !totals.unavailableCurrencies.isEmpty {
-                Label("Some trips are hidden until exchange rates refresh.", systemImage: "wifi.exclamationmark")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                }
+
+                if hasBudget {
+                    // One slim measure and one sentence replace the old three-column footer.
+                    VStack(alignment: .leading, spacing: 7) {
+                        GeometryReader { geo in
+                            ZStack(alignment: .leading) {
+                                Capsule().fill(Color.primary.opacity(0.08))
+                                Capsule()
+                                    .fill(statusColor)
+                                    .frame(width: geo.size.width * min(1, max(0, fraction)))
+                                    .animation(.easeInOut(duration: 0.4), value: fraction)
+                            }
+                        }
+                        .frame(height: 7)
+
+                        Text("Spent \(summaryMoney(totals.spent, displayCurrency)) of \(summaryMoney(totals.budget, displayCurrency)) · \(Int((fraction * 100).rounded()))%")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                } else {
+                    Text("No budget set · Set one inside a trip")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                settlementSummary(totals)
+
+                if !totals.unavailableCurrencies.isEmpty {
+                    Text("Some trips need an exchange-rate refresh")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
+            .accessibilityElement(children: .combine)
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -772,7 +758,7 @@ struct BalanceCard: View {
     }
 
     /// Explains where the headline budget figure comes from: only budgets the user has
-    /// explicitly set on their trips count, each converted to USD, and $0 means none set.
+    /// explicitly set on their trips count, each converted to their selected home currency.
     private var budgetInfoPopover: some View {
         let me = store.currentUser.id
         let budgetedTrips = store.myTrips.filter { $0.budget(for: me) > 0 }.count
@@ -782,9 +768,9 @@ struct BalanceCard: View {
             Text("How your budget adds up")
                 .font(.subheadline.weight(.bold))
             if budgetedTrips > 0 {
-                Text("This total is the sum of the budgets you set yourself in each trip, converted to USD. Right now \(budgetedTrips) of your \(totalTrips) trips have a budget set — trips without one add nothing.")
+                Text("This total is the sum of the budgets you set in each trip, converted to your home currency (\(displayCurrency)). Right now \(budgetedTrips) of your \(totalTrips) trips have a budget set — trips without one add nothing.")
             } else {
-                Text("It shows $0 because you haven't set a budget in any of your trips yet. Set a budget inside a trip and it will be added to this total, converted to USD.")
+                Text("There is no total budget because you haven't set one in any trip yet. Set a budget inside a trip and it will be added here in your home currency (\(displayCurrency)).")
             }
         }
         .font(.footnote)
@@ -794,45 +780,59 @@ struct BalanceCard: View {
         .frame(width: 290, alignment: .leading)
     }
 
-    /// A caption/value pair anchored under an end of the progress bar.
-    private func barLabel(_ label: String, _ value: String, trailing: Bool = false) -> some View {
-        VStack(alignment: trailing ? .trailing : .leading, spacing: 1) {
-            // Wrap so the literal label localizes; `value` stays verbatim (money).
-            Text(LocalizedStringKey(label))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.subheadline.weight(.bold))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
+    /// Settlement information stays visually secondary to budget health. `ViewThatFits`
+    /// preserves the one-line scan at normal sizes and stacks cleanly at large Dynamic Type.
+    private func settlementSummary(_ totals: TripStore.HomeTotals) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                settlementValue(
+                    label: "You owe",
+                    value: summaryMoney(totals.youOwe, displayCurrency),
+                    color: Color(hex: 0xDC2626)
+                )
+                Divider().frame(height: 18)
+                settlementValue(
+                    label: "Owed to you",
+                    value: summaryMoney(totals.owedToYou, displayCurrency),
+                    color: Color(hex: 0x16A34A)
+                )
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                settlementValue(
+                    label: "You owe",
+                    value: summaryMoney(totals.youOwe, displayCurrency),
+                    color: Color(hex: 0xDC2626)
+                )
+                settlementValue(
+                    label: "Owed to you",
+                    value: summaryMoney(totals.owedToYou, displayCurrency),
+                    color: Color(hex: 0x16A34A)
+                )
+            }
         }
+        .font(.footnote)
     }
 
-    /// A simple, Cash App–style tile for the owe / owed figures under the ring.
-    private func oweTile(icon: String, label: String, value: String, tint: Color) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon)
-                .font(.system(size: 16, weight: .bold))
-                .foregroundStyle(tint)
-                .frame(width: 36, height: 36)
-                .background(tint.opacity(0.15), in: .circle)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(LocalizedStringKey(label))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                Text(value)
-                    .font(.title3.weight(.bold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-            }
-            Spacer(minLength: 0)
+    private func settlementValue(label: String, value: String, color: Color) -> some View {
+        HStack(spacing: 5) {
+            Text(LocalizedStringKey(label)).foregroundStyle(.secondary)
+            Text(verbatim: value).fontWeight(.semibold).foregroundStyle(color)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(tint.opacity(0.08), in: .rect(cornerRadius: 16))
+        .lineLimit(1)
+        .minimumScaleFactor(0.85)
+    }
+
+    /// Keeps whole amounts clean, adds grouping for readability, and uses compact notation
+    /// only for very large hero figures where the alternative would force heavy scaling.
+    private func summaryMoney(_ value: Double, _ code: String, compact: Bool = false) -> String {
+        let absolute = abs(value)
+        let number: String
+        if compact && absolute >= 1_000_000 {
+            number = value.formatted(.number.notation(.compactName).precision(.fractionLength(0...1)))
+        } else {
+            number = value.formatted(.number.precision(.fractionLength(0...2)))
+        }
+        return "\(currencySymbol(code))\(number)"
     }
 }
 
@@ -1018,107 +1018,141 @@ struct TripRow: View {
 
 // MARK: - Currency Converter
 
-/// A live currency converter backed by the Exchange Rates API. Rendered as the back face
-/// of `BalanceCard`; `onClose` flips the card back to the budget summary.
+/// A focused currency utility presented from `BalanceCard` as a half-sheet. The last-used
+/// pair persists across launches; first use starts with the most common active-trip currency
+/// and converts into the home currency.
 struct CurrencyConverterCard: View {
-    var onClose: (() -> Void)? = nil
-
-    private let currencies = ["USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CNY", "KRW", "THB", "SGD", "VND", "INR"]
-
+    @Environment(\.dismiss) private var dismiss
+    @Environment(TripStore.self) private var store
     @State private var amountText = "100"
-    @State private var from = "USD"
-    @State private var to = "EUR"
     @State private var rates: [String: Double] = [:]
     @State private var isLoading = false
     @State private var errorMessage: String?
+    @FocusState private var amountIsFocused: Bool
     @AppStorage("displayCurrency") private var displayCurrency = "USD"
+    @AppStorage("converterFromCurrency") private var from = "USD"
+    @AppStorage("converterToCurrency") private var to = "EUR"
+    @AppStorage("hasSavedConverterPair") private var hasSavedPair = false
 
-    private var rate: Double? { rates[to] }
+    private var rate: Double? { from == to ? 1 : rates[to] }
 
     private var converted: Double? {
-        guard let amount = Double(amountText), let rate else { return nil }
+        guard let amount = parsedAmount, let rate else { return nil }
         return amount * rate
     }
 
+    private var parsedAmount: Double? {
+        Double(amountText.replacingOccurrences(of: Locale.current.groupingSeparator ?? ",", with: "")
+            .replacingOccurrences(of: Locale.current.decimalSeparator ?? ".", with: "."))
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Label("Currency Converter", systemImage: "arrow.left.arrow.right.circle.fill")
-                    .font(.headline)
-                Spacer()
-                if isLoading {
-                    ProgressView().controlSize(.small)
-                }
-                if let onClose {
-                    Button(action: onClose) {
-                        Image(systemName: "arrow.uturn.backward")
-                            .font(.subheadline.weight(.bold))
-                            .foregroundStyle(.primary)
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    currencyRow(title: "From", selection: $from) {
+                        TextField("0", text: $amountText)
+                            .keyboardType(.decimalPad)
+                            .focused($amountIsFocused)
+                            .font(.title2.weight(.semibold))
+                            .lineLimit(1)
+                            .accessibilityLabel("Amount to convert")
+                    }
+
+                    Button(action: swapCurrencies) {
+                        Image(systemName: "arrow.up.arrow.down")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.accent)
                             .frame(width: 44, height: 44)
+                            .contentShape(.circle)
                     }
                     .buttonStyle(.plain)
-                    .glassEffect(.regular.interactive(), in: .circle)
-                    .accessibilityLabel("Back to budget")
-                }
-            }
+                    .frame(maxWidth: .infinity)
+                    .accessibilityLabel("Swap currencies")
 
-            HStack(spacing: 12) {
-                TextField("0", text: $amountText)
-                    .keyboardType(.decimalPad)
-                    .font(.title2.weight(.semibold))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(.secondary.opacity(0.12), in: .rect(cornerRadius: 12))
-
-                currencyMenu(selection: $from)
-                    .onChange(of: from) { _, _ in Task { await loadRates() } }
-
-                Image(systemName: "arrow.right")
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(.secondary)
-
-                currencyMenu(selection: $to)
-            }
-
-            Divider()
-
-            if let errorMessage {
-                Label(errorMessage, systemImage: "wifi.exclamationmark")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            } else {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(converted.map { String(format: "%.2f", $0) } ?? "—")
+                    currencyRow(title: "To", selection: $to) {
+                        Group {
+                            if let converted {
+                                Text(verbatim: converted.formatted(.number.precision(.fractionLength(0...2))))
+                            } else {
+                                Text(verbatim: "—")
+                            }
+                        }
                         .font(.title.weight(.bold))
-                    Text(to)
-                        .font(.headline)
-                        .foregroundStyle(.secondary)
-                    Spacer()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.78)
+                        .accessibilityLabel("Converted amount")
+                    }
+
+                    Group {
+                        if let rate {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(verbatim: String(format: "1 %@ = %.4f %@", from, rate, to))
+                                Text("Rates refreshed within 30 minutes")
+                            }
+                        } else if let errorMessage {
+                            Label(LocalizedStringKey(errorMessage), systemImage: "wifi.exclamationmark")
+                        } else if isLoading {
+                            HStack(spacing: 8) {
+                                ProgressView().controlSize(.small)
+                                Text("Loading rates…")
+                            }
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
-                if let rate {
-                    Text(String(format: "1 %@ = %.4f %@", from, rate, to))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                .padding(20)
+            }
+            .background { AppBackground() }
+            .navigationTitle("Convert")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { amountIsFocused = false }
                 }
             }
         }
-        .padding(20)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular, in: .rect(cornerRadius: 34))
-        .task {
-            to = displayCurrency
-            await loadRates()
+        .onAppear(perform: configureInitialPair)
+        .task(id: from) {
+            await loadRates(for: from)
+        }
+    }
+
+    private func currencyRow<Content: View>(
+        title: LocalizedStringKey,
+        selection: Binding<String>,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                content()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                currencyMenu(selection: selection)
+            }
+            .padding(.horizontal, 14)
+            .frame(minHeight: 64)
+            .background(.secondary.opacity(0.10), in: .rect(cornerRadius: 16))
         }
     }
 
     private func currencyMenu(selection: Binding<String>) -> some View {
         Menu {
             Picker("Currency", selection: selection) {
-                ForEach(currencies, id: \.self) { Text($0).tag($0) }
+                ForEach(supportedCurrencies, id: \.self) { code in
+                    Text(verbatim: code).tag(code)
+                }
             }
         } label: {
             HStack(spacing: 4) {
-                Text(selection.wrappedValue).font(.subheadline.weight(.semibold))
+                Text(verbatim: selection.wrappedValue).font(.subheadline.weight(.semibold))
                 Image(systemName: "chevron.down").font(.caption2.weight(.bold))
             }
             .padding(.horizontal, 12)
@@ -1128,15 +1162,49 @@ struct CurrencyConverterCard: View {
         }
     }
 
-    private func loadRates() async {
+    private func configureInitialPair() {
+        guard !hasSavedPair else { return }
+        let preferredFrom = mostCommonTripCurrency ?? "USD"
+        from = preferredFrom
+        to = displayCurrency
+        if from == to {
+            from = supportedCurrencies.first(where: { $0 != to }) ?? "EUR"
+        }
+        hasSavedPair = true
+    }
+
+    private var mostCommonTripCurrency: String? {
+        var counts: [String: Int] = [:]
+        var winner: String?
+        var winningCount = 0
+        for trip in store.myTrips {
+            let code = trip.currencyCode
+            counts[code, default: 0] += 1
+            if counts[code, default: 0] > winningCount {
+                winner = code
+                winningCount = counts[code, default: 0]
+            }
+        }
+        return winner
+    }
+
+    private func swapCurrencies() {
+        (from, to) = (to, from)
+    }
+
+    private func loadRates(for requestedBase: String) async {
         isLoading = true
         errorMessage = nil
+        rates = [:]
         do {
-            rates = try await CurrencyService.shared.rates(base: from)
+            let fetched = try await CurrencyService.shared.rates(base: requestedBase)
+            guard !Task.isCancelled, from == requestedBase else { return }
+            rates = fetched
         } catch {
+            guard !Task.isCancelled, from == requestedBase else { return }
             errorMessage = "Couldn't load rates. Check your connection."
         }
-        isLoading = false
+        if from == requestedBase { isLoading = false }
     }
 }
 
