@@ -331,7 +331,9 @@ enum ItineraryAI {
         case 401, 403:
             throw AuthError(message: "Sign in to get AI suggestions.")
         case 429:
-            throw AuthError(message: "You've generated a few plans in a row — try again in a couple of minutes.")
+            throw ItineraryAIError.rateLimited(
+                retryAfterSeconds: AIRateLimitResponse.retryDelay(data: data, response: http)
+            )
         default:
             let detail = ReceiptStorage.messageField(from: String(data: data, encoding: .utf8) ?? "")
             throw AuthError(message: detail ?? "Suggestion service error (HTTP \(http.statusCode)).")
@@ -348,6 +350,10 @@ enum ItineraryAI {
         }
         return String(lines.joined(separator: "\n").prefix(4_000))
     }
+}
+
+enum ItineraryAIError: Error {
+    case rateLimited(retryAfterSeconds: Int?)
 }
 
 // MARK: - Explore section
@@ -799,6 +805,8 @@ struct ItineraryDetailView: View {
     // AI planner state.
     @State private var isGeneratingPlan = false
     @State private var aiMessage: String?
+    @State private var aiCooldownUntil: Date?
+    @State private var aiCooldownNow = Date()
     @State private var showApplyConfirm = false
     /// Which suggested days are expanded in the AI card.
     @State private var expandedSuggestionDays: Set<ItinerarySuggestionDay.ID> = []
@@ -878,6 +886,18 @@ struct ItineraryDetailView: View {
             if ItineraryAutoPlan.pending.remove(tripID) != nil,
                itinerary.suggestion == nil, !isGeneratingPlan {
                 generateSuggestion(trip, itinerary)
+            }
+        }
+        .task(id: aiCooldownUntil) {
+            guard let deadline = aiCooldownUntil else { return }
+            while !Task.isCancelled {
+                let now = Date()
+                aiCooldownNow = now
+                if now >= deadline {
+                    aiCooldownUntil = nil
+                    return
+                }
+                try? await Task.sleep(for: .seconds(1))
             }
         }
         .sheet(isPresented: $showTripDetails) {
@@ -1479,7 +1499,7 @@ struct ItineraryDetailView: View {
                 }
                 .buttonStyle(.plain)
                 .glassEffect(.regular.interactive(), in: .capsule)
-                .disabled(isGeneratingPlan)
+                .disabled(isGeneratingPlan || isAICoolingDown)
 
                 Text("Not ready to decide? This draft stays saved right here until you add or discard it.")
                     .font(.caption2)
@@ -1508,6 +1528,7 @@ struct ItineraryDetailView: View {
                 }
                 .buttonStyle(.plain)
                 .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+                .disabled(isGeneratingPlan || isAICoolingDown)
             }
 
             if let aiMessage {
@@ -1515,6 +1536,13 @@ struct ItineraryDetailView: View {
                     .font(.caption)
                     .foregroundStyle(Theme.negative)
                     .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if aiCooldownSecondsRemaining > 0 {
+                Text("Planner available in \(aiCooldownSecondsRemaining) seconds")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("itinerary-ai-cooldown")
             }
         }
     }
@@ -1618,6 +1646,7 @@ struct ItineraryDetailView: View {
     }
 
     private func generateSuggestion(_ trip: Trip, _ itinerary: Itinerary) {
+        guard !isGeneratingPlan, !isAICoolingDown else { return }
         aiMessage = nil
         isGeneratingPlan = true
         Task {
@@ -1632,11 +1661,31 @@ struct ItineraryDetailView: View {
                     expandedSuggestionDays = suggestion.days.first.map { [$0.id] } ?? []
                     showAllSuggestionDays = false
                 }
+            } catch ItineraryAIError.rateLimited(let retryAfterSeconds) {
+                let wait = max(retryAfterSeconds ?? 120, 1)
+                aiCooldownNow = Date()
+                aiCooldownUntil = aiCooldownNow.addingTimeInterval(TimeInterval(wait))
+                let waitText: String
+                if wait >= 60 {
+                    waitText = String(localized: "\(Int(ceil(Double(wait) / 60))) min")
+                } else {
+                    waitText = String(localized: "\(wait) sec")
+                }
+                aiMessage = String(localized: "AI planning is cooling down. Try again in \(waitText).")
             } catch {
                 aiMessage = (error as? AuthError)?.message ?? error.localizedDescription
             }
             isGeneratingPlan = false
         }
+    }
+
+    private var aiCooldownSecondsRemaining: Int {
+        guard let deadline = aiCooldownUntil else { return 0 }
+        return max(Int(ceil(deadline.timeIntervalSince(aiCooldownNow))), 0)
+    }
+
+    private var isAICoolingDown: Bool {
+        aiCooldownSecondsRemaining > 0
     }
 
     /// Fills the suggestion into the user's plan: the suggested stops replace whatever

@@ -723,79 +723,206 @@ $$;
 revoke all on function public.update_feed_interactions(uuid, jsonb, jsonb) from public, anon;
 grant execute on function public.update_feed_interactions(uuid, jsonb, jsonb) to authenticated;
 
--- Receipt-scan rate limiting -------------------------------------------------
+-- AI usage rate limiting -----------------------------------------------------
 --
--- The `parse-receipt` Edge Function proxies the receipt-parsing LLM call with a
--- server-side Gemini key. To bound cost/abuse, each call records an event and is rejected
--- once a user exceeds the per-window limit. The events table has NO RLS policies, so it is
--- inaccessible to clients directly; the only way in is the SECURITY DEFINER function below,
--- which is scoped to `auth.uid()`, validates caller-supplied bounds, serializes each user's
--- check/insert window, and is granted to authenticated users only.
+-- The table keeps its original name for a zero-data-loss migration, but now holds
+-- feature-scoped AI usage. Edge Functions reserve capacity before paid work and commit the
+-- reservation only after success. Failed calls release their reservation, while concurrent
+-- calls still count against the window until they finish or the reservation expires.
+--
+-- There are intentionally no RLS policies and the RPCs are service-role-only. The Edge
+-- Functions authenticate the user's JWT, then use their injected service-role key to call
+-- these RPCs with that verified user id. App clients cannot manufacture usage kinds or
+-- pollute their own quota.
 
 create table if not exists public.receipt_scan_events (
-    id         uuid primary key default gen_random_uuid(),
-    user_id    uuid not null references auth.users (id) on delete cascade,
-    created_at timestamptz not null default now()
+    id                     uuid primary key default gen_random_uuid(),
+    user_id                uuid not null references auth.users (id) on delete cascade,
+    kind                   text not null default 'unknown',
+    status                 text not null default 'succeeded',
+    created_at             timestamptz not null default now(),
+    committed_at           timestamptz,
+    reservation_expires_at timestamptz,
+    constraint receipt_scan_events_kind_check
+        check (kind in ('unknown', 'receipt', 'ocr', 'parse', 'itinerary')),
+    constraint receipt_scan_events_status_check
+        check (status in ('reserved', 'succeeded'))
 );
 
-create index if not exists receipt_scan_events_user_time_idx
-    on public.receipt_scan_events (user_id, created_at desc);
+-- Upgrade existing installations without renaming the table or dropping history.
+alter table public.receipt_scan_events add column if not exists kind text not null default 'unknown';
+alter table public.receipt_scan_events add column if not exists status text not null default 'succeeded';
+alter table public.receipt_scan_events add column if not exists committed_at timestamptz;
+alter table public.receipt_scan_events add column if not exists reservation_expires_at timestamptz;
+
+update public.receipt_scan_events
+   set committed_at = created_at
+ where status = 'succeeded' and committed_at is null;
+
+do $$
+begin
+    if not exists (
+        select 1 from pg_constraint
+         where conrelid = 'public.receipt_scan_events'::regclass
+           and conname = 'receipt_scan_events_kind_check'
+    ) then
+        alter table public.receipt_scan_events
+            add constraint receipt_scan_events_kind_check
+            check (kind in ('unknown', 'receipt', 'ocr', 'parse', 'itinerary'));
+    end if;
+    if not exists (
+        select 1 from pg_constraint
+         where conrelid = 'public.receipt_scan_events'::regclass
+           and conname = 'receipt_scan_events_status_check'
+    ) then
+        alter table public.receipt_scan_events
+            add constraint receipt_scan_events_status_check
+            check (status in ('reserved', 'succeeded'));
+    end if;
+end;
+$$;
+
+drop index if exists public.receipt_scan_events_user_time_idx;
+create index if not exists receipt_scan_events_user_kind_time_idx
+    on public.receipt_scan_events (user_id, kind, committed_at desc, created_at desc);
 
 alter table public.receipt_scan_events enable row level security;
--- Intentionally no policies: RLS denies all direct client access. Only
--- record_receipt_scan() (security definer) reads/writes this table.
+-- Intentionally no policies: RLS denies all direct client access.
 
-create or replace function public.record_receipt_scan(p_limit int, p_window_seconds int)
+create or replace function public.reserve_ai_usage(
+    p_user_id uuid,
+    p_kind text,
+    p_limit int,
+    p_window_seconds int
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_count int;
+    v_id uuid;
+    v_retry_after int := 0;
+    v_reservation_seconds int;
+begin
+    if p_user_id is null
+       or p_kind not in ('ocr', 'parse', 'itinerary')
+       or p_limit < 1 or p_limit > 100
+       or p_window_seconds < 10 or p_window_seconds > 3600 then
+        raise exception 'Invalid AI usage reservation arguments' using errcode = '22023';
+    end if;
+
+    -- Itinerary generation can legitimately take several minutes; receipt calls should
+    -- release abandoned reservations sooner.
+    v_reservation_seconds := case when p_kind = 'itinerary' then 600 else 180 end;
+
+    -- Serialize each user's feature bucket so concurrent requests cannot over-reserve.
+    perform pg_advisory_xact_lock(hashtextextended(p_user_id::text || ':' || p_kind, 0));
+
+    -- Abandoned work stops consuming capacity after its short lease. Successful rows are
+    -- retained for 30 days so Supabase logs/SQL metrics can be used to retune limits.
+    delete from public.receipt_scan_events
+     where user_id = p_user_id
+       and kind = p_kind
+       and ((status = 'reserved' and reservation_expires_at <= now())
+         or (status = 'succeeded' and coalesce(committed_at, created_at) < now() - interval '30 days'));
+
+    select count(*) into v_count
+      from public.receipt_scan_events
+     where user_id = p_user_id
+       and kind = p_kind
+       and ((status = 'succeeded'
+             and coalesce(committed_at, created_at) > now() - make_interval(secs => p_window_seconds))
+         or (status = 'reserved' and reservation_expires_at > now()));
+
+    if v_count >= p_limit then
+        select greatest(1, ceil(extract(epoch from min(
+            case
+                when status = 'reserved' then reservation_expires_at
+                else coalesce(committed_at, created_at) + make_interval(secs => p_window_seconds)
+            end
+        ) - now()))::int)
+          into v_retry_after
+          from public.receipt_scan_events
+         where user_id = p_user_id
+           and kind = p_kind
+           and ((status = 'succeeded'
+                 and coalesce(committed_at, created_at) > now() - make_interval(secs => p_window_seconds))
+             or (status = 'reserved' and reservation_expires_at > now()));
+
+        return jsonb_build_object(
+            'allowed', false,
+            'feature', p_kind,
+            'limit', p_limit,
+            'remaining', 0,
+            'windowSeconds', p_window_seconds,
+            'retryAfterSeconds', coalesce(v_retry_after, 1)
+        );
+    end if;
+
+    insert into public.receipt_scan_events (
+        user_id, kind, status, reservation_expires_at
+    ) values (
+        p_user_id, p_kind, 'reserved', now() + make_interval(secs => v_reservation_seconds)
+    ) returning id into v_id;
+
+    return jsonb_build_object(
+        'allowed', true,
+        'reservationId', v_id,
+        'feature', p_kind,
+        'limit', p_limit,
+        'remaining', greatest(p_limit - v_count - 1, 0),
+        'windowSeconds', p_window_seconds,
+        'retryAfterSeconds', 0
+    );
+end;
+$$;
+
+create or replace function public.complete_ai_usage(
+    p_reservation_id uuid,
+    p_succeeded boolean
+)
 returns boolean
 language plpgsql
 security definer
 set search_path = public
 as $$
 declare
-    v_uid   uuid := auth.uid();
-    v_count int;
+    v_status text;
 begin
-    -- Only a signed-in user has a uid; anonymous/anon-key callers are denied.
-    if v_uid is null then
+    select status into v_status
+      from public.receipt_scan_events
+     where id = p_reservation_id
+     for update;
+
+    if v_status is distinct from 'reserved' then
         return false;
     end if;
 
-    -- The Edge Function owns the intended limits. Since this RPC is executable by
-    -- authenticated clients, reject hostile direct calls that try to clear or bypass a
-    -- user's own event window with negative/oversized arguments.
-    if p_limit < 1 or p_limit > 100 or p_window_seconds < 10 or p_window_seconds > 3600 then
-        return false;
+    if p_succeeded then
+        update public.receipt_scan_events
+           set status = 'succeeded',
+               committed_at = now(),
+               reservation_expires_at = null
+         where id = p_reservation_id;
+    else
+        delete from public.receipt_scan_events where id = p_reservation_id;
     end if;
-
-    -- Serialize per-user checks so concurrent requests cannot all count the same old
-    -- window and then insert past the limit.
-    perform pg_advisory_xact_lock(hashtextextended(v_uid::text, 0));
-
-    -- Opportunistic cleanup so the table stays small (rows well outside the window are
-    -- no longer relevant to the limit).
-    delete from public.receipt_scan_events
-    where user_id = v_uid
-      and created_at < now() - make_interval(secs => p_window_seconds * 4);
-
-    select count(*) into v_count
-    from public.receipt_scan_events
-    where user_id = v_uid
-      and created_at > now() - make_interval(secs => p_window_seconds);
-
-    if v_count >= p_limit then
-        return false;
-    end if;
-
-    insert into public.receipt_scan_events (user_id) values (v_uid);
     return true;
 end;
 $$;
 
-revoke all on function public.record_receipt_scan(int, int) from public, anon;
-grant execute on function public.record_receipt_scan(int, int) to authenticated;
+-- Remove the old authenticated-client entry point and expose the new contract only to
+-- Edge Functions using the injected service-role key.
+drop function if exists public.record_receipt_scan(int, int);
+revoke all on function public.reserve_ai_usage(uuid, text, int, int) from public, anon, authenticated;
+revoke all on function public.complete_ai_usage(uuid, boolean) from public, anon, authenticated;
+grant execute on function public.reserve_ai_usage(uuid, text, int, int) to service_role;
+grant execute on function public.complete_ai_usage(uuid, boolean) to service_role;
 
 -- Normalized trip storage (B10) ---------------------------------------------
-+-- Keep this block identical to
+-- Keep this block identical to
 -- `supabase/migrations/20260716000000_normalize_trip_storage.sql`.
 -- B10: normalize the independently edited parts of a trip while retaining `trips.data`
 -- as a compatibility projection for older clients. All writes happen in one transaction.

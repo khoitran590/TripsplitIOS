@@ -86,6 +86,26 @@ final class TripsplitAppTests: XCTestCase {
         XCTAssertFalse(decoded.allowMembersToPayForOthers)
     }
 
+    func testStructuredAIRateLimitRetryDelay() throws {
+        let url = try XCTUnwrap(URL(string: "https://example.com/functions/v1/test"))
+        let structured = try XCTUnwrap(HTTPURLResponse(
+            url: url,
+            statusCode: 429,
+            httpVersion: nil,
+            headerFields: ["Retry-After": "42"]
+        ))
+        let body = Data(#"{"error":"Rate limit exceeded","feature":"itinerary","limit":10,"remaining":0,"windowSeconds":300,"retryAfterSeconds":42}"#.utf8)
+        XCTAssertEqual(AIRateLimitResponse.retryDelay(data: body, response: structured), 42)
+
+        let legacyHeaderOnly = try XCTUnwrap(HTTPURLResponse(
+            url: url,
+            statusCode: 429,
+            httpVersion: nil,
+            headerFields: ["Retry-After": "17"]
+        ))
+        XCTAssertEqual(AIRateLimitResponse.retryDelay(data: Data("{}".utf8), response: legacyHeaderOnly), 17)
+    }
+
     private func calculate(
         total: Double, method: SplitMethod, people: [Person], selected: Set<Person.ID>,
         assignee: Person.ID? = nil, percentages: [Person.ID: Double] = [:], amounts: [Person.ID: Double] = [:]

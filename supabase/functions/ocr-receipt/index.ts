@@ -2,13 +2,14 @@
 //
 // Why this exists: the app must NOT ship the Google Cloud Vision API key. The client
 // sends the receipt image plus the signed-in user's Supabase JWT; this function
-// authenticates the user, rate-limits them, calls Cloud Vision with the key held in a
+// authenticates the user, reserves feature-local capacity, calls Cloud Vision with the key held in a
 // Supabase secret, and returns the recognized text grouped into receipt rows.
 //
 // Security posture (mirrors parse-receipt):
 //  - Auth: platform `verify_jwt = true` AND an explicit `/auth/v1/user` check, so only a
 //    real signed-in user (not the anon key) is accepted.
-//  - Rate limit: per-user, enforced atomically by the `record_receipt_scan` RPC.
+//  - Rate limit: 20 successful OCR calls per user per 60 seconds. Capacity is reserved
+//    atomically by a service-role-only RPC, then released on upstream/infra failure.
 //  - Input: JSON body must contain an image payload under the size cap.
 //  - Secret: the Vision key is read from env and never logged or returned.
 //  - No dependencies: plain fetch only, to minimize supply-chain surface.
@@ -19,17 +20,19 @@
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const GOOGLE_VISION_API_KEY = Deno.env.get("GOOGLE_VISION_API_KEY");
 
 const MAX_IMAGE_BYTES = 4_000_000; // Keep JSON/base64 requests bounded.
 const MAX_LINES = 400;             // Clamp a runaway response.
 const RATE_LIMIT = 20;             // Max scans ...
 const RATE_WINDOW_SECONDS = 60;    // ... per user per this window.
+const RATE_KIND = "ocr";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
+function jsonResponse(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
+  return new Response(JSON.stringify(body), { status, headers: { ...JSON_HEADERS, ...headers } });
 }
 
 Deno.serve(async (req) => {
@@ -54,20 +57,22 @@ Deno.serve(async (req) => {
   if (!image) return jsonResponse({ error: "Missing receipt image" }, 400);
   if ("error" in image) return jsonResponse({ error: image.error }, image.status);
 
-  // 3. Per-user rate limit (atomic check-and-record in Postgres).
-  let allowed: boolean;
-  try {
-    allowed = await recordScan(token);
-  } catch {
-    return jsonResponse({ error: "Rate limit check failed" }, 500);
-  }
-  if (!allowed) {
-    return jsonResponse({ error: "Rate limit exceeded. Try again shortly." }, 429);
-  }
-
-  // 4. The key must be configured server-side.
+  // 3. Missing server configuration is our outage and must not consume user quota.
   if (!GOOGLE_VISION_API_KEY) {
     return jsonResponse({ error: "Receipt OCR is not configured." }, 503);
+  }
+
+  // 4. Reserve capacity atomically; commit it only after Cloud Vision succeeds.
+  let usage: UsageReservation;
+  try {
+    usage = await reserveUsage(user.id);
+  } catch {
+    logUsage("rate_check_failure", 500);
+    return jsonResponse({ error: "Rate limit check failed" }, 500);
+  }
+  if (!usage.allowed || !usage.reservationId) {
+    logUsage("rate_limited", 429, usage);
+    return rateLimitResponse(usage);
   }
 
   // 5. Call Cloud Vision with the server-side key. DOCUMENT_TEXT_DETECTION is the dense-
@@ -88,11 +93,15 @@ Deno.serve(async (req) => {
       },
     );
   } catch {
+    await completeUsage(usage.reservationId, false);
+    logUsage("post_call_failure", 502);
     return jsonResponse({ error: "OCR service error" }, 502);
   }
   if (!visionResponse.ok) {
     // Log status only — never the upstream body (avoid leaking key-adjacent detail).
     console.error("Cloud Vision call failed:", visionResponse.status);
+    await completeUsage(usage.reservationId, false);
+    logUsage("post_call_failure", 502);
     return jsonResponse({ error: "OCR service error" }, 502);
   }
 
@@ -100,6 +109,8 @@ Deno.serve(async (req) => {
   const annotation = visionJson?.responses?.[0];
   if (!annotation || annotation.error) {
     console.error("Cloud Vision annotation error:", annotation?.error?.code ?? "empty");
+    await completeUsage(usage.reservationId, false);
+    logUsage("post_call_failure", 502);
     return jsonResponse({ error: "OCR service error" }, 502);
   }
 
@@ -108,6 +119,8 @@ Deno.serve(async (req) => {
     : "";
   const lines = groupWordsIntoRows(annotation.textAnnotations).slice(0, MAX_LINES);
 
+  await completeUsage(usage.reservationId, true);
+  logUsage("success", 200, usage);
   return jsonResponse({ text: fullText.slice(0, 20_000), lines }, 200);
 });
 
@@ -194,18 +207,78 @@ async function getUser(token: string): Promise<{ id: string } | null> {
   return typeof user?.id === "string" ? { id: user.id } : null;
 }
 
-async function recordScan(token: string): Promise<boolean> {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/record_receipt_scan`, {
+type UsageReservation = {
+  allowed: boolean;
+  reservationId?: string;
+  feature: string;
+  limit: number;
+  remaining: number;
+  windowSeconds: number;
+  retryAfterSeconds: number;
+};
+
+async function reserveUsage(userId: string): Promise<UsageReservation> {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/reserve_ai_usage`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      apikey: SUPABASE_SERVICE_ROLE_KEY,
     },
-    body: JSON.stringify({ p_limit: RATE_LIMIT, p_window_seconds: RATE_WINDOW_SECONDS }),
+    body: JSON.stringify({
+      p_user_id: userId,
+      p_kind: RATE_KIND,
+      p_limit: RATE_LIMIT,
+      p_window_seconds: RATE_WINDOW_SECONDS,
+    }),
   });
   if (!res.ok) throw new Error(`rpc ${res.status}`);
-  return (await res.json().catch(() => false)) === true;
+  const value = await res.json().catch(() => null);
+  if (!value || typeof value.allowed !== "boolean") throw new Error("invalid rpc response");
+  return value as UsageReservation;
+}
+
+async function completeUsage(reservationId: string, succeeded: boolean): Promise<void> {
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/complete_ai_usage`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+      },
+      body: JSON.stringify({ p_reservation_id: reservationId, p_succeeded: succeeded }),
+    });
+    if (!res.ok || (await res.json().catch(() => false)) !== true) {
+      console.error(JSON.stringify({ function: "ocr-receipt", kind: RATE_KIND, outcome: "accounting_failure" }));
+    }
+  } catch {
+    console.error(JSON.stringify({ function: "ocr-receipt", kind: RATE_KIND, outcome: "accounting_failure" }));
+  }
+}
+
+function rateLimitResponse(usage: UsageReservation): Response {
+  const retry = Math.max(1, Math.ceil(usage.retryAfterSeconds || RATE_WINDOW_SECONDS));
+  return jsonResponse({
+    error: "Rate limit exceeded",
+    feature: RATE_KIND,
+    limit: usage.limit || RATE_LIMIT,
+    remaining: 0,
+    windowSeconds: usage.windowSeconds || RATE_WINDOW_SECONDS,
+    retryAfterSeconds: retry,
+  }, 429, { "Retry-After": String(retry) });
+}
+
+function logUsage(outcome: string, status: number, usage?: Partial<UsageReservation>): void {
+  console.log(JSON.stringify({
+    function: "ocr-receipt",
+    kind: RATE_KIND,
+    outcome,
+    status,
+    limit: usage?.limit ?? RATE_LIMIT,
+    remaining: usage?.remaining,
+    windowSeconds: usage?.windowSeconds ?? RATE_WINDOW_SECONDS,
+  }));
 }
 
 type ImagePayload =

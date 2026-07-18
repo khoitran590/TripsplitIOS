@@ -35,9 +35,28 @@ enum ReceiptAIConfig {
 enum ReceiptScanError: Error {
     case notConfigured
     case unauthorized
-    case rateLimited
+    case rateLimited(retryAfterSeconds: Int?)
     case invalidResponse
     case apiError(String)
+}
+
+/// Shared structured 429 shape returned by the AI Edge Functions. Older deployments may
+/// omit these fields, so every value remains optional and clients retain a friendly fallback.
+struct AIRateLimitResponse: Decodable {
+    let feature: String?
+    let limit: Int?
+    let remaining: Int?
+    let windowSeconds: Int?
+    let retryAfterSeconds: Int?
+
+    static func retryDelay(data: Data, response: HTTPURLResponse) -> Int? {
+        let bodyDelay = (try? JSONDecoder().decode(Self.self, from: data))?.retryAfterSeconds
+        let headerDelay = response.value(forHTTPHeaderField: "Retry-After").flatMap(Int.init)
+        return [bodyDelay, headerDelay]
+            .compactMap { $0 }
+            .filter { $0 > 0 }
+            .min()
+    }
 }
 
 /// The receipt shape the LLM returns. Kept separate from the app's `ReceiptItem` (which
@@ -152,7 +171,9 @@ enum ReceiptParser {
         case 401, 403:
             throw ReceiptScanError.unauthorized
         case 429:
-            throw ReceiptScanError.rateLimited
+            throw ReceiptScanError.rateLimited(
+                retryAfterSeconds: AIRateLimitResponse.retryDelay(data: data, response: http)
+            )
         default:
             let detail = ReceiptStorage.messageField(from: String(data: data, encoding: .utf8) ?? "")
             throw ReceiptScanError.apiError(detail ?? "HTTP \(http.statusCode)")
@@ -242,7 +263,9 @@ enum CloudOCR {
         case 401, 403:
             throw ReceiptScanError.unauthorized
         case 429:
-            throw ReceiptScanError.rateLimited
+            throw ReceiptScanError.rateLimited(
+                retryAfterSeconds: AIRateLimitResponse.retryDelay(data: data, response: http)
+            )
         default:
             let detail = ReceiptStorage.messageField(from: String(data: data, encoding: .utf8) ?? "")
             throw ReceiptScanError.apiError(detail ?? "HTTP \(http.statusCode)")
@@ -274,6 +297,9 @@ struct ReceiptScanResult {
     /// The grand total as printed on the receipt, when known. Ground truth for
     /// `reconcileAgainstPrintedTotals` — the parsed items must add up to it.
     var printedTotal: Double? = nil
+    /// Present only when the online path was limited and this result came from a local /
+    /// heuristic fallback, so the UI can explain the quality change once.
+    var aiRateLimitRetryAfterSeconds: Int? = nil
 
     /// Whether the scan produced anything worth showing. Used by the scan orchestrator to
     /// decide if a Gemini result should be preferred over the local Vision parse.
@@ -333,7 +359,16 @@ enum ReceiptScanner {
 
         if mode == .onlineBest, let accessToken, ReceiptAIConfig.isConfigured {
             // 1. Server-side Google Cloud Vision OCR.
-            let cloudRows = (try? await CloudOCR.recognizeRows(image, accessToken: accessToken)) ?? []
+            var rateLimitRetryAfterSeconds: Int?
+            let cloudRows: [String]
+            do {
+                cloudRows = try await CloudOCR.recognizeRows(image, accessToken: accessToken)
+            } catch ReceiptScanError.rateLimited(let retryAfterSeconds) {
+                rateLimitRetryAfterSeconds = retryAfterSeconds ?? 60
+                cloudRows = []
+            } catch {
+                cloudRows = []
+            }
 
             // Only run the on-device pass here if the cloud OCR came back empty — its rows
             // then stand in as the OCR text for Gemini, and its parse as a ready fallback.
@@ -346,21 +381,37 @@ enum ReceiptScanner {
 
             // 2. Gemini structured parse, cross-checking the photo against the OCR text.
             let ocrText = ocrRows.joined(separator: "\n")
-            if let parsed = try? await ReceiptParser.parse(
-                image: image,
-                ocrText: ocrText.isEmpty ? nil : ocrText,
-                accessToken: accessToken
-            ) {
+            do {
+                let parsed = try await ReceiptParser.parse(
+                    image: image,
+                    ocrText: ocrText.isEmpty ? nil : ocrText,
+                    accessToken: accessToken
+                )
                 let mapped = mapToScanResult(parsed)
                 if mapped.isUsable { return mapped }
+            } catch ReceiptScanError.rateLimited(let retryAfterSeconds) {
+                rateLimitRetryAfterSeconds = max(
+                    rateLimitRetryAfterSeconds ?? 0,
+                    retryAfterSeconds ?? 60
+                )
+            } catch {
+                // The existing fallback pipeline handles network/upstream/model failures.
             }
 
             // 3. Heuristic parse of the Cloud Vision rows.
-            let cloudParse = parseItems(from: cloudRows)
+            var cloudParse = parseItems(from: cloudRows)
+            cloudParse.aiRateLimitRetryAfterSeconds = rateLimitRetryAfterSeconds
             if cloudParse.isUsable { return cloudParse }
 
             // 4. On-device result if it already ran; otherwise fall through to run it.
-            if let localScan { return localScan.result }
+            if var localResult = localScan?.result {
+                localResult.aiRateLimitRetryAfterSeconds = rateLimitRetryAfterSeconds
+                return localResult
+            }
+
+            var localResult = await visionScan(image)
+            localResult.aiRateLimitRetryAfterSeconds = rateLimitRetryAfterSeconds
+            return localResult
         }
         return await visionScan(image)
     }

@@ -4,6 +4,86 @@
     "" : {
 
     },
+    "%lld min" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld min"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 分钟"
+          }
+        }
+      }
+    },
+    "%lld sec" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld s"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 秒"
+          }
+        }
+      }
+    },
+    "AI planning is cooling down. Try again in %@." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El planificador con IA está en pausa. Inténtalo de nuevo en %@."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI 行程规划正在冷却，请在 %@后重试。"
+          }
+        }
+      }
+    },
+    "Planner available in %lld seconds" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Planificador disponible en %lld segundos"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 秒后可使用行程规划"
+          }
+        }
+      }
+    },
+    "Using offline scan — AI limit reached. Try again shortly." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usando el escaneo sin conexión: se alcanzó el límite de IA. Inténtalo de nuevo pronto."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在使用离线扫描——已达到 AI 使用上限，请稍后重试。"
+          }
+        }
+      }
+    },
     "· %@, %@" : {
       "localizations" : {
         "en" : {

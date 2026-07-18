@@ -2,13 +2,15 @@
 //
 // Why this exists: the app must NOT ship the Gemini API key. The client sends the receipt
 // image plus the signed-in user's Supabase JWT; this function authenticates the user,
-// rate-limits them, calls Gemini with the key held in a Supabase secret, validates the
+// reserves a feature-local quota slot, calls Gemini with the key held in a Supabase
+// secret, commits usage only on success, validates the
 // model output, and returns structured JSON.
 //
 // Security posture:
 //  - Auth: platform `verify_jwt = true` AND an explicit `/auth/v1/user` check, so only a
 //    real signed-in user (not the anon key) is accepted.
-//  - Rate limit: per-user, enforced atomically by the `record_receipt_scan` RPC.
+//  - Rate limit: 15 successful parse calls per user per 60 seconds. Capacity is reserved
+//    atomically by a service-role-only RPC, then released on upstream/infra failure.
 //  - Input: JSON body must contain either an image payload or legacy OCR `text`, under caps.
 //  - Secret: the Gemini key is read from env and never logged or returned.
 //  - Output: the model's JSON is re-validated/normalized before it reaches the client.
@@ -17,19 +19,21 @@
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
 const GEMINI_MODEL = Deno.env.get("GEMINI_MODEL") ?? "gemini-2.5-flash";
 
 const MAX_IMAGE_BYTES = 4_000_000;  // Keep JSON/base64 requests bounded.
 const MAX_TEXT_BYTES = 20_000;      // Legacy OCR text is small; reject oversized input.
 const MAX_ITEMS = 200;              // Clamp a runaway model response.
-const RATE_LIMIT = 20;              // Max scans ...
+const RATE_LIMIT = 15;              // Max successful parse calls ...
 const RATE_WINDOW_SECONDS = 60;     // ... per user per this window.
+const RATE_KIND = "parse";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
+function jsonResponse(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
+  return new Response(JSON.stringify(body), { status, headers: { ...JSON_HEADERS, ...headers } });
 }
 
 Deno.serve(async (req) => {
@@ -59,20 +63,23 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: "Receipt text too large" }, 413);
   }
 
-  // 3. Per-user rate limit (atomic check-and-record in Postgres).
-  let allowed: boolean;
-  try {
-    allowed = await recordScan(token);
-  } catch {
-    return jsonResponse({ error: "Rate limit check failed" }, 500);
-  }
-  if (!allowed) {
-    return jsonResponse({ error: "Rate limit exceeded. Try again shortly." }, 429);
-  }
-
-  // 4. The key must be configured server-side.
+  // 3. The key must be configured before reserving quota: our own outage is never charged.
   if (!GEMINI_API_KEY) {
     return jsonResponse({ error: "Receipt parsing is not configured." }, 503);
+  }
+
+  // 4. Reserve this feature's capacity atomically. The reservation prevents concurrent
+  // requests from exceeding the bucket, but is deleted unless paid work succeeds.
+  let usage: UsageReservation;
+  try {
+    usage = await reserveUsage(user.id);
+  } catch {
+    logUsage("rate_check_failure", 500);
+    return jsonResponse({ error: "Rate limit check failed" }, 500);
+  }
+  if (!usage.allowed || !usage.reservationId) {
+    logUsage("rate_limited", 429, usage);
+    return rateLimitResponse(usage);
   }
 
   // 5. Call Gemini with the server-side key. When the client sends both the photo and
@@ -86,7 +93,11 @@ Deno.serve(async (req) => {
     ]
     : [{ text: prompt }];
   let receipt = await callGemini(parts);
-  if (!receipt) return jsonResponse({ error: "Parsing service error" }, 502);
+  if (!receipt) {
+    await completeUsage(usage.reservationId, false);
+    logUsage("post_call_failure", 502);
+    return jsonResponse({ error: "Parsing service error" }, 502);
+  }
 
   // The known failure mode: the model "summarizes" the receipt as a single item whose
   // price is the grand total. Re-ask once with explicit corrective feedback — the second
@@ -103,6 +114,8 @@ Deno.serve(async (req) => {
       receipt = retry;
     }
   }
+  await completeUsage(usage.reservationId, true);
+  logUsage("success", 200, usage);
   return jsonResponse(receipt, 200);
 });
 
@@ -190,18 +203,78 @@ async function getUser(token: string): Promise<{ id: string } | null> {
   return typeof user?.id === "string" ? { id: user.id } : null;
 }
 
-async function recordScan(token: string): Promise<boolean> {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/record_receipt_scan`, {
+type UsageReservation = {
+  allowed: boolean;
+  reservationId?: string;
+  feature: string;
+  limit: number;
+  remaining: number;
+  windowSeconds: number;
+  retryAfterSeconds: number;
+};
+
+async function reserveUsage(userId: string): Promise<UsageReservation> {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/reserve_ai_usage`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      apikey: SUPABASE_SERVICE_ROLE_KEY,
     },
-    body: JSON.stringify({ p_limit: RATE_LIMIT, p_window_seconds: RATE_WINDOW_SECONDS }),
+    body: JSON.stringify({
+      p_user_id: userId,
+      p_kind: RATE_KIND,
+      p_limit: RATE_LIMIT,
+      p_window_seconds: RATE_WINDOW_SECONDS,
+    }),
   });
   if (!res.ok) throw new Error(`rpc ${res.status}`);
-  return (await res.json().catch(() => false)) === true;
+  const value = await res.json().catch(() => null);
+  if (!value || typeof value.allowed !== "boolean") throw new Error("invalid rpc response");
+  return value as UsageReservation;
+}
+
+async function completeUsage(reservationId: string, succeeded: boolean): Promise<void> {
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/complete_ai_usage`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+      },
+      body: JSON.stringify({ p_reservation_id: reservationId, p_succeeded: succeeded }),
+    });
+    if (!res.ok || (await res.json().catch(() => false)) !== true) {
+      console.error(JSON.stringify({ function: "parse-receipt", kind: RATE_KIND, outcome: "accounting_failure" }));
+    }
+  } catch {
+    console.error(JSON.stringify({ function: "parse-receipt", kind: RATE_KIND, outcome: "accounting_failure" }));
+  }
+}
+
+function rateLimitResponse(usage: UsageReservation): Response {
+  const retry = Math.max(1, Math.ceil(usage.retryAfterSeconds || RATE_WINDOW_SECONDS));
+  return jsonResponse({
+    error: "Rate limit exceeded",
+    feature: RATE_KIND,
+    limit: usage.limit || RATE_LIMIT,
+    remaining: 0,
+    windowSeconds: usage.windowSeconds || RATE_WINDOW_SECONDS,
+    retryAfterSeconds: retry,
+  }, 429, { "Retry-After": String(retry) });
+}
+
+function logUsage(outcome: string, status: number, usage?: Partial<UsageReservation>): void {
+  console.log(JSON.stringify({
+    function: "parse-receipt",
+    kind: RATE_KIND,
+    outcome,
+    status,
+    limit: usage?.limit ?? RATE_LIMIT,
+    remaining: usage?.remaining,
+    windowSeconds: usage?.windowSeconds ?? RATE_WINDOW_SECONDS,
+  }));
 }
 
 function buildPrompt(text: string | null, hasImage: boolean): string {

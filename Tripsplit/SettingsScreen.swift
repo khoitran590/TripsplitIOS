@@ -283,7 +283,7 @@ struct SettingsScreen: View {
             Text("TripSplit")
                 .font(.headline)
                 .foregroundStyle(.tertiary)
-            Text("Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0") (\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"))")
+            Text("Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1") (\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"))")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
             Text("Terms & Privacy")

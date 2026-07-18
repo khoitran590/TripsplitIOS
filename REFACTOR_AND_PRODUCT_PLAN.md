@@ -1,8 +1,8 @@
-# TripSplit — File Split Plan + Product PR Roadmap + Balance Card UX
+# TripSplit — File Split Plan + Product PR Roadmap + Balance Card UX + AI Rate Limits
 
 Read-only planning document for implementing structural refactors, product improvements,
-and Home balance/currency-converter card UX. Feed this file to another model/agent as the
-source of truth for execution.
+Home balance/currency-converter card UX, and AI rate-limit hardening. Feed this file to
+another model/agent as the source of truth for execution.
 
 **Tracks**
 
@@ -11,6 +11,7 @@ source of truth for execution.
 | **A** | File split / structure (PRs A0–A6) |
 | **B** | Product features (PRs B1–B10) |
 | **C** | Balance / currency converter card UX (readability + minimalism) |
+| **D** | AI rate limiting (fair buckets, 429 UX, cost controls) |
 
 **Project:** TripSplit — native iOS SwiftUI app (expense splitting + light trip planning)  
 **Real app target:** `Tripsplit.xcodeproj` + `Tripsplit/*.swift`  
@@ -1041,6 +1042,361 @@ The home card should feel like a **summary**; trip rows stay detailed. Don’t m
 
 ---
 
+# Track D — AI rate limiting (harden + fair budgets)
+
+Planning for improvements to the existing **server-side AI rate limiter**. Do **not** rebuild
+rate limiting from scratch — extend what ships today. This track is independent of A/B/C
+file splits and product features (except it touches the same Edge Functions / receipt +
+itinerary clients).
+
+**Goal:** fair per-feature budgets, honest quota charging, clearer 429 UX, tighter RPC surface,
+and optional cost caps — without client-only “security” or third-party deps.
+
+**Hard rules that apply:** 6 (no API keys in app), 7 (schema file + live DB in sync), 8
+(localized UI strings).
+
+---
+
+## D.0 — What exists today (do not re-implement)
+
+### Server
+
+| Piece | Location | Behavior |
+|---|---|---|
+| Event table | `public.receipt_scan_events` in `supabase_schema.sql` | `(id, user_id, created_at)`; RLS on, **no policies** (clients cannot read/write directly) |
+| RPC | `public.record_receipt_scan(p_limit int, p_window_seconds int)` | `SECURITY DEFINER`; requires `auth.uid()`; bounds-checks args; advisory lock per user; counts events in window; inserts one row; returns `true`/`false` |
+| Grant | `authenticated` can `EXECUTE` the RPC | Edge Functions call it with the user JWT |
+
+### Edge Functions (each auth-checks user, then rate-limits, then calls paid API)
+
+| Function | Limit | Window | Upstream |
+|---|---:|---:|---|
+| `supabase/functions/ocr-receipt` | 20 | 60s | Google Cloud Vision |
+| `supabase/functions/parse-receipt` | 20 | 60s | Gemini |
+| `supabase/functions/suggest-itinerary` | 10 | 300s | Gemini |
+
+All three write into the **same** `receipt_scan_events` table. The RPC counts *all* of a
+user’s recent rows in the caller-supplied window — there is no per-feature dimension.
+
+Quota is recorded **before** the paid API call. Failures (5xx, misconfig 503, bad model
+JSON, upstream timeout) still consume a slot. On reject: HTTP **429** +
+`"Rate limit exceeded. Try again shortly."` (no `Retry-After`, no structured body).
+
+### Client
+
+| Path | File | 429 handling |
+|---|---|---|
+| OCR + parse | `ReceiptService.swift` | `ReceiptScanError.rateLimited`; online path fails and pipeline falls back toward on-device Vision (often without explaining AI was limited) |
+| Itinerary suggest | `ItineraryFeature.swift` | User-facing: “You've generated a few plans in a row — try again in a couple of minutes.” |
+
+### Related (not request-rate limiting)
+
+Feed RPC caps (e.g. max 500 comments / 50 reaction keys, “Too many feed interactions”) are
+**payload size** guards. Do not conflate them with Track D. App-wide rate limits for trip
+CRUD / storage / auth are **out of scope** unless abuse appears later.
+
+### What’s already solid (keep)
+
+- Server-side enforcement (not client-only)
+- Atomic check via advisory lock + insert
+- Auth required; events table not client-readable
+- Bounds on `p_limit` / `p_window_seconds`
+- Client already maps HTTP 429 on receipt + itinerary paths
+
+---
+
+## D.1 — Problems to fix (priority order)
+
+1. **Shared AI bucket across features** — OCR, parse, and itinerary share one event log.
+   Heavy receipt scanning can starve itinerary (and vice versa in the overlapping window).
+   Naming (`receipt_scan_*`) no longer matches itinerary use.
+2. **Double-count per receipt scan** — online pipeline typically calls **ocr-receipt then
+   parse-receipt** → **2 events per user action**. Effective full-scan budget is ~half of
+   the advertised 20/min unless limits are retuned or counted as one unit.
+3. **Pre-call charging** — infra/upstream failures burn quota unfairly.
+4. **Opaque 429** — no `Retry-After`, no `limit` / `remaining` / `window` / `feature` for
+   clients to cool down intelligently.
+5. **RPC callable by any authenticated client** — cannot steal free AI (Edge Functions still
+   gate secrets), but can **self-DoS** / pollute the shared window; feature args would not
+   be trustworthy if clients can write arbitrary kinds.
+6. **Weak UX** — receipt rate limit often silent (fallback); itinerary message is better but
+   still guessy on wait time.
+7. **Burst-only caps** — per-window limits do not bound all-day spend on Gemini/Vision.
+8. **Little observability** — hard to retune 20/60 and 10/300 without 429/success metrics.
+
+---
+
+## D.2 — Design principles
+
+- **Server remains authoritative.** Client guards are UX only (disable button, show toast).
+- **Per-feature fairness first**, optional global/daily cost ceiling second.
+- **Charge for real AI work**, not for our outages (with optional still-count for obvious abuse).
+- **Structured 429s** so clients never invent wait times.
+- **Surgical PRs:** schema + Edge Functions + minimal client mapping; no MVVM, no new packages.
+- **Idempotent DDL** in `supabase_schema.sql` + apply to linked project (hard rule 7).
+- **Do not** add app-wide throttles for non-AI endpoints in this track.
+- **Do not** put API keys or rate-limit bypass secrets in the app bundle.
+
+---
+
+## D.3 — Target design (conceptual)
+
+### Feature-scoped events
+
+Prefer one of:
+
+**Option A (recommended):** add `kind text not null` (e.g. `ocr` | `parse` | `itinerary`) to
+the events table (or rename table to `ai_usage_events` in a later cleanup). Count only rows
+matching the kind for that function’s limit.
+
+**Option B:** separate tables/RPCs per feature — clearer isolation, more schema surface.
+
+**Option C (temporary):** keep one table but pass `p_kind` into the RPC and filter counts —
+smallest schema change if renaming is deferred.
+
+Also decide **receipt pipeline units**:
+
+- **Unit = full scan** (one charge for OCR+parse together), *or*
+- **Unit = function call** but retune numbers so 20/min means ~10 full scans is intentional
+  and documented in function comments / README.
+
+### RPC shape (illustrative)
+
+```text
+record_ai_usage(
+  p_kind text,              -- 'ocr' | 'parse' | 'itinerary' (or single 'receipt' if unified)
+  p_limit int,
+  p_window_seconds int
+) returns boolean
+-- or returns jsonb { allowed, remaining, limit, window_seconds, retry_after_seconds }
+```
+
+Prefer **service-role-only execute** from Edge Functions after D3; until then keep
+bounds-checks tight.
+
+### 429 response body (illustrative)
+
+```json
+{
+  "error": "Rate limit exceeded",
+  "feature": "itinerary",
+  "limit": 10,
+  "windowSeconds": 300,
+  "retryAfterSeconds": 42
+}
+```
+
+Plus HTTP header: `Retry-After: 42`.
+
+### When to insert an event
+
+| Outcome | Count against quota? |
+|---|---|
+| Allowed + paid API success | Yes |
+| Allowed + paid API 5xx / timeout / 503 misconfig | Prefer **No** (or separate “soft” counter) |
+| Rejected by rate limit | No insert (already at cap) |
+| 401/413/invalid input before AI | No |
+| Optional: repeated abuse of huge payloads | Yes / separate abuse table (later) |
+
+Implementation note: if charging post-success, use a short-lived “reservation” or accept a
+small race; advisory lock already serializes per user — document the chosen approach in the
+PR.
+
+---
+
+## Suggested PR breakdown
+
+### PR D1 — Separate feature buckets (highest impact)
+
+**Problem:** one shared event stream makes limits unfair and hard to reason about.
+
+**Scope:**
+
+- Schema: add `kind` (or equivalent) to usage events; backfill existing rows as
+  `'receipt'` / `'unknown'` if needed; update index to `(user_id, kind, created_at desc)`.
+- Replace or extend `record_receipt_scan` → kind-aware RPC (keep old name as wrapper only if
+  zero-downtime deploy requires it; prefer clean rename + update all Edge Functions together).
+- Update `ocr-receipt`, `parse-receipt`, `suggest-itinerary` to pass their kind and
+  **feature-local** limits/windows.
+- Document limits in each function header comment.
+- Update `supabase_schema.sql` **and** apply DDL to live DB.
+- Update `supabase/functions/parse-receipt/README.md` (and any OCR/itinerary notes).
+
+**Suggested starting limits (retune after metrics):**
+
+| Kind | Limit | Window | Notes |
+|---|---:|---:|---|
+| `ocr` | 20 | 60s | Cheaper; can be looser than parse |
+| `parse` | 15 | 60s | Gemini cost |
+| `itinerary` | 10 | 300s | Highest cost / longest work |
+
+**Out of scope for D1:** client UX copy, daily caps, RPC revoke.
+
+**Verify:** build not strictly required if SQL + Deno only, but if client error parsing changes,
+run `xcodebuild`. Manually reason concurrent same-user requests still cannot exceed limit
+(advisory lock preserved).
+
+**Risk:** Medium — live Edge Functions must deploy in lockstep with RPC signature.
+
+---
+
+### PR D2 — Receipt pipeline unit semantics
+
+**Problem:** one scan ≈ two events.
+
+**Options (pick one in the PR description):**
+
+1. **Single charge at parse** (OCR free / not counted) — simple; OCR can still be abused alone.
+2. **Single charge at OCR** when parse always follows — weak if offline-only OCR path differs.
+3. **New kind `receipt_scan`** charged once from a thin orchestrator — best long-term, more
+   work if client still calls two functions.
+4. **Keep dual charge** but set limits so “~10 full scans/min” is explicit in docs/constants.
+
+**Recommendation:** (4) as quick doc+constant fix *or* (1) if OCR abuse is low risk; avoid
+silent double-counting without comment.
+
+**Files:** Edge Function constants + README; optional client comment in `ReceiptScanner`.
+
+**Risk:** Low–Medium depending on option.
+
+---
+
+### PR D3 — Charge on success + structured 429
+
+**Scope:**
+
+- Move or split “record usage” so infra failures do not consume the primary budget
+  (document race/reservation approach).
+- On limit hit: return JSON fields above + `Retry-After` header.
+- On success path only (or reservation→commit): insert event.
+- Client:
+  - `ReceiptService.swift` — parse `retryAfterSeconds` if present; keep
+    `ReceiptScanError.rateLimited` (optional associated value for retry).
+  - `ItineraryFeature.swift` — use server retry seconds in the user message when available;
+    keep friendly fallback string.
+- Localization: any new user-visible strings via `Localizable.xcstrings` / hard rule 8.
+
+**Out of scope:** daily caps, metrics dashboards.
+
+**Risk:** Medium — billing/abuse tradeoff if post-success only; test failure paths carefully.
+
+---
+
+### PR D4 — Lock down RPC + client UX polish
+
+**Scope:**
+
+- Revoke `EXECUTE` on the usage RPC from `authenticated` / `anon` if Edge Functions can call
+  with service role (or a dedicated restricted path). Confirm deploy model still works with
+  `verify_jwt` + user auth for the *function*, service role only for the *RPC*.
+- Receipt UX: when cloud path hits 429 and falls back to on-device, show a one-shot toast /
+  banner: e.g. “Using offline scan — AI limit reached. Try again in a minute.”
+  (`LocalizedStringKey`, not `Text(String)`).
+- Itinerary UX: disable suggest button for `retryAfterSeconds` after 429; avoid double-tap
+  duplicate in-flight requests.
+- Optional: show remaining quota only if API returns it (do not invent client-side counters
+  as security).
+
+**Risk:** Medium for RPC revoke (misconfigured service role = all AI 500s). Low for UX-only.
+
+---
+
+### PR D5 — Daily/monthly cost ceiling (optional, when usage grows)
+
+**Problem:** window limits stop bursts, not all-day maxing every window.
+
+**Scope:**
+
+- Second-tier counter (e.g. per-day per user per kind, or global AI actions/day).
+- Clear user message when daily cap hit (distinct from short window 429).
+- Optional product hook later (upgrade / wait until reset) — not required for MVP.
+
+**Risk:** Product policy decision; implement only when Gemini/Vision spend warrants it.
+
+---
+
+### PR D6 — Observability (ops)
+
+**Scope (server logs / Supabase metrics — no heavy APM product required):**
+
+- Log/count: 429 vs 200 by function and kind
+- Success vs pre-call reject vs post-call failure
+- Optional: p95 events/user/window
+
+Use data to retune D1 limits. No user-facing UI required.
+
+**Risk:** Low.
+
+---
+
+## D.4 — Explicit non-goals
+
+- App-wide rate limiting for trip CRUD, feed reads, storage uploads, auth, FX.
+- Treating feed “Too many interactions” as request-rate control (payload caps only).
+- Client-only rate limit as the real enforcement layer.
+- Third-party rate-limit libraries or Supabase Swift SDK.
+- Perfect sliding-window fairness algorithms (fixed windows are fine at current scale).
+- Complex token-bucket in Swift.
+
+---
+
+## Track D PR summary
+
+| PR | Win | Effort | Depends on |
+|---|---|---|---|
+| **D1** | Fair per-feature AI budgets | M | — |
+| **D2** | Honest receipt-scan accounting | S | D1 nice-to-have |
+| **D3** | Don’t burn quota on outages; structured 429 | M | D1 optional |
+| **D4** | Harden RPC + visible cooldown UX | S–M | D3 for Retry-After |
+| **D5** | Daily spend ceiling | M | D1; pain-driven |
+| **D6** | Metrics to retune limits | S | D1 |
+
+### Recommended Track D order
+
+1. **D1** — separate buckets (fixes the structural bug)  
+2. **D2** — pipeline unit semantics (with or right after D1)  
+3. **D3** — success charging + structured 429  
+4. **D4** — RPC lockdown + UX  
+5. **D6** — metrics when convenient  
+6. **D5** — daily cap only if cost becomes real  
+
+### Track D “v1 complete” when
+
+- [ ] Receipt OCR/parse and itinerary no longer unfairly starve each other (D1)  
+- [ ] Receipt double-count is intentional and documented *or* fixed (D2)  
+- [ ] 429 includes retry guidance; infra failures don’t silently eat the main budget (D3)  
+- [ ] Users see when receipt AI was limited; itinerary cools down after 429 (D4)  
+- [ ] Schema file and live DB match; Edge Functions deployed in lockstep  
+
+---
+
+## D.5 — Files / surfaces an implementer will touch
+
+| Area | Paths |
+|---|---|
+| Schema | `supabase_schema.sql` (`receipt_scan_events`, `record_receipt_scan`); new migration under `supabase/migrations/` if that’s the project habit |
+| Edge Functions | `supabase/functions/ocr-receipt/index.ts`, `parse-receipt/index.ts`, `suggest-itinerary/index.ts`, `parse-receipt/README.md` |
+| Client receipt | `Tripsplit/ReceiptService.swift` (`ReceiptScanError`, OCR/parse HTTP switches, fallback messaging call sites) |
+| Client itinerary | `Tripsplit/ItineraryFeature.swift` (suggest HTTP 429 handling, button disable) |
+| Strings | `Tripsplit/Localizable.xcstrings` for any new user-visible copy |
+
+---
+
+## D.6 — Acceptance criteria (implementer checklist)
+
+- [ ] Per-feature (or equivalent) limits: burning receipt quota does not block itinerary solely
+      because of shared undifferentiated rows (and vice versa within reason).  
+- [ ] Concurrent requests for the same user still cannot exceed the limit (lock or equivalent).  
+- [ ] 429 responses are parseable; itinerary message uses server retry when present.  
+- [ ] Receipt online rate limit either surfaces a short explanation or is explicitly accepted
+      as silent fallback in the PR notes.  
+- [ ] No API keys added to the app; no public bucket / RLS regressions.  
+- [ ] `supabase_schema.sql` updated; live apply step documented in the PR.  
+- [ ] Clean `xcodebuild` if any Swift changed.  
+- [ ] Edge Functions redeployed: `parse-receipt`, `ocr-receipt`, `suggest-itinerary` as needed.
+
+---
+
 # How tracks fit together
 
 ```
@@ -1054,6 +1410,7 @@ A0 tests ───────────────────────�
      │         └─ B5 export, B6 search (after A4 preferred)
      │         └─ C1 balance card declutter (HomeScreen only — parallel-safe)
      │         └─ C2 converter sheet (after C1)
+     │         └─ D1–D4 AI rate limits (Edge Functions + schema; mostly parallel-safe)
      │
      └─ A5 ContentView split ── B9 explore JSON
                                 B4 notifications (long pole)
@@ -1061,6 +1418,8 @@ A0 tests ───────────────────────�
                                 B8 itinerary bridge
                                 B10 only if concurrent-edit bugs appear
                                 C3 balance card polish
+                                D5 daily AI cap (cost-driven)
+                                D6 AI usage metrics
 ```
 
 ### Parallelism rules (avoid merge pain)
@@ -1070,6 +1429,9 @@ A0 tests ───────────────────────�
 - Product PRs that only touch Settings / SettleView / new files are safest during early A-series  
 - **C1/C2** touch `HomeScreen.swift` only (mostly)—safe in parallel with A1–A4 *unless* someone is also editing Home heavily; avoid parallel C* with large Home refactors  
 - C1 is independent of B2 if `displayCurrency` already exists; still fix popover copy to match whatever currency the card shows  
+- **D1–D3** are mostly backend (SQL + Edge Functions)—safe in parallel with A/B/C **unless** another PR is also editing `ReceiptService.swift` / `ItineraryFeature.swift` or the same Edge Functions  
+- **D4** client UX may touch the same Swift files as receipt/itinerary product work (B8)—serialize those  
+- Deploy D1 RPC signature changes in lockstep with all three AI Edge Functions  
 
 ---
 
@@ -1083,6 +1445,7 @@ A0 tests ───────────────────────�
 6. **B2 / B5 / B6** — next product value  
 7. **C2** — converter as sheet/tool  
 8. **A5** then **B9** — explore content maintainability  
+9. **D1 → D3 → D4** — AI rate-limit fairness + 429 UX (can interleave earlier if AI cost/abuse is urgent; independent of file split)
 
 ---
 
@@ -1100,12 +1463,16 @@ What the app already offers (do not re-build):
 - Trip feed (posts/photos/comments/reactions) as separate table rows
 - Explore curated destinations, MapKit map, itinerary planner + AI suggest Edge Function
 - Offline trip cache, path-keyed image cache, themes, en/es/zh-Hans localization, onboarding
+- **AI rate limiting (MVP):** per-user `record_receipt_scan` + `receipt_scan_events`; used by
+  `ocr-receipt` (20/60s), `parse-receipt` (20/60s), `suggest-itinerary` (10/300s); shared
+  event table; client maps 429 — harden in **Track D**
 
 Stub / incomplete / polish backlog:
 
 - Settings **Payments** and **Notifications** (no real behavior)
 - Sign in with Apple disabled (`appleSignInEnabled = false`)
 - Balance card density / converter flip UX (**Track C**)
+- AI rate-limit fairness / structured 429 / daily cost caps (**Track D**)
 - Dead SPM package
 
 ---
@@ -1114,7 +1481,7 @@ Stub / incomplete / polish backlog:
 
 When implementing a PR from this doc:
 
-1. State which PR id you are implementing (`A0`, `A1`, `B2`, `C1`, …).  
+1. State which PR id you are implementing (`A0`, `A1`, `B2`, `C1`, `D1`, …).  
 2. Stay within that PR’s scope (surgical).  
 3. Respect hard rules 1–8.  
 4. Prefer build verification over simulator unless asked.  
@@ -1122,7 +1489,8 @@ When implementing a PR from this doc:
 6. If schema changes: edit `supabase_schema.sql` and note live DB apply step.  
 7. Update this file’s checkboxes only if the human wants progress tracked here.  
 8. For **Track C**: UI-only unless C2 needs presentation plumbing; do not change `SplitEngine` or settlement math; keep localization correct.  
+9. For **Track D**: keep enforcement server-side; deploy Edge Functions in lockstep with RPC/schema changes; never put AI keys or bypass secrets in the app; localize any new rate-limit copy (hard rule 8).  
 
 ---
 
-*Planning artifact for TripSplit. Implementation happens PR-by-PR (Tracks A, B, C).*
+*Planning artifact for TripSplit. Implementation happens PR-by-PR (Tracks A, B, C, D).*

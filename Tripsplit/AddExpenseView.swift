@@ -40,6 +40,7 @@ struct AddExpenseView: View {
     @State private var receiptURL: String?
     @State private var isScanning = false
     @State private var isUploading = false
+    @State private var usedRateLimitedReceiptFallback = false
     @State private var configuringIndex: Int?
     @State private var showCamera = false
     @State private var taxText = ""
@@ -236,6 +237,16 @@ struct AddExpenseView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
+            if usedRateLimitedReceiptFallback && !isScanning {
+                Label(
+                    "Using offline scan — AI limit reached. Try again shortly.",
+                    systemImage: "bolt.slash.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("receipt-rate-limit-fallback")
+            }
+
             if !items.isEmpty || !removedItems.isEmpty {
                 itemsEditor(trip)
             } else if receiptImage != nil && !isScanning {
@@ -383,10 +394,12 @@ struct AddExpenseView: View {
         // upload whenever a URL was already set, silently persisting the previous photo.
         receiptURL = nil
         uploadError = nil
+        usedRateLimitedReceiptFallback = false
 
         isScanning = true
         let scan = await ReceiptScanner.scan(image, accessToken: store.accessToken)
         isScanning = false
+        usedRateLimitedReceiptFallback = scan.aiRateLimitRetryAfterSeconds != nil
         if !scan.items.isEmpty {
             removedItems = []
             let everyone = Set(store.trip(tripID)?.members.map(\.id) ?? [])
