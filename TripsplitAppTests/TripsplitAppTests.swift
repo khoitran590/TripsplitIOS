@@ -106,6 +106,51 @@ final class TripsplitAppTests: XCTestCase {
         XCTAssertEqual(AIRateLimitResponse.retryDelay(data: Data("{}".utf8), response: legacyHeaderOnly), 17)
     }
 
+    func testTripShareSummaryUsesReadableExpenseAndSplitBlocks() {
+        let dinner = Expense(
+            title: "Dinner",
+            amount: 60,
+            payerID: alice.id,
+            participantIDs: [alice.id, bob.id, chris.id],
+            date: Date(timeIntervalSince1970: 1_735_689_600),
+            shares: [alice.id: 30, bob.id: 20, chris.id: 10]
+        )
+        let trip = Trip(
+            name: "Weekend Away",
+            currencyCode: "USD",
+            creatorID: alice.id,
+            members: [alice, bob, chris],
+            budgets: [alice.id: 200, bob.id: 150],
+            expenses: [dinner],
+            location: "Seattle"
+        )
+
+        let summary = TripExport.text(trip)
+        XCTAssertTrue(summary.contains("TRIP OVERVIEW"))
+        XCTAssertTrue(summary.contains("EXPENSES\n1. Dinner"))
+        XCTAssertTrue(summary.contains("   Paid by: Alice"))
+        XCTAssertTrue(summary.contains("   Split:\n     • Alice:"))
+        XCTAssertTrue(summary.contains("\n     • Bob:"))
+        XCTAssertTrue(summary.contains("\n     • Chris:"))
+        XCTAssertTrue(summary.contains("SETTLE UP"))
+        XCTAssertTrue(summary.hasSuffix("Shared from TripSplit"))
+    }
+
+    func testSettlementShareTextSeparatesPeopleAndAmount() {
+        let settlement = Settlement(from: bob, to: alice, amount: 42)
+        let text = TripExport.settlementText(
+            settlement: settlement,
+            remaining: 37,
+            currencyCode: "USD",
+            tripName: "Weekend Away"
+        )
+
+        XCTAssertTrue(text.contains("TRIPSPLIT PAYMENT REQUEST\nWeekend Away"))
+        XCTAssertTrue(text.contains("PAYMENT\nFrom: Bob\nTo: Alice"))
+        XCTAssertTrue(text.contains("AMOUNT DUE\n"))
+        XCTAssertTrue(text.contains("Remaining balance after confirmed payments."))
+    }
+
     private func calculate(
         total: Double, method: SplitMethod, people: [Person], selected: Set<Person.ID>,
         assignee: Person.ID? = nil, percentages: [Person.ID: Double] = [:], amounts: [Person.ID: Double] = [:]

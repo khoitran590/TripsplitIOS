@@ -714,10 +714,12 @@ struct SettleView: View {
     }
 
     private var settlementShareText: String {
-        let debtor = settlement.from.name.isEmpty ? "A tripmate" : settlement.from.name
-        let creditor = settlement.to.name.isEmpty ? "a tripmate" : settlement.to.name
-        let context = tripName.map { " for \($0)" } ?? ""
-        return "\(debtor) owes \(creditor) \(money(remaining, currencyCode))\(context)."
+        TripExport.settlementText(
+            settlement: settlement,
+            remaining: remaining,
+            currencyCode: currencyCode,
+            tripName: tripName
+        )
     }
 
     // MARK: Actions

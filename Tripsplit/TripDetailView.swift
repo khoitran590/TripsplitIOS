@@ -253,7 +253,7 @@ struct TripDetailView: View {
             }
             .buttonStyle(.plain)
             .glassEffect(.regular.interactive(), in: .circle)
-            .accessibilityLabel("Export trip summary")
+            .accessibilityLabel("Share trip summary")
         }
         .padding(.top, 4)
     }

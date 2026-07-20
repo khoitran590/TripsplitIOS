@@ -7,6 +7,7 @@ struct SettingsScreen: View {
     @Environment(AuthStore.self) private var auth
     @Environment(TripStore.self) private var store
     @Environment(LocalizationManager.self) private var localization
+    @Environment(\.dismiss) private var dismiss
 
     @State private var showPersonalInfo = false
     @State private var showChangePassword = false
@@ -33,6 +34,11 @@ struct SettingsScreen: View {
                     AuthView()
                 }
             }
+        }
+        // Signing in happens inside this sheet (AuthView above). Close the sheet on
+        // success so the user lands on Home instead of the settings content.
+        .onChange(of: auth.isAuthenticated) { _, isAuthenticated in
+            if isAuthenticated { dismiss() }
         }
     }
 

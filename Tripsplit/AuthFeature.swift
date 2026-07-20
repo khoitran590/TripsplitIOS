@@ -536,15 +536,11 @@ struct AuthView: View {
     /// The app mark above the card, mirroring the reference's "Product Inc." lockup.
     private var brandHeader: some View {
         VStack(spacing: 12) {
-            Image(systemName: "airplane.departure")
-                .font(.system(size: 26, weight: .semibold))
-                .foregroundStyle(.white)
+            Image("SplashLogo")
+                .resizable()
+                .scaledToFit()
                 .frame(width: 58, height: 58)
-                .background(
-                    LinearGradient(colors: [Color(hex: 0x818CF8), Color(hex: 0x4F46E5)],
-                                   startPoint: .topLeading, endPoint: .bottomTrailing),
-                    in: .rect(cornerRadius: 16)
-                )
+                .clipShape(.rect(cornerRadius: 16, style: .continuous))
             Text("TripSplit")
                 .font(.headline)
         }
