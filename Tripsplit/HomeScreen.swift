@@ -618,6 +618,7 @@ struct SyncFailureBanner: View {
 
 struct BalanceCard: View {
     @Environment(TripStore.self) private var store
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @AppStorage("displayCurrency") private var displayCurrency = "USD"
     @State private var showConverter = false
     @State private var showBudgetInfo = false
@@ -653,8 +654,9 @@ struct BalanceCard: View {
         // plainly, and title the card "Spending" so it doesn't promise a budget it
         // doesn't have.
         let heroLabel = !hasBudget ? "Total spent" : (isOver ? "Over budget" : "Remaining")
+        let statusText = isOver ? "Over budget" : isNear ? "Near limit" : "On track"
 
-        return VStack(alignment: .leading, spacing: 14) {
+        return VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 4) {
                 Text("Overview")
                     .font(.subheadline.weight(.semibold))
@@ -691,58 +693,65 @@ struct BalanceCard: View {
             // VoiceOver receives the financial summary as one coherent element while the
             // info and converter controls above remain independently actionable.
             VStack(alignment: .leading, spacing: 14) {
-                // Hero figure: the one number that answers "how am I doing?"
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(verbatim: heroValue)
-                        .font(.largeTitle.weight(.bold))
-                        .foregroundStyle(isOver ? statusColor : .primary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.78)
-                    HStack(spacing: 6) {
-                        Text(LocalizedStringKey(heroLabel))
-                        Text(verbatim: "·")
-                        Text(verbatim: displayCurrency)
-                    }
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    HStack(spacing: 5) {
-                        Text("\(store.myTrips.count) trips")
-                        if isNear {
+                // Hero band: the headline figure on the left, the two facts that qualify
+                // it (health, share of budget used) right-aligned opposite it, so the row
+                // carries weight across the full card width instead of trailing off.
+                HStack(alignment: .bottom, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(verbatim: heroValue)
+                            .font(.largeTitle.weight(.bold))
+                            .foregroundStyle(isOver ? statusColor : .primary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.78)
+                        HStack(spacing: 5) {
+                            Text(LocalizedStringKey(heroLabel))
                             Text(verbatim: "·")
-                            Text("Near limit")
-                                .foregroundStyle(statusColor)
+                            Text(verbatim: displayCurrency)
+                            Text(verbatim: "·")
+                            Text("\(store.myTrips.count) trips")
                         }
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                     }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+
+                    if hasBudget {
+                        Spacer(minLength: 8)
+                        VStack(alignment: .trailing, spacing: 5) {
+                            Text(LocalizedStringKey(statusText))
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(statusColor)
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 4)
+                                .background(statusColor.opacity(0.12), in: .capsule)
+                            Text("\(Int((fraction * 100).rounded()))% of budget")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    }
                 }
 
                 if hasBudget {
-                    // One slim measure and one sentence replace the old three-column footer.
-                    VStack(alignment: .leading, spacing: 7) {
-                        GeometryReader { geo in
-                            ZStack(alignment: .leading) {
-                                Capsule().fill(Color.primary.opacity(0.08))
-                                Capsule()
-                                    .fill(statusColor)
-                                    .frame(width: geo.size.width * min(1, max(0, fraction)))
-                                    .animation(.easeInOut(duration: 0.4), value: fraction)
-                            }
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(Color.primary.opacity(0.08))
+                            Capsule()
+                                .fill(statusColor)
+                                .frame(width: geo.size.width * min(1, max(0, fraction)))
+                                .animation(.easeInOut(duration: 0.4), value: fraction)
                         }
-                        .frame(height: 7)
-
-                        Text("Spent \(summaryMoney(totals.spent, displayCurrency)) of \(summaryMoney(totals.budget, displayCurrency)) · \(Int((fraction * 100).rounded()))%")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
                     }
+                    .frame(height: 8)
                 } else {
                     Text("No budget set · Set one inside a trip")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
 
-                settlementSummary(totals)
+                statGrid(totals, hasBudget: hasBudget)
 
                 if !totals.unavailableCurrencies.isEmpty {
                     Text("Some trips need an exchange-rate refresh")
@@ -755,6 +764,71 @@ struct BalanceCard: View {
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassEffect(.regular, in: .rect(cornerRadius: 34))
+    }
+
+    /// The four supporting figures as equal tiles: budget health on the top row,
+    /// settlement on the bottom. Giving them one shared shape and size stops the
+    /// settlement pair from reading as an afterthought below the budget line, and
+    /// fills the card's width evenly. Columns collapse to a single stack at
+    /// accessibility text sizes, where two tiles per row would truncate.
+    private func statGrid(_ totals: TripStore.HomeTotals, hasBudget: Bool) -> some View {
+        let boxes = [
+            statBox(
+                label: "SPENT",
+                value: summaryMoney(totals.spent, displayCurrency),
+                valueColor: Theme.accent,
+                background: Theme.accent.opacity(0.10)
+            ),
+            statBox(
+                label: "BUDGET",
+                value: hasBudget ? summaryMoney(totals.budget, displayCurrency) : String(localized: "Not set"),
+                valueColor: hasBudget ? .primary : .secondary,
+                background: Color.primary.opacity(0.05)
+            ),
+            // A zero balance is neutral news, so it stays grey — red and green are
+            // reserved for amounts that actually need settling.
+            statBox(
+                label: "YOU OWE",
+                value: summaryMoney(totals.youOwe, displayCurrency),
+                valueColor: totals.youOwe > 0 ? Color(hex: 0xDC2626) : .secondary,
+                background: totals.youOwe > 0 ? Color(hex: 0xDC2626).opacity(0.10) : Color.primary.opacity(0.05)
+            ),
+            statBox(
+                label: "OWED TO YOU",
+                value: summaryMoney(totals.owedToYou, displayCurrency),
+                valueColor: totals.owedToYou > 0 ? Color(hex: 0x16A34A) : .secondary,
+                background: totals.owedToYou > 0 ? Color(hex: 0x16A34A).opacity(0.10) : Color.primary.opacity(0.05)
+            )
+        ]
+
+        return Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(spacing: 8) { ForEach(0..<4, id: \.self) { boxes[$0] } }
+            } else {
+                Grid(horizontalSpacing: 8, verticalSpacing: 8) {
+                    GridRow { boxes[0]; boxes[1] }
+                    GridRow { boxes[2]; boxes[3] }
+                }
+            }
+        }
+    }
+
+    /// One tile in `statGrid`. Mirrors `UserTripCard.statBox` so the home summary and
+    /// the trip cards below it read as the same family.
+    private func statBox(label: String, value: String, valueColor: Color, background: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(LocalizedStringKey(label))
+                .font(.caption2.weight(.semibold)).tracking(0.5)
+                .foregroundStyle(.secondary)
+                .lineLimit(1).minimumScaleFactor(0.8)
+            Text(verbatim: value)
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(valueColor)
+                .lineLimit(1).minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 10).padding(.horizontal, 12)
+        .background(background, in: .rect(cornerRadius: 12))
     }
 
     /// Explains where the headline budget figure comes from: only budgets the user has
@@ -778,48 +852,6 @@ struct BalanceCard: View {
         .fixedSize(horizontal: false, vertical: true)
         .padding(14)
         .frame(width: 290, alignment: .leading)
-    }
-
-    /// Settlement information stays visually secondary to budget health. `ViewThatFits`
-    /// preserves the one-line scan at normal sizes and stacks cleanly at large Dynamic Type.
-    private func settlementSummary(_ totals: TripStore.HomeTotals) -> some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 12) {
-                settlementValue(
-                    label: "You owe",
-                    value: summaryMoney(totals.youOwe, displayCurrency),
-                    color: Color(hex: 0xDC2626)
-                )
-                Divider().frame(height: 18)
-                settlementValue(
-                    label: "Owed to you",
-                    value: summaryMoney(totals.owedToYou, displayCurrency),
-                    color: Color(hex: 0x16A34A)
-                )
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                settlementValue(
-                    label: "You owe",
-                    value: summaryMoney(totals.youOwe, displayCurrency),
-                    color: Color(hex: 0xDC2626)
-                )
-                settlementValue(
-                    label: "Owed to you",
-                    value: summaryMoney(totals.owedToYou, displayCurrency),
-                    color: Color(hex: 0x16A34A)
-                )
-            }
-        }
-        .font(.footnote)
-    }
-
-    private func settlementValue(label: String, value: String, color: Color) -> some View {
-        HStack(spacing: 5) {
-            Text(LocalizedStringKey(label)).foregroundStyle(.secondary)
-            Text(verbatim: value).fontWeight(.semibold).foregroundStyle(color)
-        }
-        .lineLimit(1)
-        .minimumScaleFactor(0.85)
     }
 
     /// Keeps whole amounts clean, adds grouping for readability, and uses compact notation
