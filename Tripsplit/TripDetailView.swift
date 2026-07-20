@@ -178,19 +178,19 @@ struct TripDetailView: View {
 
             VStack(alignment: .leading, spacing: 12) {
                 Text("NOW EXPLORING")
-                    .font(.caption.weight(.bold)).tracking(2)
+                    .font(.app(.caption, .bold)).tracking(2)
                     .foregroundStyle(.white.opacity(0.85))
                 Text(trip.name)
-                    .font(.system(size: 36, weight: .bold))
+                    .font(.app(size: 36, weight: .bold))
                     .foregroundStyle(.white)
                     .lineLimit(2)
                 if let location = trip.location, !location.isEmpty {
                     Text(location)
-                        .font(.title3)
+                        .font(.app(.title3))
                         .foregroundStyle(.white.opacity(0.9))
                 } else if let range = trip.dateRangeText {
                     Text(range)
-                        .font(.title3)
+                        .font(.app(.title3))
                         .foregroundStyle(.white.opacity(0.9))
                 }
                 travelersRow(trip)
@@ -202,7 +202,7 @@ struct TripDetailView: View {
         .overlay(alignment: .topTrailing) {
             Button { dismiss() } label: {
                 Image(systemName: "xmark")
-                    .font(.subheadline.weight(.bold))
+                    .font(.app(.subheadline, .bold))
                     .foregroundStyle(.white)
                     .frame(width: 36, height: 36)
                     .background(.black.opacity(0.35), in: .circle)
@@ -220,7 +220,7 @@ struct TripDetailView: View {
             HStack(spacing: -8) {
                 ForEach(trip.members.prefix(3)) { member in
                     Text(member.initials)
-                        .font(.caption2.weight(.bold))
+                        .font(.app(.caption2, .bold))
                         .foregroundStyle(.white)
                         .frame(width: 30, height: 30)
                         .background(member.color, in: .circle)
@@ -228,7 +228,7 @@ struct TripDetailView: View {
                 }
             }
             Text("\(trip.members.count) traveler\(trip.members.count == 1 ? "" : "s")")
-                .font(.subheadline.weight(.medium))
+                .font(.app(.subheadline, .medium))
                 .foregroundStyle(.white)
         }
     }
@@ -246,7 +246,7 @@ struct TripDetailView: View {
             heroButton("Settle Up", icon: "person.2.fill") { scrollToSettle = true }
             ShareLink(item: TripExport.text(trip)) {
                 Image(systemName: "square.and.arrow.up")
-                    .font(.caption.weight(.semibold))
+                    .font(.app(.caption, .semibold))
                     .foregroundStyle(.white)
                     .frame(width: 44, height: 44)
                     .contentShape(.circle)
@@ -261,8 +261,8 @@ struct TripDetailView: View {
     private func heroButton(_ title: LocalizedStringKey, icon: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                Image(systemName: icon).font(.caption.weight(.semibold))
-                Text(title).font(.caption.weight(.semibold)).lineLimit(1)
+                Image(systemName: icon).font(.app(.caption, .semibold))
+                Text(title).font(.app(.caption, .semibold)).lineLimit(1)
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 14)
@@ -287,8 +287,8 @@ struct TripDetailView: View {
             withAnimation(.snappy) { detailTab = tab }
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: icon).font(.caption.weight(.semibold))
-                Text(title).font(.subheadline.weight(.semibold))
+                Image(systemName: icon).font(.app(.caption, .semibold))
+                Text(title).font(.app(.subheadline, .semibold))
             }
             .foregroundStyle(detailTab == tab ? Color.white : .secondary)
             .frame(maxWidth: .infinity)
@@ -323,11 +323,11 @@ struct TripDetailView: View {
     private func detailTile(icon: String, label: LocalizedStringKey, value: String) -> some View {
         HStack(spacing: 10) {
             Image(systemName: icon)
-                .font(.subheadline)
+                .font(.app(.subheadline))
                 .foregroundStyle(Theme.accent)
             VStack(alignment: .leading, spacing: 2) {
-                Text(label).font(.caption).foregroundStyle(.secondary)
-                Text(value).font(.subheadline.weight(.semibold))
+                Text(label).font(.app(.caption)).foregroundStyle(.secondary)
+                Text(value).font(.app(.subheadline, .semibold))
                     .lineLimit(1).minimumScaleFactor(0.7)
             }
             Spacer(minLength: 0)
@@ -351,14 +351,14 @@ struct TripDetailView: View {
         let barColor = overBudget ? Theme.negative : (nearBudget ? Theme.warning : Theme.positive)
         return VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Label("Budget Overview", systemImage: "wallet.bifold.fill").font(.headline)
+                Label("Budget Overview", systemImage: "wallet.bifold.fill").font(.app(.headline))
                 Spacer()
                 if store.isCreator(of: trip) {
                     Button {
                         if auth.isAuthenticated { showEditTrip = true } else { showSignInAlert = true }
                     } label: {
                         Text("Edit Budget")
-                            .font(.caption.weight(.semibold))
+                            .font(.app(.caption, .semibold))
                             .padding(.horizontal, 12).padding(.vertical, 6)
                             .background(.secondary.opacity(0.14), in: .capsule)
                             .frame(minHeight: 44)
@@ -369,9 +369,9 @@ struct TripDetailView: View {
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("Total Budget").font(.caption).foregroundStyle(.secondary)
+                Text("Total Budget").font(.app(.caption)).foregroundStyle(.secondary)
                 Text(money(budget, trip.currencyCode))
-                    .font(.system(size: 30, weight: .bold))
+                    .font(.app(size: 30, weight: .bold))
             }
 
             if budget > 0 {
@@ -389,11 +389,11 @@ struct TripDetailView: View {
                 if nearBudget || overBudget {
                     HStack(spacing: 8) {
                         Image(systemName: overBudget ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill")
-                            .font(.subheadline.weight(.semibold))
+                            .font(.app(.subheadline, .semibold))
                         Text(overBudget
                             ? "You've gone over budget."
                             : "Heads up — you've used \(Int((usedFraction * 100).rounded()))% of your budget.")
-                            .font(.footnote.weight(.medium))
+                            .font(.app(.footnote, .medium))
                         Spacer(minLength: 0)
                     }
                     .foregroundStyle(barColor)
@@ -428,11 +428,11 @@ struct TripDetailView: View {
     private func budgetTile(_ label: LocalizedStringKey, _ value: String, _ color: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label)
-                .font(.system(size: 10, weight: .semibold)).tracking(0.5)
+                .font(.app(size: 10, weight: .semibold)).tracking(0.5)
                 .textCase(.uppercase)
                 .foregroundStyle(.secondary)
             Text(value)
-                .font(.subheadline.weight(.bold)).foregroundStyle(color)
+                .font(.app(.subheadline, .bold)).foregroundStyle(color)
                 .lineLimit(1).minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -478,12 +478,12 @@ struct TripDetailView: View {
             avatar(settlement.to, size: 30)
             VStack(alignment: .leading, spacing: 2) {
                 Text(verbatim: settlement.to.name)
-                    .font(.subheadline).fontWeight(.semibold)
+                    .font(.app(.subheadline)).fontWeight(.semibold)
                 if settled {
-                    Text("Settled").font(.caption).foregroundStyle(Color(hex: 0x10B981))
+                    Text("Settled").font(.app(.caption)).foregroundStyle(Color(hex: 0x10B981))
                 } else {
                     Text("Tap to record a payment")
-                        .font(.caption)
+                        .font(.app(.caption))
                         .foregroundStyle(.secondary)
                 }
             }
@@ -492,11 +492,11 @@ struct TripDetailView: View {
                 Image(systemName: "checkmark.seal.fill").foregroundStyle(Color(hex: 0x10B981))
             } else {
                 Text(money(store.remaining(tripID: tripID, for: settlement), trip.currencyCode))
-                    .font(.subheadline.weight(.semibold))
+                    .font(.app(.subheadline, .semibold))
                     .foregroundStyle(Theme.negative)
             }
             Image(systemName: "chevron.right")
-                .font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
+                .font(.app(.caption2, .bold)).foregroundStyle(.tertiary)
         }
         .padding(.vertical, 4)
         .contentShape(.rect)
@@ -508,21 +508,21 @@ struct TripDetailView: View {
         return TripCard(title: "Settle Up", icon: "arrow.left.arrow.right.circle.fill") {
             if settlements.isEmpty {
                 Text("All settled up — no transfers needed.")
-                    .font(.subheadline)
+                    .font(.app(.subheadline))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 8)
             } else {
                 HStack(spacing: 6) {
                     Text("Tap a person to see who owes them.")
-                        .font(.footnote)
+                        .font(.app(.footnote))
                         .foregroundStyle(.secondary)
                     Spacer()
                     Button {
                         showSettleInfo = true
                     } label: {
                         Image(systemName: "info.circle")
-                            .font(.subheadline)
+                            .font(.app(.subheadline))
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
@@ -578,9 +578,9 @@ struct TripDetailView: View {
                 avatar(group.creditor, size: 30)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(LocalizedStringKey(name))
-                        .font(.subheadline).fontWeight(.semibold)
+                        .font(.app(.subheadline)).fontWeight(.semibold)
                     Text("Owed by \(group.settlements.count) \(group.settlements.count == 1 ? "person" : "people")")
-                        .font(.caption)
+                        .font(.app(.caption))
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -588,11 +588,11 @@ struct TripDetailView: View {
                     Image(systemName: "checkmark.seal.fill").foregroundStyle(Color(hex: 0x10B981))
                 } else {
                     Text(money(totalRemaining, trip.currencyCode))
-                        .font(.subheadline.weight(.semibold))
+                        .font(.app(.subheadline, .semibold))
                         .foregroundStyle(Color(hex: 0x10B981))
                 }
                 Image(systemName: "chevron.right")
-                    .font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
+                    .font(.app(.caption2, .bold)).foregroundStyle(.tertiary)
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
             }
             // Padding before contentShape so the whole padded row hit-tests,
@@ -610,9 +610,9 @@ struct TripDetailView: View {
             avatar(settlement.from, size: 26)
             VStack(alignment: .leading, spacing: 2) {
                 Text(LocalizedStringKey(fromLabel))
-                    .font(.subheadline).fontWeight(.semibold)
+                    .font(.app(.subheadline)).fontWeight(.semibold)
                 if store.isFullySettled(tripID: tripID, settlement) {
-                    Text("Settled").font(.caption).foregroundStyle(Color(hex: 0x10B981))
+                    Text("Settled").font(.app(.caption)).foregroundStyle(Color(hex: 0x10B981))
                 }
             }
             Spacer()
@@ -620,7 +620,7 @@ struct TripDetailView: View {
                 Image(systemName: "checkmark.seal.fill").foregroundStyle(Color(hex: 0x10B981))
             } else {
                 Text(money(store.remaining(tripID: tripID, for: settlement), trip.currencyCode))
-                    .font(.subheadline.weight(.semibold))
+                    .font(.app(.subheadline, .semibold))
                     .foregroundStyle(Color(hex: 0x10B981))
                 // Only the creditor can confirm they were actually paid back.
                 if settlement.to.id == me {
@@ -628,7 +628,7 @@ struct TripDetailView: View {
                         settlementToConfirm = settlement
                     } label: {
                         Text("Mark Paid")
-                            .font(.caption.weight(.semibold))
+                            .font(.app(.caption, .semibold))
                             .foregroundStyle(Color(hex: 0x10B981))
                             .padding(.horizontal, 10).padding(.vertical, 6)
                             .background(Color(hex: 0x10B981).opacity(0.15), in: .capsule)
@@ -638,7 +638,7 @@ struct TripDetailView: View {
                 }
             }
             Image(systemName: "chevron.right")
-                .font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
+                .font(.app(.caption2, .bold)).foregroundStyle(.tertiary)
         }
         .padding(.vertical, 4)
         .contentShape(.rect)
@@ -682,19 +682,19 @@ struct TripDetailView: View {
         private func step(number: Int, icon: String, title: LocalizedStringKey, detail: LocalizedStringKey) -> some View {
             HStack(alignment: .top, spacing: 14) {
                 Image(systemName: icon)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.app(.subheadline, .semibold))
                     .foregroundStyle(.white)
                     .frame(width: 34, height: 34)
                     .background(Theme.accent, in: .circle)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Step \(number)")
-                        .font(.caption.weight(.bold))
+                        .font(.app(.caption, .bold))
                         .foregroundStyle(.secondary)
                         .textCase(.uppercase)
                     Text(title)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.app(.subheadline, .semibold))
                     Text(detail)
-                        .font(.footnote)
+                        .font(.app(.footnote))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -714,11 +714,11 @@ struct TripDetailView: View {
                                 size: 40
                             )
                             Text(LocalizedStringKey(member.id == store.currentUser.id ? "You" : member.name))
-                                .font(.caption)
+                                .font(.app(.caption))
                                 .lineLimit(1)
                             if member.id == trip.creatorID {
                                 Text("Organizer")
-                                    .font(.system(size: 9, weight: .semibold))
+                                    .font(.app(size: 9, weight: .semibold))
                                     .foregroundStyle(Theme.accent)
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 2)
@@ -735,13 +735,13 @@ struct TripDetailView: View {
                 VStack(spacing: 10) {
                     HStack(spacing: 10) {
                         TextField("Add manual member", text: $manualMemberName)
-                            .font(.subheadline)
+                            .font(.app(.subheadline))
                             .padding(.horizontal, 14)
                             .padding(.vertical, 10)
                             .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
                         Button { addManualMember(trip) } label: {
                             Image(systemName: "plus")
-                                .font(.subheadline.weight(.bold))
+                                .font(.app(.subheadline, .bold))
                                 .foregroundStyle(.white)
                                 .frame(width: 40, height: 40)
                         }
@@ -754,7 +754,7 @@ struct TripDetailView: View {
                         .textInputAutocapitalization(.never)
                         .keyboardType(.emailAddress)
                         .autocorrectionDisabled()
-                        .font(.subheadline)
+                        .font(.app(.subheadline))
                         .padding(.horizontal, 14)
                         .padding(.vertical, 10)
                         .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
@@ -764,7 +764,7 @@ struct TripDetailView: View {
                             if isInviting { ProgressView().tint(.white) }
                             Label("Invite Member", systemImage: "person.badge.plus")
                         }
-                        .font(.subheadline.weight(.semibold))
+                        .font(.app(.subheadline, .semibold))
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
@@ -776,7 +776,7 @@ struct TripDetailView: View {
 
                     if let inviteMessage {
                         Text(inviteMessage)
-                            .font(.caption)
+                            .font(.app(.caption))
                             .foregroundStyle(inviteMessage.localizedCaseInsensitiveContains("invited") || inviteMessage.localizedCaseInsensitiveContains("copied") ? Theme.positive : Theme.negative)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -788,7 +788,7 @@ struct TripDetailView: View {
                             if isGeneratingLink { ProgressView().tint(.white) }
                             Label("Generate Invitation Link", systemImage: "link")
                         }
-                        .font(.subheadline.weight(.semibold))
+                        .font(.app(.subheadline, .semibold))
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
@@ -800,7 +800,7 @@ struct TripDetailView: View {
                     if let inviteLink {
                         HStack(spacing: 8) {
                             Text(inviteLink.absoluteString)
-                                .font(.caption)
+                                .font(.app(.caption))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
@@ -809,14 +809,14 @@ struct TripDetailView: View {
                                 inviteMessage = String(localized: "Invitation link copied.")
                             } label: {
                                 Image(systemName: "doc.on.doc")
-                                    .font(.caption.weight(.bold))
+                                    .font(.app(.caption, .bold))
                                     .frame(width: 38, height: 38)
                                     .contentShape(.rect)
                             }
                             .buttonStyle(.plain)
                             ShareLink(item: inviteLink) {
                                 Image(systemName: "square.and.arrow.up")
-                                    .font(.caption.weight(.bold))
+                                    .font(.app(.caption, .bold))
                                     .frame(width: 38, height: 38)
                                     .contentShape(.rect)
                             }
@@ -878,19 +878,19 @@ struct TripDetailView: View {
                 } label: {
                     HStack(spacing: 12) {
                         Image(systemName: "calendar.day.timeline.left")
-                            .font(.title3)
+                            .font(.app(.title3))
                             .foregroundStyle(Theme.accent)
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Day-by-day plan")
-                                .font(.subheadline.weight(.semibold))
+                                .font(.app(.subheadline, .semibold))
                                 .foregroundStyle(.primary)
                             Text("\(itinerary.days.count) day\(itinerary.days.count == 1 ? "" : "s") · \(stopCount) stop\(stopCount == 1 ? "" : "s") planned")
-                                .font(.caption)
+                                .font(.app(.caption))
                                 .foregroundStyle(.secondary)
                         }
                         Spacer(minLength: 0)
                         Image(systemName: "chevron.right")
-                            .font(.footnote.weight(.semibold))
+                            .font(.app(.footnote, .semibold))
                             .foregroundStyle(.tertiary)
                     }
                     .padding(12)
@@ -900,13 +900,13 @@ struct TripDetailView: View {
                 .buttonStyle(.plain)
             } else {
                 Text("Plan each day of this trip: places to go, things to do, and where to eat.")
-                    .font(.footnote)
+                    .font(.app(.footnote))
                     .foregroundStyle(.secondary)
                 Button {
                     seedItinerary(trip)
                 } label: {
                     Label("Plan day-by-day itinerary", systemImage: "map.fill")
-                        .font(.subheadline.weight(.semibold))
+                        .font(.app(.subheadline, .semibold))
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
@@ -941,7 +941,7 @@ struct TripDetailView: View {
         return TripCard(title: "History", icon: "clock.arrow.circlepath") {
             if trip.expenses.isEmpty {
                 Text("No expenses yet. Tap Add Expense to log one.")
-                    .font(.subheadline).italic()
+                    .font(.app(.subheadline)).italic()
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 8)
@@ -978,7 +978,7 @@ struct TripDetailView: View {
                         Button("Clear filters") { clearExpenseFilters() }
                     } label: {
                         Image(systemName: isFilteringExpenses ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
-                            .font(.title3)
+                            .font(.app(.title3))
                             .foregroundStyle(isFilteringExpenses ? Theme.accent : .secondary)
                             .frame(width: 44, height: 44)
                     }
@@ -986,7 +986,7 @@ struct TripDetailView: View {
                 }
 
                 Text("Expenses (\(filtered.count) of \(trip.expenses.count))")
-                    .font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                    .font(.app(.subheadline, .semibold)).foregroundStyle(.secondary)
                 // Eager (not Lazy) on purpose: a LazyVStack here re-measured rows as
                 // they scrolled back into view, hitching the scroll-up out of this card.
                 VStack(spacing: 8) {
@@ -1018,7 +1018,7 @@ struct TripDetailView: View {
             if !settled.isEmpty {
                 Divider()
                 Text("Settled payments")
-                    .font(.subheadline.weight(.semibold))
+                    .font(.app(.subheadline, .semibold))
                     .foregroundStyle(.secondary)
                 ForEach(settled) { settlement in
                     Button {
@@ -1069,21 +1069,21 @@ struct TripDetailView: View {
             avatar(settlement.from, size: 30)
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(fromLabel) paid \(toLabel)")
-                    .font(.subheadline).fontWeight(.semibold)
+                    .font(.app(.subheadline)).fontWeight(.semibold)
                 if let paidDate {
                     Text(paidDate.formatted(date: .abbreviated, time: .omitted))
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.app(.caption)).foregroundStyle(.secondary)
                 }
             }
             Spacer()
             Text(money(settlement.amount, trip.currencyCode))
-                .font(.subheadline.weight(.semibold))
+                .font(.app(.subheadline, .semibold))
                 .foregroundStyle(.secondary)
             Label("Paid", systemImage: "checkmark.seal.fill")
-                .font(.caption.weight(.semibold))
+                .font(.app(.caption, .semibold))
                 .foregroundStyle(Color(hex: 0x10B981))
             Image(systemName: "chevron.right")
-                .font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
+                .font(.app(.caption2, .bold)).foregroundStyle(.tertiary)
         }
         .padding(.vertical, 4)
         .contentShape(.rect)
@@ -1099,7 +1099,7 @@ struct TripDetailView: View {
         TripCard(title: "Recently Deleted (\(trip.deletedExpenses.count))", icon: "trash") {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Deleted expenses still count toward your budget. Restore one to add it back to the split.")
-                    .font(.footnote)
+                    .font(.app(.footnote))
                     .foregroundStyle(.secondary)
                 ForEach(trip.deletedExpenses) { expense in
                     deletedExpenseRow(trip, expense)
@@ -1114,24 +1114,24 @@ struct TripDetailView: View {
         return HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(expense.title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.app(.subheadline, .semibold))
                     .strikethrough(color: .secondary)
                     .foregroundStyle(.secondary)
                 let payerText = payer.map { $0.id == me ? "you" : $0.name } ?? "—"
                 let deletedText = expense.deletedAt.map { " • deleted \($0.formatted(date: .abbreviated, time: .omitted))" } ?? ""
                 Text("Paid by \(payerText)\(deletedText)")
-                    .font(.caption).foregroundStyle(.tertiary)
+                    .font(.app(.caption)).foregroundStyle(.tertiary)
             }
             Spacer()
             Text(money(expense.amount, trip.currencyCode))
-                .font(.subheadline.weight(.semibold))
+                .font(.app(.subheadline, .semibold))
                 .foregroundStyle(.secondary)
             if canModify(trip, expense) {
                 Button {
                     store.restoreExpense(expense.id, in: trip.id)
                 } label: {
                     Text("Restore")
-                        .font(.caption.weight(.semibold))
+                        .font(.app(.caption, .semibold))
                         .padding(.horizontal, 12).padding(.vertical, 6)
                         .background(Theme.accent.opacity(0.16), in: .capsule)
                         .foregroundStyle(Theme.accent)
@@ -1159,20 +1159,20 @@ struct TripDetailView: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(expense.title).font(.subheadline.weight(.semibold))
+                        Text(expense.title).font(.app(.subheadline, .semibold))
                         Text("Paid by \(payer.map { $0.id == me ? "you" : $0.name } ?? "—") • \(expense.date.formatted(date: .abbreviated, time: .omitted))")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.app(.caption)).foregroundStyle(.secondary)
                     }
                     Spacer()
                     Text(money(expense.amount, trip.currencyCode))
-                        .font(.subheadline.weight(.semibold))
+                        .font(.app(.subheadline, .semibold))
                     Image(systemName: "chevron.right")
-                        .font(.caption2.weight(.bold))
+                        .font(.app(.caption2, .bold))
                         .foregroundStyle(.tertiary)
                 }
                 if expense.participantIDs.contains(me) {
                     Text("Your share: \(money(yourShare, trip.currencyCode))")
-                        .font(.caption)
+                        .font(.app(.caption))
                         .foregroundStyle(expense.payerID == me ? Theme.positive : Theme.negative)
                 }
                 HStack(spacing: 10) {
@@ -1181,7 +1181,7 @@ struct TripDetailView: View {
                             Image(systemName: "doc.text.viewfinder")
                             Text(expense.items.isEmpty ? "Receipt" : "Receipt • \(expense.items.count) item\(expense.items.count == 1 ? "" : "s")")
                         }
-                        .font(.caption2.weight(.medium))
+                        .font(.app(.caption2, .medium))
                         .foregroundStyle(.secondary)
                     }
                     let commentCount = trip.comments[expense.id.uuidString]?.count ?? 0
@@ -1190,7 +1190,7 @@ struct TripDetailView: View {
                             Image(systemName: "bubble.left.fill")
                             Text("\(commentCount)")
                         }
-                        .font(.caption2.weight(.medium))
+                        .font(.app(.caption2, .medium))
                         .foregroundStyle(.secondary)
                     }
                 }
@@ -1204,8 +1204,8 @@ struct TripDetailView: View {
 
     private func statColumn(_ title: LocalizedStringKey, _ value: String, _ color: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
-            Text(value).font(.subheadline.weight(.bold)).foregroundStyle(color)
+            Text(title).font(.app(.caption)).foregroundStyle(.secondary)
+            Text(value).font(.app(.subheadline, .bold)).foregroundStyle(color)
         }
     }
 }

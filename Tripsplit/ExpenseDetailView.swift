@@ -75,9 +75,9 @@ struct ExpenseDetailView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(money(exp.amount, trip?.currencyCode ?? "USD"))
-                        .font(.system(size: 28, weight: .bold))
+                        .font(.app(size: 28, weight: .bold))
                     Text(exp.date.formatted(date: .long, time: .omitted))
-                        .font(.subheadline)
+                        .font(.app(.subheadline))
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -90,9 +90,9 @@ struct ExpenseDetailView: View {
                     avatar(payer, size: 30)
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Paid by").font(.caption).foregroundStyle(.secondary)
+                    Text("Paid by").font(.app(.caption)).foregroundStyle(.secondary)
                     Text(LocalizedStringKey(payer.map { $0.id == me ? "You" : $0.name } ?? "—"))
-                        .font(.subheadline.weight(.semibold))
+                        .font(.app(.subheadline, .semibold))
                 }
                 Spacer()
             }
@@ -102,7 +102,7 @@ struct ExpenseDetailView: View {
                     Image(systemName: "doc.text.viewfinder")
                     Text(exp.items.isEmpty ? "Receipt attached" : "Receipt • \(exp.items.count) item\(exp.items.count == 1 ? "" : "s")")
                 }
-                .font(.caption.weight(.medium))
+                .font(.app(.caption, .medium))
                 .foregroundStyle(.secondary)
             }
         }
@@ -119,11 +119,11 @@ struct ExpenseDetailView: View {
                 ForEach(exp.items) { item in
                     HStack(spacing: 10) {
                         Text(item.name)
-                            .font(.subheadline)
+                            .font(.app(.subheadline))
                             .lineLimit(1)
                         Spacer(minLength: 8)
                         Text(money(item.price, currency))
-                            .font(.subheadline.weight(.medium))
+                            .font(.app(.subheadline, .medium))
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
                     }
@@ -144,11 +144,11 @@ struct ExpenseDetailView: View {
     private func receiptTotalRow(label: LocalizedStringKey, value: String, emphasized: Bool = false) -> some View {
         HStack {
             Text(label)
-                .font(emphasized ? .subheadline.weight(.semibold) : .subheadline)
+                .font(.app(.subheadline, emphasized ? .semibold : .regular))
                 .foregroundStyle(emphasized ? .primary : .secondary)
             Spacer()
             Text(value)
-                .font(emphasized ? .subheadline.weight(.bold) : .subheadline.weight(.medium))
+                .font(.app(.subheadline, emphasized ? .bold : .medium))
                 .foregroundStyle(emphasized ? .primary : .secondary)
                 .monospacedDigit()
         }
@@ -165,10 +165,10 @@ struct ExpenseDetailView: View {
                     HStack(spacing: 10) {
                         avatar(member, size: 30)
                         Text(LocalizedStringKey(member.id == me ? "You" : member.name))
-                            .font(.subheadline.weight(.medium))
+                            .font(.app(.subheadline, .medium))
                         Spacer()
                         Text(money(share, trip.currencyCode))
-                            .font(.subheadline.weight(.semibold))
+                            .font(.app(.subheadline, .semibold))
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -180,7 +180,7 @@ struct ExpenseDetailView: View {
         TripCard(title: "Comments (\(comments.count))", icon: "bubble.left.and.bubble.right.fill") {
             if comments.isEmpty {
                 Text("No comments yet")
-                    .font(.subheadline)
+                    .font(.app(.subheadline))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 8)
@@ -198,7 +198,7 @@ struct ExpenseDetailView: View {
             HStack(spacing: 10) {
                 TextField("Add a comment…", text: $commentText, axis: .vertical)
                     .lineLimit(1...4)
-                    .font(.subheadline)
+                    .font(.app(.subheadline))
                     .focused($commentFieldFocused)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
@@ -208,7 +208,7 @@ struct ExpenseDetailView: View {
                     addComment()
                 } label: {
                     Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 32))
+                        .font(.app(size: 32))
                         .foregroundStyle(Theme.accent)
                 }
                 .buttonStyle(.plain)
@@ -226,10 +226,10 @@ struct ExpenseDetailView: View {
                     avatar(member, size: 24)
                 }
                 Text(LocalizedStringKey(comment.authorID == store.currentUser.id ? "You" : comment.authorName))
-                    .font(.caption.weight(.semibold))
+                    .font(.app(.caption, .semibold))
                 Spacer()
                 Text(comment.date.formatted(date: .abbreviated, time: .shortened))
-                    .font(.caption2)
+                    .font(.app(.caption2))
                     .foregroundStyle(.tertiary)
 
                 if comment.authorID == store.currentUser.id || (trip.map { store.isCreator(of: $0) } ?? false) {
@@ -237,7 +237,7 @@ struct ExpenseDetailView: View {
                         store.deleteComment(comment.id, from: expense.id, in: tripID)
                     } label: {
                         Image(systemName: "trash")
-                            .font(.caption2)
+                            .font(.app(.caption2))
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
@@ -245,7 +245,7 @@ struct ExpenseDetailView: View {
             }
 
             Text(comment.text)
-                .font(.subheadline)
+                .font(.app(.subheadline))
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.vertical, 4)

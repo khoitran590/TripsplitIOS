@@ -136,7 +136,7 @@ struct SwipeActionsRow<Content: View>: View {
                     trigger(action)
                 } label: {
                     Image(systemName: action.icon)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.app(.subheadline, .semibold))
                         .foregroundStyle(.white)
                         .frame(width: width)
                         .frame(maxHeight: .infinity)
@@ -220,7 +220,7 @@ struct TripCard<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label(title, systemImage: icon).font(.headline)
+            Label(title, systemImage: icon).font(.app(.headline))
             content
         }
         .padding(18)
@@ -294,7 +294,7 @@ struct TripCoverView: View {
 
     private var glyph: some View {
         Image(systemName: "airplane.departure")
-            .font(.system(size: 44, weight: .semibold))
+            .font(.app(size: 44, weight: .semibold))
             .foregroundStyle(.white.opacity(0.28))
     }
 }
@@ -313,7 +313,7 @@ struct InitialsAvatar: View {
 
     var body: some View {
         Text(person.initials)
-            .font(.system(size: size * 0.4, weight: .bold))
+            .font(.app(size: size * 0.4, weight: .bold))
             .foregroundStyle(person.color)
             .frame(width: size, height: size)
             .background(person.color.opacity(0.16), in: .circle)

@@ -44,9 +44,9 @@ struct ItemSplitConfigView: View {
                     VStack(spacing: 18) {
                         TripCard(title: LocalizedStringKey(item.name), icon: "tag.fill") {
                             HStack {
-                                Text("Item total").font(.subheadline).foregroundStyle(.secondary)
+                                Text("Item total").font(.app(.subheadline)).foregroundStyle(.secondary)
                                 Spacer()
-                                Text(money(item.price, currencyCode)).font(.subheadline.weight(.bold))
+                                Text(money(item.price, currencyCode)).font(.app(.subheadline, .bold))
                             }
                         }
                         methodCard
@@ -84,9 +84,9 @@ struct ItemSplitConfigView: View {
             } label: {
                 HStack {
                     Image(systemName: item.splitMethod.icon)
-                    Text(LocalizedStringKey(item.splitMethod.rawValue)).font(.subheadline.weight(.semibold))
+                    Text(LocalizedStringKey(item.splitMethod.rawValue)).font(.app(.subheadline, .semibold))
                     Spacer()
-                    Image(systemName: "chevron.up.chevron.down").font(.caption).foregroundStyle(.secondary)
+                    Image(systemName: "chevron.up.chevron.down").font(.app(.caption)).foregroundStyle(.secondary)
                 }
                 .foregroundStyle(.primary)
                 .padding(.horizontal, 14).padding(.vertical, 12)
@@ -96,7 +96,7 @@ struct ItemSplitConfigView: View {
             switch item.splitMethod {
             case .equalAll:
                 Text("Split equally across all \(members.count) member\(members.count == 1 ? "" : "s").")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.app(.caption)).foregroundStyle(.secondary)
             case .equalSelected:
                 ForEach(members) { member in
                     Button {
@@ -107,7 +107,7 @@ struct ItemSplitConfigView: View {
                             Image(systemName: item.participantIDs.contains(member.id) ? "checkmark.square.fill" : "square")
                                 .foregroundStyle(Theme.accent)
                             avatar(member, size: 30)
-                            Text(LocalizedStringKey(name(member))).font(.subheadline.weight(.medium))
+                            Text(LocalizedStringKey(name(member))).font(.app(.subheadline, .medium))
                             Spacer()
                         }
                         .contentShape(.rect)
@@ -121,7 +121,7 @@ struct ItemSplitConfigView: View {
                             Image(systemName: (item.soloPayerID ?? payer) == member.id ? "largecircle.fill.circle" : "circle")
                                 .foregroundStyle(Theme.accent)
                             avatar(member, size: 30)
-                            Text(LocalizedStringKey(name(member))).font(.subheadline.weight(.medium))
+                            Text(LocalizedStringKey(name(member))).font(.app(.subheadline, .medium))
                             Spacer()
                         }
                         .contentShape(.rect)
@@ -136,16 +136,16 @@ struct ItemSplitConfigView: View {
 
             if let message = outcome.message, !outcome.isValid {
                 Label(message, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption.weight(.medium)).foregroundStyle(Theme.negative)
+                    .font(.app(.caption, .medium)).foregroundStyle(Theme.negative)
             }
 
             ForEach(members) { member in
                 let owed = outcome.owed[member.id] ?? 0
                 if owed > 0.005 {
                     HStack {
-                        Text(LocalizedStringKey(name(member))).font(.caption).foregroundStyle(.secondary)
+                        Text(LocalizedStringKey(name(member))).font(.app(.caption)).foregroundStyle(.secondary)
                         Spacer()
-                        Text(money(owed, currencyCode)).font(.caption.weight(.semibold))
+                        Text(money(owed, currencyCode)).font(.app(.caption, .semibold))
                     }
                 }
             }
@@ -156,7 +156,7 @@ struct ItemSplitConfigView: View {
         ForEach(members) { member in
             HStack(spacing: 10) {
                 avatar(member, size: 30)
-                Text(LocalizedStringKey(name(member))).font(.subheadline.weight(.medium))
+                Text(LocalizedStringKey(name(member))).font(.app(.subheadline, .medium))
                 Spacer()
                 TextField("0", value: Binding(
                     get: { values.wrappedValue[member.id] ?? 0 },
@@ -167,7 +167,7 @@ struct ItemSplitConfigView: View {
                 .frame(width: 64)
                 .padding(.horizontal, 10).padding(.vertical, 8)
                 .background(Theme.fieldBackground, in: .rect(cornerRadius: 10))
-                Text(unit).font(.subheadline).foregroundStyle(.secondary)
+                Text(unit).font(.app(.subheadline)).foregroundStyle(.secondary)
             }
         }
     }

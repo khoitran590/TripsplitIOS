@@ -86,12 +86,12 @@ struct SplitView: View {
     private var amountCard: some View {
         VStack(spacing: 6) {
             Text("Total Amount")
-                .font(.subheadline.weight(.medium))
+                .font(.app(.subheadline, .medium))
                 .foregroundStyle(.secondary)
             HStack(spacing: 2) {
-                Text(currencySymbol(currencyCode)).font(.title.weight(.semibold)).foregroundStyle(.secondary)
+                Text(currencySymbol(currencyCode)).font(.app(.title, .semibold)).foregroundStyle(.secondary)
                 TextField("0.00", text: $amountText)
-                    .font(.system(size: 40, weight: .bold))
+                    .font(.app(size: 40, weight: .bold))
                     .keyboardType(.decimalPad)
                     .multilineTextAlignment(.center)
                     .fixedSize()
@@ -128,7 +128,7 @@ struct SplitView: View {
                                 Image(systemName: option.icon)
                                 Text(LocalizedStringKey(option.shortLabel))
                             }
-                            .font(.subheadline.weight(.semibold))
+                            .font(.app(.subheadline, .semibold))
                             .foregroundStyle(method == option ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
                             .padding(.horizontal, 14)
                             .padding(.vertical, 9)
@@ -142,7 +142,7 @@ struct SplitView: View {
                 }
             }
             Text(LocalizedStringKey(method.rawValue))
-                .font(.footnote)
+                .font(.app(.footnote))
                 .foregroundStyle(.secondary)
         }
     }
@@ -209,11 +209,11 @@ struct SplitView: View {
     private var reviewCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             Label("Split Review", systemImage: "list.bullet.rectangle.fill")
-                .font(.headline)
+                .font(.app(.headline))
 
             if let message = result.message, !result.isValid {
                 Label(message, systemImage: "exclamationmark.triangle.fill")
-                    .font(.footnote.weight(.medium))
+                    .font(.app(.footnote, .medium))
                     .foregroundStyle(Color(hex: 0xEF4444))
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -224,10 +224,10 @@ struct SplitView: View {
                 HStack {
                     avatar(person)
                     Text(person.id == payer ? LocalizedStringKey("\(person.name) (Payer)") : LocalizedStringKey(person.name))
-                        .font(.subheadline.weight(.medium))
+                        .font(.app(.subheadline, .medium))
                     Spacer()
                     Text(currency(result.owed[person.id] ?? 0))
-                        .font(.subheadline.weight(.semibold))
+                        .font(.app(.subheadline, .semibold))
                 }
             }
 
@@ -236,7 +236,7 @@ struct SplitView: View {
             let settlements = SplitEngine.settleUp(net: result.net, people: people)
             if result.isValid && !settlements.isEmpty {
                 Text("Settle up")
-                    .font(.subheadline.weight(.semibold))
+                    .font(.app(.subheadline, .semibold))
                     .foregroundStyle(.secondary)
                 ForEach(settlements) { settlement in
                     Button {
@@ -245,13 +245,13 @@ struct SplitView: View {
                         HStack(spacing: 6) {
                             Text(displayName(settlement.from)).fontWeight(.semibold)
                             Image(systemName: "arrow.right")
-                                .font(.caption.weight(.bold))
+                                .font(.app(.caption, .bold))
                                 .foregroundStyle(.secondary)
                             Text(displayName(settlement.to)).fontWeight(.semibold)
                             Spacer()
                             if isFullySettled(settlement) {
                                 Label("Settled", systemImage: "checkmark.seal.fill")
-                                    .font(.caption.weight(.semibold))
+                                    .font(.app(.caption, .semibold))
                                     .foregroundStyle(Color(hex: 0x10B981))
                             } else {
                                 Text(currency(remainingAmount(for: settlement)))
@@ -259,17 +259,17 @@ struct SplitView: View {
                                     .foregroundStyle(Color(hex: 0x10B981))
                             }
                             Image(systemName: "chevron.right")
-                                .font(.caption2.weight(.bold))
+                                .font(.app(.caption2, .bold))
                                 .foregroundStyle(.tertiary)
                         }
-                        .font(.subheadline)
+                        .font(.app(.subheadline))
                         .contentShape(.rect)
                     }
                     .buttonStyle(.plain)
                 }
             } else if result.isValid {
                 Text("All settled up — nothing owed.")
-                    .font(.subheadline)
+                    .font(.app(.subheadline))
                     .foregroundStyle(.secondary)
             }
         }
@@ -285,7 +285,7 @@ struct SplitView: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Label(title, systemImage: icon)
-                .font(.headline)
+                .font(.app(.headline))
             content()
         }
         .padding(18)
@@ -296,7 +296,7 @@ struct SplitView: View {
     private func chip(_ title: String, selected: Bool, color: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
-                .font(.subheadline.weight(.semibold))
+                .font(.app(.subheadline, .semibold))
                 .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
                 .padding(.horizontal, 14)
                 .padding(.vertical, 9)
@@ -313,20 +313,20 @@ struct SplitView: View {
         HStack(spacing: 12) {
             if let leadingSystemImage {
                 Image(systemName: leadingSystemImage)
-                    .font(.system(size: 18))
+                    .font(.app(size: 18))
                     .foregroundStyle(Theme.accent)
             }
             avatar(person)
-            Text(person.name).font(.subheadline.weight(.medium))
+            Text(person.name).font(.app(.subheadline, .medium))
             Spacer()
-            Text(trailing).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+            Text(trailing).font(.app(.subheadline, .semibold)).foregroundStyle(.secondary)
         }
     }
 
     private func inputRow(_ person: Person, suffix: String, binding: Binding<String>) -> some View {
         HStack(spacing: 12) {
             avatar(person)
-            Text(person.name).font(.subheadline.weight(.medium))
+            Text(person.name).font(.app(.subheadline, .medium))
             Spacer()
             HStack(spacing: 2) {
                 if suffix == "$" { Text(currencySymbol(currencyCode)).foregroundStyle(.secondary) }
@@ -336,7 +336,7 @@ struct SplitView: View {
                     .frame(width: 64)
                 if suffix == "%" { Text("%").foregroundStyle(.secondary) }
             }
-            .font(.subheadline.weight(.semibold))
+            .font(.app(.subheadline, .semibold))
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
             .background(.secondary.opacity(0.12), in: .rect(cornerRadius: 10))
@@ -345,10 +345,10 @@ struct SplitView: View {
 
     private func summaryLine(label: LocalizedStringKey, value: String, target: String) -> some View {
         HStack {
-            Text(label).font(.subheadline.weight(.semibold))
+            Text(label).font(.app(.subheadline, .semibold))
             Spacer()
             Text("\(value) / \(target)")
-                .font(.subheadline.weight(.semibold))
+                .font(.app(.subheadline, .semibold))
                 .foregroundStyle(result.isValid ? Color(hex: 0x10B981) : Color(hex: 0xEF4444))
         }
     }
@@ -498,7 +498,7 @@ struct SettleView: View {
     private var overviewCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             Label("Settlement Overview", systemImage: "arrow.left.arrow.right.circle.fill")
-                .font(.headline)
+                .font(.app(.headline))
 
             detailRow(icon: "person.fill", label: "Debtor", person: settlement.from)
             detailRow(icon: "creditcard.fill", label: "Creditor", person: settlement.to)
@@ -522,27 +522,27 @@ struct SettleView: View {
     private var recordCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             Label("Record a Payment", systemImage: "square.and.pencil")
-                .font(.headline)
+                .font(.app(.headline))
 
             HStack(spacing: 2) {
                 Text(currencySymbol(currencyCode)).foregroundStyle(.secondary)
                 TextField("0.00", text: $amountText)
                     .keyboardType(.decimalPad)
             }
-            .font(.title3.weight(.semibold))
+            .font(.app(.title3, .semibold))
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
             .background(.secondary.opacity(0.12), in: .rect(cornerRadius: 12))
 
             TextField("Add a note (optional)", text: $note, axis: .vertical)
                 .lineLimit(1...3)
-                .font(.subheadline)
+                .font(.app(.subheadline))
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
                 .background(.secondary.opacity(0.12), in: .rect(cornerRadius: 12))
 
             Text("Payment method")
-                .font(.subheadline.weight(.semibold))
+                .font(.app(.subheadline, .semibold))
                 .foregroundStyle(.secondary)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
@@ -554,7 +554,7 @@ struct SettleView: View {
                                 Image(systemName: option.icon)
                                 Text(LocalizedStringKey(option.rawValue))
                             }
-                            .font(.subheadline.weight(.semibold))
+                            .font(.app(.subheadline, .semibold))
                             .foregroundStyle(method == option ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
                             .padding(.horizontal, 14)
                             .padding(.vertical, 9)
@@ -588,11 +588,11 @@ struct SettleView: View {
     private var historyCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             Label("Settlement History", systemImage: "clock.arrow.circlepath")
-                .font(.headline)
+                .font(.app(.headline))
 
             if history.isEmpty {
                 Text("No settlement history found for this debt.")
-                    .font(.subheadline)
+                    .font(.app(.subheadline))
                     .italic()
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
@@ -614,21 +614,21 @@ struct SettleView: View {
     private func detailRow(icon: String, label: LocalizedStringKey, person: Person) -> some View {
         HStack(spacing: 10) {
             Image(systemName: icon)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.app(size: 14, weight: .semibold))
                 .foregroundStyle(Theme.accent)
                 .frame(width: 22)
-            Text(label).font(.subheadline).foregroundStyle(.secondary)
+            Text(label).font(.app(.subheadline)).foregroundStyle(.secondary)
             Spacer()
             avatar(person)
             Text(person.name.isEmpty ? "—" : person.name)
-                .font(.subheadline.weight(.semibold))
+                .font(.app(.subheadline, .semibold))
         }
     }
 
     private func amountColumn(title: LocalizedStringKey, value: Double, color: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
-            Text(currency(value)).font(.title3.weight(.bold)).foregroundStyle(color)
+            Text(title).font(.app(.caption)).foregroundStyle(.secondary)
+            Text(currency(value)).font(.app(.title3, .bold)).foregroundStyle(color)
         }
     }
 
@@ -637,7 +637,7 @@ struct SettleView: View {
     ) -> some View {
         Button(action: action) {
             Label(title, systemImage: icon)
-                .font(.subheadline.weight(.semibold))
+                .font(.app(.subheadline, .semibold))
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
@@ -654,16 +654,16 @@ struct SettleView: View {
                 Image(systemName: entry.method.icon)
                     .foregroundStyle(Theme.accent)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(currency(entry.amount)).font(.subheadline.weight(.semibold))
+                    Text(currency(entry.amount)).font(.app(.subheadline, .semibold))
                     Text("\(entry.method.rawValue) • \(entry.date.formatted(date: .abbreviated, time: .omitted))")
-                        .font(.caption)
+                        .font(.app(.caption))
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
                 statusBadge(entry.status)
             }
             if !entry.note.isEmpty {
-                Text(entry.note).font(.caption).foregroundStyle(.secondary)
+                Text(entry.note).font(.app(.caption)).foregroundStyle(.secondary)
             }
             if entry.status == .pending {
                 HStack(spacing: 10) {
@@ -682,7 +682,7 @@ struct SettleView: View {
     private func actionPill(title: LocalizedStringKey, icon: String, tint: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Label(title, systemImage: icon)
-                .font(.caption.weight(.semibold))
+                .font(.app(.caption, .semibold))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
@@ -698,7 +698,7 @@ struct SettleView: View {
         case .rejected: ("Declined", Color(hex: 0xEF4444))
         }
         return Text(LocalizedStringKey(text))
-            .font(.caption2.weight(.bold))
+            .font(.app(.caption2, .bold))
             .foregroundStyle(color)
             .padding(.horizontal, 10)
             .padding(.vertical, 4)

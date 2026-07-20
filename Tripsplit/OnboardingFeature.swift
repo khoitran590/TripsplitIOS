@@ -36,7 +36,7 @@ struct WelcomeView: View {
                 HStack {
                     Spacer()
                     Button("Skip") { onFinish() }
-                        .font(.subheadline.weight(.medium))
+                        .font(.app(.subheadline, .medium))
                         .foregroundStyle(.secondary)
                         .padding()
                 }
@@ -58,7 +58,7 @@ struct WelcomeView: View {
                     }
                 } label: {
                     Text(page < pages.count - 1 ? "Continue" : "Get Started")
-                        .font(.headline)
+                        .font(.app(.headline))
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 16)
@@ -74,7 +74,7 @@ struct WelcomeView: View {
     private func pageView(_ page: Page) -> some View {
         VStack(spacing: 24) {
             Image(systemName: page.systemImage)
-                .font(.system(size: 72))
+                .font(.app(size: 72))
                 .foregroundStyle(
                     LinearGradient(
                         colors: [Color(hex: 0xF59E0B), Color(hex: 0xEC4899)],
@@ -85,10 +85,10 @@ struct WelcomeView: View {
 
             VStack(spacing: 10) {
                 Text(page.title)
-                    .font(.title.bold())
+                    .font(.app(.title, .bold))
                     .multilineTextAlignment(.center)
                 Text(page.subtitle)
-                    .font(.body)
+                    .font(.app(.body))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 36)
@@ -135,7 +135,7 @@ struct ExploreOnboardingView: View {
                 HStack {
                     Spacer()
                     Button("Skip", action: onDismiss)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.app(.subheadline, .semibold))
                         .foregroundStyle(.secondary)
                         .frame(minWidth: 44, minHeight: 44)
                 }
@@ -169,7 +169,7 @@ struct ExploreOnboardingView: View {
                 } label: {
                     Label(page == pages.count - 1 ? "Build my itinerary" : "Continue",
                           systemImage: page == pages.count - 1 ? "arrow.right" : "chevron.right")
-                        .font(.headline)
+                        .font(.app(.headline))
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity, minHeight: 54)
                 }
@@ -192,7 +192,7 @@ struct ExploreOnboardingView: View {
                     .stroke(Theme.accent.opacity(0.18), lineWidth: 1)
                     .frame(width: 220, height: 220)
                 Image(systemName: item.icon)
-                    .font(.system(size: 70, weight: .medium))
+                    .font(.app(size: 70, weight: .medium))
                     .foregroundStyle(
                         LinearGradient(colors: [Theme.accent, Theme.accentSecondary],
                                        startPoint: .topLeading, endPoint: .bottomTrailing)
@@ -202,14 +202,14 @@ struct ExploreOnboardingView: View {
 
             VStack(spacing: 12) {
                 Text(item.eyebrow)
-                    .font(.caption.weight(.bold))
+                    .font(.app(.caption, .bold))
                     .tracking(1.8)
                     .foregroundStyle(Theme.accent)
                 Text(item.title)
-                    .font(.largeTitle.bold())
+                    .font(.app(.largeTitle, .bold))
                     .multilineTextAlignment(.center)
                 Text(item.message)
-                    .font(.body)
+                    .font(.app(.body))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .lineSpacing(3)
@@ -251,11 +251,11 @@ struct ProfileSetupView: View {
                                 .clipShape(.circle)
                         } else {
                             Image(systemName: "person.crop.circle.fill")
-                                .font(.system(size: 110))
+                                .font(.app(size: 110))
                                 .foregroundStyle(.tertiary)
                         }
                         Image(systemName: "camera.fill")
-                            .font(.caption)
+                            .font(.app(.caption))
                             .foregroundStyle(.white)
                             .frame(width: 32, height: 32)
                             .background(Theme.accent, in: .circle)
@@ -265,16 +265,16 @@ struct ProfileSetupView: View {
 
                 VStack(spacing: 6) {
                     Text("What should we call you?")
-                        .font(.title2.bold())
+                        .font(.app(.title2, .bold))
                     Text("Your name is how trip mates see you on shared trips and settle-ups.")
-                        .font(.subheadline)
+                        .font(.app(.subheadline))
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
 
                 TextField("Your name", text: $name)
                     .textContentType(.name)
-                    .font(.body)
+                    .font(.app(.body))
                     .padding(.horizontal, 16)
                     .padding(.vertical, 14)
                     .background(.secondary.opacity(0.1), in: .rect(cornerRadius: 14))
@@ -291,7 +291,7 @@ struct ProfileSetupView: View {
                     HStack(spacing: 8) {
                         if isSaving { ProgressView().tint(.white) }
                         Text("Save")
-                            .font(.headline)
+                            .font(.app(.headline))
                             .foregroundStyle(.white)
                     }
                     .frame(maxWidth: .infinity)
@@ -364,18 +364,18 @@ struct OneTimeTipBanner: View {
         if !dismissed {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: icon)
-                    .font(.subheadline)
+                    .font(.app(.subheadline))
                     .foregroundStyle(Theme.accent)
                     .padding(.top, 1)
                 Text(message)
-                    .font(.footnote)
+                    .font(.app(.footnote))
                     .foregroundStyle(.primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Button {
                     withAnimation(.snappy) { dismissed = true }
                 } label: {
                     Image(systemName: "xmark")
-                        .font(.caption.weight(.semibold))
+                        .font(.app(.caption, .semibold))
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)

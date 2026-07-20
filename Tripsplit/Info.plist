@@ -4,5 +4,19 @@
 <dict>
 	<key>UILaunchScreen</key>
 	<dict/>
+	<key>UIAppFonts</key>
+	<array>
+		<string>CDAIndependenceText-Light.otf</string>
+		<string>CDAIndependenceText-Regular.otf</string>
+		<string>CDAIndependenceText-Italic.otf</string>
+		<string>CDAIndependenceText-Medium.otf</string>
+		<string>CDAIndependenceText-SemiBold.otf</string>
+		<string>CDAIndependenceText-Bold.otf</string>
+		<string>CDAIndependenceText-Black.otf</string>
+		<string>CDAIndependenceDisplay-Medium.otf</string>
+		<string>CDAIndependenceDisplay-SemiBold.otf</string>
+		<string>CDAIndependenceDisplay-Bold.otf</string>
+		<string>CDAIndependenceDisplay-Black.otf</string>
+	</array>
 </dict>
 </plist>

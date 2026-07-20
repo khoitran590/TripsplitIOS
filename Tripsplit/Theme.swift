@@ -57,6 +57,202 @@ enum AppearancePreference: String, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - App font (user-selectable typeface)
+
+/// A user-selectable typeface for the whole app.
+///
+/// `system` is San Francisco (the default, unchanged behavior). `independence` is
+/// the bundled CDA Independence family — `Display` cuts for the large titles and
+/// the `Text` cuts (drawn for running text) everywhere else, which is what keeps
+/// small labels legible.
+enum AppFontChoice: String, CaseIterable, Identifiable {
+    case system, independence
+
+    var id: Self { self }
+
+    /// Display name. Typeface names are proper nouns — shown verbatim, not translated.
+    var label: String {
+        switch self {
+        case .system: "System"
+        case .independence: "CDA Independence"
+        }
+    }
+
+    /// One-line description shown under the name in the picker.
+    var detail: LocalizedStringKey {
+        switch self {
+        case .system: "Apple's San Francisco. Maximum legibility at every size."
+        case .independence: "Vietnamese geometric sans inspired by Independence Palace."
+        }
+    }
+
+    /// PostScript name used to preview this choice in the picker (nil = system font).
+    var previewFontName: String? {
+        switch self {
+        case .system: nil
+        case .independence: "CDAIndependenceDisplay-SemiBold"
+        }
+    }
+}
+
+/// Holds the app-wide typeface selection. `@Observable` so any view whose body
+/// resolves a `Font.app(...)` re-renders when the user picks a new font in
+/// Settings; the choice persists in `UserDefaults` across launches.
+@Observable
+final class FontManager {
+    static let shared = FontManager()
+
+    var selection: AppFontChoice {
+        didSet {
+            UserDefaults.standard.set(selection.rawValue, forKey: "appFont")
+            FontManager.applyNavigationBarAppearance(selection)
+        }
+    }
+
+    private init() {
+        selection = AppFontChoice(rawValue: UserDefaults.standard.string(forKey: "appFont") ?? "")
+            ?? .system
+    }
+
+    /// Navigation bar titles are drawn by UIKit, so they don't see SwiftUI's font
+    /// environment — they have to be set through the appearance proxy. Only bars
+    /// created *after* this runs pick it up, which is why `MyApp` also calls it at
+    /// launch rather than relying on the `didSet` alone.
+    static func applyNavigationBarAppearance(_ choice: AppFontChoice) {
+        let bar = UINavigationBar.appearance()
+        // Mutate the *existing* appearance rather than a fresh one: a new
+        // `UINavigationBarAppearance` would also reset the bar's background
+        // configuration, which is not this setting's business to change.
+        let standard = bar.standardAppearance
+        let title = UIFont(name: AppFontChoice.faceName(for: .headline, weight: .semibold), size: 17)
+        let large = UIFont(name: AppFontChoice.faceName(for: .largeTitle, weight: .bold), size: 34)
+        // Clearing the key restores the system font when the user switches back.
+        standard.titleTextAttributes[.font] = choice == .independence ? title : nil
+        standard.largeTitleTextAttributes[.font] = choice == .independence ? large : nil
+        bar.standardAppearance = standard
+
+        // Large titles at the scroll edge use a separate appearance, which is nil
+        // (transparent) by default — mirror that background so only the font changes.
+        if choice == .independence {
+            let edge = bar.scrollEdgeAppearance ?? {
+                let a = UINavigationBarAppearance()
+                a.configureWithTransparentBackground()
+                return a
+            }()
+            edge.titleTextAttributes[.font] = title
+            edge.largeTitleTextAttributes[.font] = large
+            bar.scrollEdgeAppearance = edge
+        } else {
+            bar.scrollEdgeAppearance?.titleTextAttributes[.font] = nil
+            bar.scrollEdgeAppearance?.largeTitleTextAttributes[.font] = nil
+        }
+    }
+}
+
+extension AppFontChoice {
+    /// CDA Independence ships `Display` (tight, for headlines) and `Text` (open
+    /// spacing and a taller x-height, for running text) optical sizes. Anything
+    /// title2 and larger uses `Display`; everything smaller uses `Text` so body
+    /// copy and captions stay comfortable to read.
+    static func faceName(for style: Font.TextStyle, weight: Font.Weight) -> String {
+        switch style {
+        case .largeTitle, .title, .title2:
+            "CDAIndependenceDisplay-\(displaySuffix(weight))"
+        default:
+            "CDAIndependenceText-\(textSuffix(weight))"
+        }
+    }
+
+    /// The `Text` cuts bundled in `Fonts/`, nearest match per weight.
+    private static func textSuffix(_ weight: Font.Weight) -> String {
+        switch weight {
+        case .ultraLight, .thin, .light: "Light"
+        case .medium: "Medium"
+        case .semibold: "SemiBold"
+        case .bold: "Bold"
+        case .heavy, .black: "Black"
+        default: "Regular"
+        }
+    }
+
+    /// The `Display` cuts bundled in `Fonts/`. Only Medium and up are bundled —
+    /// large titles never render lighter than Medium, so nothing renders thin.
+    private static func displaySuffix(_ weight: Font.Weight) -> String {
+        switch weight {
+        case .semibold: "SemiBold"
+        case .bold: "Bold"
+        case .heavy, .black: "Black"
+        default: "Medium"
+        }
+    }
+}
+
+extension Font.TextStyle {
+    /// The point size iOS uses for this text style at the default (Large) Dynamic
+    /// Type setting, nudged up 4%: CDA Independence has a smaller effective
+    /// x-height than San Francisco, so matching point sizes would read smaller.
+    /// `Font.custom(_:size:relativeTo:)` scales this with the user's Dynamic Type
+    /// setting, so accessibility sizes keep working.
+    var independenceSize: CGFloat {
+        let base: CGFloat = switch self {
+        case .largeTitle: 34
+        case .title: 28
+        case .title2: 22
+        case .title3: 20
+        case .headline, .body: 17
+        case .callout: 16
+        case .subheadline: 15
+        case .footnote: 13
+        case .caption: 12
+        case .caption2: 11
+        default: 17
+        }
+        return (base * 1.04).rounded()
+    }
+
+    /// The weight iOS renders this style at when no explicit weight is requested.
+    var naturalWeight: Font.Weight {
+        self == .headline ? .semibold : .regular
+    }
+}
+
+extension Font {
+    /// The app's text-style font, honoring the user's typeface choice.
+    ///
+    /// Use this instead of `.font(.subheadline)` etc. so the Settings → Fonts
+    /// selection reaches every label. Pass `weight` instead of chaining
+    /// `.weight(...)` so the correct *cut* of the family is picked rather than a
+    /// synthesized approximation.
+    static func app(_ style: Font.TextStyle, _ weight: Font.Weight? = nil) -> Font {
+        switch FontManager.shared.selection {
+        case .system:
+            let base = Font.system(style)
+            return weight.map { base.weight($0) } ?? base
+        case .independence:
+            return .custom(
+                AppFontChoice.faceName(for: style, weight: weight ?? style.naturalWeight),
+                size: style.independenceSize,
+                relativeTo: style
+            )
+        }
+    }
+
+    /// Fixed-size variant, for the handful of places that need a specific point
+    /// size (badges, avatar monograms, oversized numerals) rather than a text
+    /// style. Fixed sizes do not scale with Dynamic Type, matching `.system(size:)`.
+    static func app(size: CGFloat, weight: Font.Weight = .regular) -> Font {
+        switch FontManager.shared.selection {
+        case .system:
+            return .system(size: size, weight: weight)
+        case .independence:
+            // Pick the optical size by rendered size rather than text style: the
+            // Display cuts are only comfortable once the type is genuinely large.
+            let style: Font.TextStyle = size >= 22 ? .title2 : .body
+            return .custom(AppFontChoice.faceName(for: style, weight: weight), size: size * 1.04)
+        }
+    }
+}
+
 // MARK: - App theme (user-selectable palette)
 
 /// A user-selectable color palette. Each theme supplies the accent pair and the

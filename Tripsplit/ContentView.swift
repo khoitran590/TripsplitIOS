@@ -10,6 +10,12 @@ import UIKit
     // cache keyed on signed URLs, which rotate every ~50 minutes, so it missed on every
     // relaunch and re-downloaded every image.
 
+    init() {
+        // Navigation bars read their title font from the appearance proxy when they're
+        // created, so the user's typeface has to be installed before the first one is.
+        FontManager.applyNavigationBarAppearance(FontManager.shared.selection)
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()
@@ -271,19 +277,19 @@ struct LockedExploreScreen: View {
             AppBackground()
             VStack(spacing: 16) {
                 Image(systemName: "lock.fill")
-                    .font(.system(size: 40))
+                    .font(.app(size: 40))
                     .foregroundStyle(.secondary)
                 Text("Explore is for members")
-                    .font(.title3.weight(.semibold))
+                    .font(.app(.title3, .semibold))
                 Text("Sign in to browse curated trips and destinations.")
-                    .font(.subheadline)
+                    .font(.app(.subheadline))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                 Button {
                     showSignIn = true
                 } label: {
                     Text("Sign In")
-                        .font(.subheadline.weight(.semibold))
+                        .font(.app(.subheadline, .semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 24)
                         .padding(.vertical, 12)

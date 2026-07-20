@@ -472,7 +472,7 @@ struct TripFeedView: View {
             TripCard(title: "Trip Feed", icon: "photo.on.rectangle.angled") {
                 VStack(spacing: 10) {
                     Text(verbatim: loadError)
-                        .font(.subheadline).foregroundStyle(.secondary)
+                        .font(.app(.subheadline)).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                     Button("Retry") { Task { await reload() } }
                         .buttonStyle(.borderedProminent)
@@ -503,7 +503,7 @@ struct TripFeedView: View {
                         ProgressView().controlSize(.small)
                     } else {
                         Label("Refresh", systemImage: "arrow.clockwise")
-                            .font(.caption.weight(.semibold))
+                            .font(.app(.caption, .semibold))
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -576,7 +576,7 @@ private struct FeedComposerCard: View {
                                         if index < picks.count { picks.remove(at: index) }
                                     } label: {
                                         Image(systemName: "xmark.circle.fill")
-                                            .font(.body)
+                                            .font(.app(.body))
                                             .foregroundStyle(.white, .black.opacity(0.55))
                                     }
                                     .buttonStyle(.plain)
@@ -590,15 +590,15 @@ private struct FeedComposerCard: View {
             if let locationName {
                 HStack(spacing: 4) {
                     Image(systemName: "mappin.and.ellipse")
-                        .font(.caption.weight(.semibold))
+                        .font(.app(.caption, .semibold))
                     Text(verbatim: locationName)
-                        .font(.caption.weight(.semibold))
+                        .font(.app(.caption, .semibold))
                         .lineLimit(1)
                     Button {
                         self.locationName = nil
                     } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.caption)
+                            .font(.app(.caption))
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
@@ -609,19 +609,19 @@ private struct FeedComposerCard: View {
             }
 
             if let postError {
-                Text(verbatim: postError).font(.caption).foregroundStyle(Theme.negative)
+                Text(verbatim: postError).font(.app(.caption)).foregroundStyle(Theme.negative)
             }
 
             HStack {
                 PhotosPicker(selection: $picks, maxSelectionCount: 4, matching: .images) {
                     Label("Photos", systemImage: "photo.badge.plus")
-                        .font(.subheadline.weight(.semibold))
+                        .font(.app(.subheadline, .semibold))
                 }
                 Button {
                     showLocationPicker = true
                 } label: {
                     Label("Location", systemImage: "mappin.and.ellipse")
-                        .font(.subheadline.weight(.semibold))
+                        .font(.app(.subheadline, .semibold))
                 }
                 .padding(.leading, 12)
                 Spacer()
@@ -631,7 +631,7 @@ private struct FeedComposerCard: View {
                     if isPosting {
                         ProgressView().frame(minWidth: 44)
                     } else {
-                        Text("Post").font(.subheadline.weight(.bold)).frame(minWidth: 44)
+                        Text("Post").font(.app(.subheadline, .bold)).frame(minWidth: 44)
                     }
                 }
                 .buttonStyle(.borderedProminent)
@@ -743,10 +743,10 @@ private struct FeedLocationPicker: View {
                         )
                     } label: {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(verbatim: completion.title).font(.subheadline.weight(.semibold))
+                            Text(verbatim: completion.title).font(.app(.subheadline, .semibold))
                             if !completion.subtitle.isEmpty {
                                 Text(verbatim: completion.subtitle)
-                                    .font(.caption).foregroundStyle(.secondary)
+                                    .font(.app(.caption)).foregroundStyle(.secondary)
                             }
                         }
                     }
@@ -834,7 +834,7 @@ private struct FeedPostCard: View {
             if isEditingPost {
                 postEditor
             } else if !post.text.isEmpty {
-                Text(verbatim: post.text).font(.subheadline)
+                Text(verbatim: post.text).font(.app(.subheadline))
             }
             if !post.photoPaths.isEmpty {
                 photosRow
@@ -857,13 +857,13 @@ private struct FeedPostCard: View {
         HStack(spacing: 10) {
             AvatarView(person: author, size: 34)
             VStack(alignment: .leading, spacing: 1) {
-                Text(verbatim: author.name).font(.subheadline.weight(.semibold))
+                Text(verbatim: author.name).font(.app(.subheadline, .semibold))
                 Text(post.date.formatted(.relative(presentation: .named)))
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.app(.caption)).foregroundStyle(.secondary)
                 if let location = post.locationName, !location.isEmpty {
                     HStack(spacing: 3) {
-                        Image(systemName: "mappin.and.ellipse").font(.caption2)
-                        Text(verbatim: location).font(.caption).lineLimit(1)
+                        Image(systemName: "mappin.and.ellipse").font(.app(.caption2))
+                        Text(verbatim: location).font(.app(.caption)).lineLimit(1)
                     }
                     .foregroundStyle(Theme.accent)
                 }
@@ -887,7 +887,7 @@ private struct FeedPostCard: View {
                     }
                 } label: {
                     Image(systemName: "ellipsis")
-                        .font(.subheadline.weight(.semibold))
+                        .font(.app(.subheadline, .semibold))
                         .foregroundStyle(.secondary)
                         .frame(width: 30, height: 30)
                         .contentShape(.rect)
@@ -900,7 +900,7 @@ private struct FeedPostCard: View {
     private var postEditor: some View {
         VStack(alignment: .leading, spacing: 10) {
             TextField("Edit post", text: $editedPostText, axis: .vertical)
-                .font(.subheadline)
+                .font(.app(.subheadline))
                 .lineLimit(1...6)
                 .padding(.horizontal, 12).padding(.vertical, 8)
                 .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
@@ -910,9 +910,9 @@ private struct FeedPostCard: View {
                     showEditLocationPicker = true
                 } label: {
                     HStack(spacing: 4) {
-                        Image(systemName: "mappin.and.ellipse").font(.caption.weight(.semibold))
+                        Image(systemName: "mappin.and.ellipse").font(.app(.caption, .semibold))
                         Text(verbatim: editedLocation ?? String(localized: "Add location"))
-                            .font(.caption.weight(.semibold))
+                            .font(.app(.caption, .semibold))
                             .lineLimit(1)
                     }
                     .foregroundStyle(Theme.accent)
@@ -925,20 +925,20 @@ private struct FeedPostCard: View {
                         editedLocation = nil
                     } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.caption)
+                            .font(.app(.caption))
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
                 }
                 Spacer()
                 Button("Cancel") { isEditingPost = false }
-                    .font(.caption.weight(.semibold))
+                    .font(.app(.caption, .semibold))
                     .foregroundStyle(.secondary)
                     .buttonStyle(.plain)
                 Button {
                     savePostEdit()
                 } label: {
-                    Text("Save").font(.caption.weight(.bold)).frame(minWidth: 40)
+                    Text("Save").font(.app(.caption, .bold)).frame(minWidth: 40)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.accent)
@@ -995,10 +995,10 @@ private struct FeedPostCard: View {
             store.toggleFeedReaction(emoji, on: post.id, in: tripID)
         } label: {
             HStack(spacing: 4) {
-                Text(verbatim: emoji).font(.subheadline)
+                Text(verbatim: emoji).font(.app(.subheadline))
                 if !reactors.isEmpty {
                     Text(verbatim: "\(reactors.count)")
-                        .font(.caption.weight(.bold))
+                        .font(.app(.caption, .bold))
                         .foregroundStyle(mine ? Theme.accent : .secondary)
                 }
             }
@@ -1019,25 +1019,25 @@ private struct FeedPostCard: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(verbatim: comment.authorName.isEmpty ? "Member" : comment.authorName)
-                        .font(.caption.weight(.semibold))
+                        .font(.app(.caption, .semibold))
                     Text(comment.date.formatted(.relative(presentation: .named)))
-                        .font(.caption2).foregroundStyle(.secondary)
+                        .font(.app(.caption2)).foregroundStyle(.secondary)
                     if comment.editedAt != nil {
                         Text("(edited)")
-                            .font(.caption2).foregroundStyle(.secondary)
+                            .font(.app(.caption2)).foregroundStyle(.secondary)
                     }
                 }
                 if editingCommentID == comment.id {
                     HStack(spacing: 8) {
                         TextField("Edit comment", text: $editedCommentText, axis: .vertical)
-                            .font(.subheadline)
+                            .font(.app(.subheadline))
                             .padding(.horizontal, 10).padding(.vertical, 6)
                             .background(Theme.fieldBackground, in: .rect(cornerRadius: 10))
                         Button {
                             saveCommentEdit(comment)
                         } label: {
                             Image(systemName: "checkmark.circle.fill")
-                                .font(.title3)
+                                .font(.app(.title3))
                                 .foregroundStyle(Theme.accent)
                         }
                         .buttonStyle(.plain)
@@ -1046,13 +1046,13 @@ private struct FeedPostCard: View {
                             editingCommentID = nil
                         } label: {
                             Image(systemName: "xmark.circle.fill")
-                                .font(.title3)
+                                .font(.app(.title3))
                                 .foregroundStyle(.secondary)
                         }
                         .buttonStyle(.plain)
                     }
                 } else {
-                    Text(verbatim: comment.text).font(.subheadline)
+                    Text(verbatim: comment.text).font(.app(.subheadline))
                 }
             }
             Spacer(minLength: 0)
@@ -1071,7 +1071,7 @@ private struct FeedPostCard: View {
                     }
                 } label: {
                     Image(systemName: "ellipsis")
-                        .font(.caption.weight(.bold))
+                        .font(.app(.caption, .bold))
                         .foregroundStyle(.secondary)
                         .frame(width: 26, height: 26)
                         .contentShape(.rect)
@@ -1093,13 +1093,13 @@ private struct FeedPostCard: View {
     private var commentField: some View {
         HStack(spacing: 8) {
             TextField("Add a comment…", text: $newComment)
-                .font(.subheadline)
+                .font(.app(.subheadline))
                 .padding(.horizontal, 12).padding(.vertical, 8)
                 .background(Theme.fieldBackground, in: .capsule)
                 .onSubmit(sendComment)
             Button(action: sendComment) {
                 Image(systemName: "arrow.up.circle.fill")
-                    .font(.title2)
+                    .font(.app(.title2))
                     .foregroundStyle(Theme.accent)
             }
             .buttonStyle(.plain)
@@ -1131,7 +1131,7 @@ private struct FeedPhotoView: View {
                         ProgressView()
                     case .failure:
                         Image(systemName: "photo")
-                            .font(.title2)
+                            .font(.app(.title2))
                             .foregroundStyle(.secondary)
                     }
                 }

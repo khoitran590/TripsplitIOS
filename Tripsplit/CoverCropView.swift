@@ -57,7 +57,7 @@ struct CoverCropView: View {
                         .allowsHitTesting(false)
 
                     Text("Pinch to zoom, drag to reposition")
-                        .font(.footnote.weight(.medium))
+                        .font(.app(.footnote, .medium))
                         .foregroundStyle(.white.opacity(0.85))
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)

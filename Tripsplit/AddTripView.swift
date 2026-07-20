@@ -49,7 +49,7 @@ struct AddTripView: View {
                         tripmatesCard
                         if let errorMessage {
                             Text(errorMessage)
-                                .font(.caption)
+                                .font(.app(.caption))
                                 .foregroundStyle(Theme.negative)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -104,7 +104,7 @@ struct AddTripView: View {
                         startPoint: .topLeading, endPoint: .bottomTrailing
                     )
                     Image(systemName: "airplane.departure")
-                        .font(.system(size: 42, weight: .medium))
+                        .font(.app(size: 42, weight: .medium))
                         .foregroundStyle(.white.opacity(0.75))
                 }
             }
@@ -115,7 +115,7 @@ struct AddTripView: View {
 
             PhotosPicker(selection: $coverPick, matching: .images) {
                 Label(coverImage == nil ? "Add photo" : "Change photo", systemImage: "camera.fill")
-                    .font(.footnote.weight(.semibold))
+                    .font(.app(.footnote, .semibold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 9)
@@ -129,9 +129,9 @@ struct AddTripView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Plan a new trip")
-                .font(.system(.largeTitle).weight(.bold))
+                .font(.app(.largeTitle, .bold))
             Text("Name it, pick a place, and bring your crew.")
-                .font(.subheadline)
+                .font(.app(.subheadline))
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -142,7 +142,7 @@ struct AddTripView: View {
             HStack(spacing: 10) {
                 Image(systemName: "suitcase.fill").foregroundStyle(.secondary)
                 TextField("Trip name (e.g. Summer in Tokyo)", text: $name)
-                    .font(.body.weight(.semibold))
+                    .font(.app(.body, .semibold))
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
@@ -151,7 +151,7 @@ struct AddTripView: View {
             LocationField(text: $location)
 
             HStack {
-                Text("Currency").font(.subheadline).foregroundStyle(.secondary)
+                Text("Currency").font(.app(.subheadline)).foregroundStyle(.secondary)
                 Spacer()
                 Menu {
                     Picker("Currency", selection: $currency) {
@@ -159,8 +159,8 @@ struct AddTripView: View {
                     }
                 } label: {
                     HStack(spacing: 4) {
-                        Text(currency).font(.subheadline.weight(.semibold))
-                        Image(systemName: "chevron.down").font(.caption2.weight(.bold))
+                        Text(currency).font(.app(.subheadline, .semibold))
+                        Image(systemName: "chevron.down").font(.app(.caption2, .bold))
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
@@ -173,13 +173,13 @@ struct AddTripView: View {
     private var datesCard: some View {
         TripCard(title: "When?", icon: "calendar") {
             Toggle("Add travel dates", isOn: $hasDates.animation(.snappy))
-                .font(.subheadline.weight(.medium))
+                .font(.app(.subheadline, .medium))
                 .tint(Theme.accent)
             if hasDates {
                 DatePicker("Start", selection: $startDate, displayedComponents: .date)
-                    .font(.subheadline)
+                    .font(.app(.subheadline))
                 DatePicker("End", selection: $endDate, in: startDate..., displayedComponents: .date)
-                    .font(.subheadline)
+                    .font(.app(.subheadline))
             }
         }
     }
@@ -195,7 +195,7 @@ struct AddTripView: View {
                 } else {
                     Label("Start planning", systemImage: "arrow.right")
                         .labelStyle(.titleAndIcon)
-                        .font(.headline)
+                        .font(.app(.headline))
                 }
             }
             .foregroundStyle(.white)
@@ -214,14 +214,14 @@ struct AddTripView: View {
     private var budgetCard: some View {
         TripCard(title: "Your budget", icon: "wallet.bifold.fill") {
             Text("How much you can personally spend on this trip.")
-                .font(.footnote)
+                .font(.app(.footnote))
                 .foregroundStyle(.secondary)
             HStack(spacing: 2) {
                 Text(currencySymbol(currency)).foregroundStyle(.secondary)
                 TextField("0.00", text: $budgetText)
                     .keyboardType(.decimalPad)
             }
-            .font(.title3.weight(.semibold))
+            .font(.app(.title3, .semibold))
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
             .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
@@ -231,7 +231,7 @@ struct AddTripView: View {
     private var tripmatesCard: some View {
         TripCard(title: "Tripmates", icon: "person.2.fill") {
             Text("You can invite people with an account after the trip is created.")
-                .font(.footnote)
+                .font(.app(.footnote))
                 .foregroundStyle(.secondary)
 
             // Everyone on the trip so far, as removable chips (owner first, fixed).
@@ -255,7 +255,7 @@ struct AddTripView: View {
                     .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
                 Button { addMember() } label: {
                     Image(systemName: "plus")
-                        .font(.subheadline.weight(.bold))
+                        .font(.app(.subheadline, .bold))
                         .foregroundStyle(.white)
                         .frame(width: 40, height: 40)
                 }
@@ -270,14 +270,14 @@ struct AddTripView: View {
         HStack(spacing: 6) {
             avatar(person, size: 24)
             label
-                .font(.footnote.weight(.medium))
+                .font(.app(.footnote, .medium))
                 .lineLimit(1)
             if removable {
                 Button {
                     members.removeAll { $0.id == person.id }
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.footnote)
+                        .font(.app(.footnote))
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)

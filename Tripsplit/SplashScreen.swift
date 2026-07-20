@@ -5,6 +5,7 @@ struct RootView: View {
     @State private var isActive = false
     @State private var localization = LocalizationManager.shared
     @State private var themeManager = ThemeManager.shared
+    @State private var fontManager = FontManager.shared
     @AppStorage("appearancePreference") private var appearance: AppearancePreference = .system
     @AppStorage("hasSeenWelcome") private var hasSeenWelcome = false
 
@@ -33,6 +34,10 @@ struct RootView: View {
         .environment(localization)
         .environment(\.locale, localization.locale)
         .preferredColorScheme(appearance.colorScheme)
+        // Default font for text that doesn't set one explicitly, so the chosen
+        // typeface reaches those labels too. Left nil for `.system` so the default
+        // selection behaves exactly as it did before fonts became selectable.
+        .environment(\.font, fontManager.selection == .independence ? .app(.body) : nil)
         // App-wide control tint follows the user's chosen theme (see `ThemeManager`).
         .tint(themeManager.selection.accent)
         .task {
@@ -67,7 +72,7 @@ struct SplashScreen: View {
 
                 VStack(spacing: 6) {
                     Text("TripSplit")
-                        .font(.system(size: 34, weight: .bold))
+                        .font(.app(size: 34, weight: .bold))
                         .foregroundStyle(
                             LinearGradient(
                                 colors: [Color(hex: 0xF59E0B), Color(hex: 0xEC4899)],
@@ -75,7 +80,7 @@ struct SplashScreen: View {
                             )
                         )
                     Text("Travel together, split with ease")
-                        .font(.subheadline)
+                        .font(.app(.subheadline))
                         .foregroundStyle(.secondary)
                 }
                 .opacity(appeared ? 1 : 0)

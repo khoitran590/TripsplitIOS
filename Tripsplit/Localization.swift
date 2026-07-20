@@ -156,19 +156,19 @@ struct LanguagePickerView: View {
                         } label: {
                             HStack(spacing: 14) {
                                 Text(language.flag)
-                                    .font(.title2)
+                                    .font(.app(.title2))
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(language.endonym)
-                                        .font(.body)
+                                        .font(.app(.body))
                                         .foregroundStyle(.primary)
                                     Text(language.englishName)
-                                        .font(.caption)
+                                        .font(.app(.caption))
                                         .foregroundStyle(.secondary)
                                 }
                                 Spacer()
                                 if language == localization.language {
                                     Image(systemName: "checkmark")
-                                        .font(.body.weight(.semibold))
+                                        .font(.app(.body, .semibold))
                                         .foregroundStyle(.tint)
                                 }
                             }

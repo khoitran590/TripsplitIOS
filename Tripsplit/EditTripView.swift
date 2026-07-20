@@ -60,7 +60,7 @@ struct EditTripView: View {
                         permissionsCard
                         if let errorMessage {
                             Text(errorMessage)
-                                .font(.caption)
+                                .font(.app(.caption))
                                 .foregroundStyle(Theme.negative)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -127,7 +127,7 @@ struct EditTripView: View {
 
             PhotosPicker(selection: $coverPick, matching: .images) {
                 Label("Change Photo", systemImage: "photo.on.rectangle.angled")
-                    .font(.subheadline.weight(.semibold))
+                    .font(.app(.subheadline, .semibold))
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 11)
@@ -141,7 +141,7 @@ struct EditTripView: View {
                         if isLoadingCurrentCover { ProgressView().controlSize(.small) }
                         Label("Resize or reposition", systemImage: "crop")
                     }
-                    .font(.subheadline.weight(.semibold))
+                    .font(.app(.subheadline, .semibold))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 11)
                 }
@@ -172,14 +172,14 @@ struct EditTripView: View {
     private var detailsCard: some View {
         TripCard(title: "Trip details", icon: "suitcase.fill") {
             TextField("Trip name", text: $name)
-                .font(.title3.weight(.semibold))
+                .font(.app(.title3, .semibold))
                 .padding(.horizontal, 14).padding(.vertical, 12)
                 .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
 
             LocationField(text: $location)
 
             HStack {
-                Text("Currency").font(.subheadline).foregroundStyle(.secondary)
+                Text("Currency").font(.app(.subheadline)).foregroundStyle(.secondary)
                 Spacer()
                 Menu {
                     Picker("Currency", selection: $currency) {
@@ -187,8 +187,8 @@ struct EditTripView: View {
                     }
                 } label: {
                     HStack(spacing: 4) {
-                        Text(currency).font(.subheadline.weight(.semibold))
-                        Image(systemName: "chevron.down").font(.caption2.weight(.bold))
+                        Text(currency).font(.app(.subheadline, .semibold))
+                        Image(systemName: "chevron.down").font(.app(.caption2, .bold))
                     }
                     .padding(.horizontal, 12).padding(.vertical, 8)
                     .background(.secondary.opacity(0.12), in: .capsule)
@@ -197,7 +197,7 @@ struct EditTripView: View {
 
             if currency != originalCurrency {
                 Label("Existing expenses and budgets will be converted to \(currency) at today's rate.", systemImage: "arrow.left.arrow.right")
-                    .font(.caption)
+                    .font(.app(.caption))
                     .foregroundStyle(.secondary)
             }
         }
@@ -206,12 +206,12 @@ struct EditTripView: View {
     private var datesCard: some View {
         TripCard(title: "Dates", icon: "calendar") {
             Toggle("Add travel dates", isOn: $hasDates.animation(.snappy))
-                .font(.subheadline.weight(.medium))
+                .font(.app(.subheadline, .medium))
             if hasDates {
                 DatePicker("Start", selection: $startDate, displayedComponents: .date)
-                    .font(.subheadline)
+                    .font(.app(.subheadline))
                 DatePicker("End", selection: $endDate, in: startDate..., displayedComponents: .date)
-                    .font(.subheadline)
+                    .font(.app(.subheadline))
             }
         }
     }
@@ -219,12 +219,12 @@ struct EditTripView: View {
     private var budgetCard: some View {
         TripCard(title: "Your budget", icon: "wallet.bifold.fill") {
             Text("How much you can personally spend on this trip.")
-                .font(.footnote).foregroundStyle(.secondary)
+                .font(.app(.footnote)).foregroundStyle(.secondary)
             HStack(spacing: 2) {
                 Text(currencySymbol(currency)).foregroundStyle(.secondary)
                 TextField("0.00", text: $budgetText).keyboardType(.decimalPad)
             }
-            .font(.title3.weight(.semibold))
+            .font(.app(.title3, .semibold))
             .padding(.horizontal, 14).padding(.vertical, 12)
             .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
         }
@@ -235,9 +235,9 @@ struct EditTripView: View {
             Toggle(isOn: $allowMembersToPayForOthers) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Members can pay for others")
-                        .font(.subheadline.weight(.medium))
+                        .font(.app(.subheadline, .medium))
                     Text("Let invited members record an expense paid by someone else. You can always do this.")
-                        .font(.caption)
+                        .font(.app(.caption))
                         .foregroundStyle(.secondary)
                 }
             }

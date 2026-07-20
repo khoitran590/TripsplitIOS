@@ -598,7 +598,7 @@ struct MapScreen: View {
                         }
                     } label: {
                         Image(systemName: "chevron.left")
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(.app(size: 15, weight: .semibold))
                             .frame(width: 38, height: 38)
                     }
                     .buttonStyle(.plain)
@@ -609,7 +609,7 @@ struct MapScreen: View {
             .overlay {
                 if let focus = mapModel.focus {
                     Text("Exploring: \(focus.destination.city)")
-                        .font(.subheadline.weight(.semibold))
+                        .font(.app(.subheadline, .semibold))
                         .padding(.horizontal, 14)
                         .padding(.vertical, 9)
                         .glassEffect(.regular, in: .capsule)
@@ -627,7 +627,7 @@ struct MapScreen: View {
                     Task { await runCategorySearch() }
                 } label: {
                     Label("Search this area", systemImage: "arrow.clockwise")
-                        .font(.subheadline.weight(.semibold))
+                        .font(.app(.subheadline, .semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
@@ -641,7 +641,7 @@ struct MapScreen: View {
                 HStack(spacing: 8) {
                     ProgressView()
                     Text("Searching…")
-                        .font(.caption.weight(.medium))
+                        .font(.app(.caption, .medium))
                         .foregroundStyle(.secondary)
                 }
                 .padding(.horizontal, 14)
@@ -658,12 +658,12 @@ struct MapScreen: View {
     private func exploringPill(_ category: MapCategory) -> some View {
         HStack(spacing: 8) {
             Text("Exploring:")
-                .font(.subheadline.weight(.bold))
+                .font(.app(.subheadline, .bold))
             Text(category.title)
-                .font(.subheadline)
+                .font(.app(.subheadline))
             Button(action: clearCategory) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 12, weight: .bold))
+                    .font(.app(size: 12, weight: .bold))
                     .foregroundStyle(.secondary)
                     .frame(width: 26, height: 26)
                     .contentShape(.circle)
@@ -686,7 +686,7 @@ struct MapScreen: View {
                         Task { await runCategorySearch() }
                     } label: {
                         Label(category.title, systemImage: category.icon)
-                            .font(.subheadline.weight(.medium))
+                            .font(.app(.subheadline, .medium))
                             .padding(.horizontal, 14)
                             .padding(.vertical, 9)
                     }
@@ -807,7 +807,7 @@ struct CategoryPin: View {
                 Circle()
                     .fill(isSelected ? Color.accentColor : Color(white: 0.13))
                 Image(systemName: icon)
-                    .font(.system(size: isSelected ? 15 : 12, weight: .semibold))
+                    .font(.app(size: isSelected ? 15 : 12, weight: .semibold))
                     .foregroundStyle(.white)
             }
             .frame(width: isSelected ? 40 : 32, height: isSelected ? 40 : 32)
@@ -852,18 +852,18 @@ struct PlaceCard: View {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 7) {
                         Image(systemName: "mappin.circle.fill")
-                            .font(.body)
+                            .font(.app(.body))
                             .foregroundStyle(.tint)
                         Text(place.name)
-                            .font(.subheadline.weight(.semibold))
+                            .font(.app(.subheadline, .semibold))
                             .lineLimit(1)
                     }
                     Text(place.category.title)
-                        .font(.caption)
+                        .font(.app(.caption))
                         .foregroundStyle(.secondary)
                     if let address = place.mapItem.address?.fullAddress {
                         Text(address)
-                            .font(.caption)
+                            .font(.app(.caption))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
@@ -878,7 +878,7 @@ struct PlaceCard: View {
                     isSaved.toggle()
                 } label: {
                     Label(isSaved ? "Saved" : "Save", systemImage: isSaved ? "bookmark.fill" : "bookmark")
-                        .font(.subheadline.weight(.semibold))
+                        .font(.app(.subheadline, .semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
@@ -888,7 +888,7 @@ struct PlaceCard: View {
 
                 Button(action: onDirections) {
                     Text("Directions")
-                        .font(.subheadline.weight(.semibold))
+                        .font(.app(.subheadline, .semibold))
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
                 }
@@ -897,7 +897,7 @@ struct PlaceCard: View {
 
                 Button(action: onDetails) {
                     Text("Details")
-                        .font(.subheadline.weight(.semibold))
+                        .font(.app(.subheadline, .semibold))
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
                 }
@@ -912,7 +912,7 @@ struct PlaceCard: View {
         .overlay(alignment: .topTrailing) {
             Button(action: onClose) {
                 Image(systemName: "xmark.circle.fill")
-                    .font(.title3)
+                    .font(.app(.title3))
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
@@ -933,7 +933,7 @@ struct PlaceCard: View {
                     LinearGradient(colors: [.accentColor.opacity(0.7), .accentColor.opacity(0.35)],
                                    startPoint: .topLeading, endPoint: .bottomTrailing)
                     Image(systemName: place.category.icon)
-                        .font(.title3)
+                        .font(.app(.title3))
                         .foregroundStyle(.white.opacity(0.85))
                 }
             }
@@ -973,9 +973,9 @@ struct PlaceDetailSheet: View {
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(place.name)
-                        .font(.title2.bold())
+                        .font(.app(.title2, .bold))
                     Text(place.category.title)
-                        .font(.subheadline)
+                        .font(.app(.subheadline))
                         .foregroundStyle(.secondary)
                 }
 
@@ -992,7 +992,7 @@ struct PlaceDetailSheet: View {
                             .onTapGesture { openURL(website) }
                     }
                 }
-                .font(.subheadline)
+                .font(.app(.subheadline))
                 .foregroundStyle(.secondary)
 
                 HStack(spacing: 10) {
@@ -1000,7 +1000,7 @@ struct PlaceDetailSheet: View {
                         place.mapItem.openInMaps()
                     } label: {
                         Label("Directions", systemImage: "arrow.triangle.turn.up.right.diamond.fill")
-                            .font(.headline)
+                            .font(.app(.headline))
                             .foregroundStyle(.white)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
@@ -1012,7 +1012,7 @@ struct PlaceDetailSheet: View {
                         isSaved.toggle()
                     } label: {
                         Image(systemName: isSaved ? "bookmark.fill" : "bookmark")
-                            .font(.system(size: 17, weight: .semibold))
+                            .font(.app(size: 17, weight: .semibold))
                             .foregroundStyle(.tint)
                             .frame(width: 46, height: 46)
                     }
@@ -1024,7 +1024,7 @@ struct PlaceDetailSheet: View {
                             openURL(phoneURL)
                         } label: {
                             Image(systemName: "phone.fill")
-                                .font(.system(size: 17, weight: .semibold))
+                                .font(.app(size: 17, weight: .semibold))
                                 .foregroundStyle(.tint)
                                 .frame(width: 46, height: 46)
                         }
@@ -1059,10 +1059,10 @@ struct FocusPlaceCard: View {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 7) {
                         Image(systemName: "mappin.circle.fill")
-                            .font(.body)
+                            .font(.app(.body))
                             .foregroundStyle(.tint)
                         Text(focus.title)
-                            .font(.subheadline.weight(.semibold))
+                            .font(.app(.subheadline, .semibold))
                             .lineLimit(1)
                     }
                     HStack(spacing: 6) {
@@ -1071,19 +1071,19 @@ struct FocusPlaceCard: View {
                         }
                         Text("· \(focus.destination.city), \(focus.destination.country)")
                     }
-                    .font(.caption)
+                    .font(.app(.caption))
                     .foregroundStyle(.secondary)
                     if focus.isResolving {
                         HStack(spacing: 8) {
                             ProgressView()
                                 .controlSize(.small)
                             Text("Finding exact location…")
-                                .font(.caption)
+                                .font(.app(.caption))
                                 .foregroundStyle(.secondary)
                         }
                     } else if let address = focus.addressText {
                         Text(address)
-                            .font(.caption)
+                            .font(.app(.caption))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
@@ -1097,17 +1097,17 @@ struct FocusPlaceCard: View {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
                     Text(focus.item.cost)
-                        .font(.caption.weight(.bold))
+                        .font(.app(.caption, .bold))
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
                         .background(.secondary.opacity(0.15), in: .capsule)
                     Text("From \(focus.destination.title)")
-                        .font(.caption)
+                        .font(.app(.caption))
                         .foregroundStyle(.secondary)
                 }
                 Text(focus.item.detail)
-                    .font(.caption)
+                    .font(.app(.caption))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
@@ -1119,7 +1119,7 @@ struct FocusPlaceCard: View {
         .overlay(alignment: .topTrailing) {
             Button(action: onClose) {
                 Image(systemName: "xmark.circle.fill")
-                    .font(.title3)
+                    .font(.app(.title3))
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
@@ -1153,7 +1153,7 @@ struct FocusPlaceCard: View {
         HStack(spacing: 10) {
             Button(action: onDirections) {
                 Label("Directions", systemImage: "arrow.triangle.turn.up.right.diamond.fill")
-                    .font(.subheadline.weight(.semibold))
+                    .font(.app(.subheadline, .semibold))
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 9)
@@ -1163,7 +1163,7 @@ struct FocusPlaceCard: View {
 
             Button(action: onDetails) {
                 Text("Details")
-                    .font(.subheadline.weight(.semibold))
+                    .font(.app(.subheadline, .semibold))
                     .padding(.horizontal, 14)
                     .padding(.vertical, 9)
             }
@@ -1181,7 +1181,7 @@ struct FocusPlaceCard: View {
     private func actionCircle(icon: String, label: LocalizedStringKey, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 17, weight: .semibold))
+                .font(.app(size: 17, weight: .semibold))
                 .foregroundStyle(.tint)
                 .frame(width: 46, height: 46)
         }
@@ -1224,7 +1224,7 @@ struct FocusDetailSheet: View {
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(focus.title)
-                        .font(.title2.bold())
+                        .font(.app(.title2, .bold))
                     HStack(spacing: 6) {
                         if let category = focus.categoryText {
                             Text(category)
@@ -1232,7 +1232,7 @@ struct FocusDetailSheet: View {
                         }
                         Text(verbatim: "\(focus.destination.city), \(focus.destination.country)")
                     }
-                    .font(.subheadline)
+                    .font(.app(.subheadline))
                     .foregroundStyle(.secondary)
                 }
 
@@ -1270,20 +1270,20 @@ struct FocusDetailSheet: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Text(focus.item.cost)
-                    .font(.caption.weight(.bold))
+                    .font(.app(.caption, .bold))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
                     .background(.secondary.opacity(0.15), in: .capsule)
                 Text("From \(focus.destination.title)")
-                    .font(.caption.weight(.semibold))
+                    .font(.app(.caption, .semibold))
                     .foregroundStyle(.secondary)
             }
             Text(focus.item.detail)
-                .font(.subheadline)
+                .font(.app(.subheadline))
                 .fixedSize(horizontal: false, vertical: true)
             Label("Planned by \(focus.destination.planner)", systemImage: "person.circle.fill")
-                .font(.caption)
+                .font(.app(.caption))
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1301,7 +1301,7 @@ struct FocusDetailSheet: View {
                     .controlSize(.small)
                 Text("Finding exact location…")
             }
-            .font(.subheadline)
+            .font(.app(.subheadline))
             .foregroundStyle(.secondary)
         } else {
             VStack(alignment: .leading, spacing: 12) {
@@ -1317,7 +1317,7 @@ struct FocusDetailSheet: View {
                         .onTapGesture { openURL(website) }
                 }
             }
-            .font(.subheadline)
+            .font(.app(.subheadline))
             .foregroundStyle(.secondary)
         }
     }
@@ -1328,7 +1328,7 @@ struct FocusDetailSheet: View {
                 focus.routableMapItem.openInMaps()
             } label: {
                 Label("Directions", systemImage: "arrow.triangle.turn.up.right.diamond.fill")
-                    .font(.headline)
+                    .font(.app(.headline))
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
@@ -1341,7 +1341,7 @@ struct FocusDetailSheet: View {
                     openURL(phoneURL)
                 } label: {
                     Image(systemName: "phone.fill")
-                        .font(.system(size: 17, weight: .semibold))
+                        .font(.app(size: 17, weight: .semibold))
                         .foregroundStyle(.tint)
                         .frame(width: 46, height: 46)
                 }
@@ -1361,7 +1361,7 @@ struct FocusDetailSheet: View {
         if !places.isEmpty || !restaurants.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
                 Text("More from this trip")
-                    .font(.headline)
+                    .font(.app(.headline))
                 ForEach(places) { item in
                     tripItemRow(item, icon: "mappin.circle.fill", focus: focus)
                 }
@@ -1380,26 +1380,26 @@ struct FocusDetailSheet: View {
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: icon)
-                    .font(.title3)
+                    .font(.app(.title3))
                     .foregroundStyle(.tint)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(item.name)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.app(.subheadline, .semibold))
                         .foregroundStyle(.primary)
                     Text(item.detail)
-                        .font(.caption)
+                        .font(.app(.caption))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
                 Text(item.cost)
-                    .font(.caption2.weight(.bold))
+                    .font(.app(.caption2, .bold))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(.secondary.opacity(0.12), in: .capsule)
                 Image(systemName: "chevron.right")
-                    .font(.footnote.weight(.semibold))
+                    .font(.app(.footnote, .semibold))
                     .foregroundStyle(.tertiary)
             }
             .padding(12)

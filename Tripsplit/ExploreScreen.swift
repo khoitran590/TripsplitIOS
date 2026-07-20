@@ -146,11 +146,11 @@ struct RecScreen: View {
                         } else {
                             HStack {
                                 Text("\(filteredDestinations.count) trip\(filteredDestinations.count == 1 ? "" : "s") match")
-                                    .font(.subheadline.weight(.semibold))
+                                    .font(.app(.subheadline, .semibold))
                                     .foregroundStyle(.secondary)
                                 Spacer()
                                 Button("Reset") { resetFilters() }
-                                    .font(.subheadline.weight(.semibold))
+                                    .font(.app(.subheadline, .semibold))
                                     .foregroundStyle(Theme.accent)
                                     .buttonStyle(.plain)
                             }
@@ -159,12 +159,12 @@ struct RecScreen: View {
                         if filteredDestinations.isEmpty {
                             VStack(spacing: 10) {
                                 Image(systemName: "line.3.horizontal.decrease.circle")
-                                    .font(.system(size: 32))
+                                    .font(.app(size: 32))
                                     .foregroundStyle(.tertiary)
                                 Text("No trips match these filters")
-                                    .font(.subheadline.weight(.medium))
+                                    .font(.app(.subheadline, .medium))
                                 Text("Try a longer trip length or a higher budget.")
-                                    .font(.caption)
+                                    .font(.app(.caption))
                                     .foregroundStyle(.secondary)
                             }
                             .frame(maxWidth: .infinity)
@@ -176,12 +176,12 @@ struct RecScreen: View {
                                     HStack(alignment: .firstTextBaseline, spacing: 10) {
                                         sectionHeader(LocalizedStringKey(section.country))
                                         Text(section.destinations[0].continent.uppercased())
-                                            .font(.caption2.weight(.bold))
+                                            .font(.app(.caption2, .bold))
                                             .tracking(1)
                                             .foregroundStyle(.secondary)
                                         Spacer()
                                         Text("\(section.destinations.count) trip\(section.destinations.count == 1 ? "" : "s")")
-                                            .font(.caption.weight(.semibold))
+                                            .font(.app(.caption, .semibold))
                                             .foregroundStyle(.secondary)
                                             .padding(.horizontal, 10)
                                             .padding(.vertical, 5)
@@ -216,7 +216,7 @@ struct RecScreen: View {
                                 Text("Tap the heart on any trip to save it here for later.")
                                     .foregroundStyle(.secondary)
                             }
-                            .font(.footnote)
+                            .font(.app(.footnote))
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(14)
                             .glassEffect(.regular, in: .rect(cornerRadius: 18))
@@ -302,7 +302,7 @@ struct RecScreen: View {
                         Image(systemName: "line.3.horizontal.decrease")
                         Text(activeFilterCount > 0 ? "Filters · \(activeFilterCount)" : "Filters")
                     }
-                    .font(.subheadline.weight(.semibold))
+                    .font(.app(.subheadline, .semibold))
                     .foregroundStyle(activeFilterCount > 0 ? .white : .primary)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 9)
@@ -319,7 +319,7 @@ struct RecScreen: View {
                         selectedContinent = isOn ? nil : continent
                     } label: {
                         Text(continent)
-                            .font(.subheadline.weight(.medium))
+                            .font(.app(.subheadline, .medium))
                             .foregroundStyle(isOn ? .white : .primary)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 9)
@@ -393,7 +393,7 @@ struct RecScreen: View {
 
     private func sectionHeader(_ title: LocalizedStringKey) -> some View {
         Text(title)
-            .font(.title2.bold())
+            .font(.app(.title2, .bold))
     }
 
     private func toggleSaved(_ id: String) {
@@ -441,7 +441,7 @@ struct ExploreFilterSheet: View {
                 VStack(alignment: .leading, spacing: 24) {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Trip length")
-                            .font(.headline)
+                            .font(.app(.headline))
                         Picker("Trip length", selection: $tripLength) {
                             ForEach(TripLengthFilter.allCases) { length in
                                 Text(length.rawValue).tag(length)
@@ -452,26 +452,26 @@ struct ExploreFilterSheet: View {
 
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Continent")
-                            .font(.headline)
+                            .font(.app(.headline))
                         FlowingContinentPicker(selectedContinent: $selectedContinent)
                     }
 
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
                             Text("Total budget")
-                                .font(.headline)
+                                .font(.app(.headline))
                             Spacer()
                             Text(maxBudget >= budgetCap ? "No limit" : "Up to $\(Int(maxBudget))")
-                                .font(.subheadline.weight(.semibold))
+                                .font(.app(.subheadline, .semibold))
                                 .foregroundStyle(Theme.accent)
                                 .monospacedDigit()
                         }
                         Slider(value: $maxBudget, in: 500...budgetCap, step: 100)
                             .tint(Theme.accent)
                         HStack {
-                            Text("$500").font(.caption).foregroundStyle(.secondary)
+                            Text("$500").font(.app(.caption)).foregroundStyle(.secondary)
                             Spacer()
-                            Text("No limit").font(.caption).foregroundStyle(.secondary)
+                            Text("No limit").font(.app(.caption)).foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -505,7 +505,7 @@ private struct FlowingContinentPicker: View {
                     selectedContinent = isOn ? nil : continent
                 } label: {
                     Text(continent)
-                        .font(.subheadline.weight(.medium))
+                        .font(.app(.subheadline, .medium))
                         .foregroundStyle(isOn ? .white : .primary)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
@@ -536,7 +536,7 @@ struct DestinationPhoto: View {
                     ZStack {
                         LinearGradient(colors: destination.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
                         Image(systemName: destination.symbol)
-                            .font(.system(size: symbolSize))
+                            .font(.app(size: symbolSize))
                             .foregroundStyle(.white.opacity(0.3))
                     }
                 }
@@ -567,7 +567,7 @@ struct AdventureCard: View {
             HStack(spacing: 8) {
                 ForEach(destination.tags, id: \.self) { tag in
                     Text(tag)
-                        .font(.caption.weight(.semibold))
+                        .font(.app(.caption, .semibold))
                         .foregroundStyle(.black)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
@@ -583,13 +583,13 @@ struct AdventureCard: View {
         .overlay(alignment: .bottomLeading) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(destination.city)
-                    .font(.system(size: 32, weight: .bold))
+                    .font(.app(size: 32, weight: .bold))
                     .foregroundStyle(.white)
                 Text(destination.country)
-                    .font(.headline)
+                    .font(.app(.headline))
                     .foregroundStyle(.white.opacity(0.9))
                 Text("\(destination.dailyBudget) · \(destination.stops) stops")
-                    .font(.subheadline.weight(.medium))
+                    .font(.app(.subheadline, .medium))
                     .foregroundStyle(.white.opacity(0.85))
                     .padding(.top, 2)
             }
@@ -617,22 +617,22 @@ struct CountryTripCard: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(destination.city)
-                    .font(.title2.bold())
+                    .font(.app(.title2, .bold))
                     .foregroundStyle(.white)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
                 Text("\(destination.dailyBudget) · \(destination.stops) stops")
-                    .font(.caption.weight(.medium))
+                    .font(.app(.caption, .medium))
                     .foregroundStyle(.white.opacity(0.85))
                 HStack(spacing: 6) {
                     Text(destination.price)
-                        .font(.caption.weight(.bold))
+                        .font(.app(.caption, .bold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)
                         .glassEffect(.regular.tint(Theme.accent.opacity(0.7)), in: .capsule)
                     Text(destination.tags.last ?? "")
-                        .font(.caption.weight(.semibold))
+                        .font(.app(.caption, .semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)
@@ -645,7 +645,7 @@ struct CountryTripCard: View {
         .frame(width: 240, height: 300)
         .overlay(alignment: .topLeading) {
             Text("\(destination.days) days")
-                .font(.caption.weight(.semibold))
+                .font(.app(.caption, .semibold))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
@@ -675,14 +675,14 @@ struct DestinationRow: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(destination.city), \(destination.country)")
-                    .font(.body.weight(.semibold))
+                    .font(.app(.body, .semibold))
                     .foregroundStyle(.primary)
                 Text("\(destination.tags.joined(separator: " · ")) · \(destination.price)")
-                    .font(.caption)
+                    .font(.app(.caption))
                     .foregroundStyle(.secondary)
                 if let matchedStop {
                     Label("Includes \(matchedStop)", systemImage: "mappin")
-                        .font(.caption)
+                        .font(.app(.caption))
                         .foregroundStyle(.tint)
                         .lineLimit(1)
                 }
@@ -691,7 +691,7 @@ struct DestinationRow: View {
             Spacer()
 
             Image(systemName: "chevron.right")
-                .font(.footnote.weight(.semibold))
+                .font(.app(.footnote, .semibold))
                 .foregroundStyle(.tertiary)
         }
         .padding(12)
@@ -707,7 +707,7 @@ struct HeartButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: isSaved ? "heart.fill" : "heart")
-                .font(.system(size: 16, weight: .semibold))
+                .font(.app(size: 16, weight: .semibold))
                 .foregroundStyle(isSaved ? AnyShapeStyle(.red) : AnyShapeStyle(.black))
                 .frame(width: 38, height: 38)
                 .background(.white.opacity(0.95), in: .circle)
@@ -784,7 +784,7 @@ struct DestinationDetailView: View {
                     } label: {
                         VStack(spacing: 8) {
                             Text(LocalizedStringKey(option.rawValue))
-                                .font(.headline)
+                                .font(.app(.headline))
                                 .foregroundStyle(tab == option ? .primary : .secondary)
                             Capsule()
                                 .fill(tab == option ? Color.primary : .clear)
@@ -816,7 +816,7 @@ struct DestinationDetailView: View {
             HStack(spacing: 8) {
                 ForEach(destination.tags, id: \.self) { tag in
                     Text(tag)
-                        .font(.caption.weight(.semibold))
+                        .font(.app(.caption, .semibold))
                         .foregroundStyle(.black)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
@@ -831,10 +831,10 @@ struct DestinationDetailView: View {
     private var overviewSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(destination.title)
-                .font(.largeTitle.bold())
+                .font(.app(.largeTitle, .bold))
 
             Text(destination.blurb)
-                .font(.body)
+                .font(.app(.body))
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 12) {
@@ -847,9 +847,9 @@ struct DestinationDetailView: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 Label("Planned by \(destination.planner)", systemImage: "person.circle.fill")
-                    .font(.subheadline.weight(.semibold))
+                    .font(.app(.subheadline, .semibold))
                 Text(destination.plannerNote)
-                    .font(.subheadline)
+                    .font(.app(.subheadline))
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -867,7 +867,7 @@ struct DestinationDetailView: View {
             showUseAsPlanConfirm = true
         } label: {
             Label("Use as my starting plan", systemImage: "wand.and.stars")
-                .font(.headline)
+                .font(.app(.headline))
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
@@ -892,7 +892,7 @@ struct DestinationDetailView: View {
         let guide = destination.practicalGuide
         return VStack(alignment: .leading, spacing: 12) {
             Label("Plan it like a local", systemImage: "map.fill")
-                .font(.headline)
+                .font(.app(.headline))
 
             guideRow(icon: "bed.double.fill", title: "Best base", detail: guide.base)
             guideRow(icon: "tram.fill", title: "Getting around", detail: guide.transport)
@@ -906,15 +906,15 @@ struct DestinationDetailView: View {
     private func guideRow(icon: String, title: String, detail: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: icon)
-                .font(.subheadline.weight(.semibold))
+                .font(.app(.subheadline, .semibold))
                 .foregroundStyle(.tint)
                 .frame(width: 18)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.caption.weight(.bold))
+                    .font(.app(.caption, .bold))
                     .foregroundStyle(.secondary)
                 Text(detail)
-                    .font(.subheadline)
+                    .font(.app(.subheadline))
             }
         }
     }
@@ -922,11 +922,11 @@ struct DestinationDetailView: View {
     private func statTile(value: String, label: LocalizedStringKey) -> some View {
         VStack(spacing: 4) {
             Text(value)
-                .font(.subheadline.weight(.bold))
+                .font(.app(.subheadline, .bold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
             Text(label)
-                .font(.caption)
+                .font(.app(.caption))
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
@@ -939,7 +939,7 @@ struct DestinationDetailView: View {
     private func planList(_ items: [TravelPlanItem], isRestaurant: Bool) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Label("Tap a spot to see it on the map", systemImage: "mappin.and.ellipse")
-                .font(.caption)
+                .font(.app(.caption))
                 .foregroundStyle(.secondary)
 
             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
@@ -959,28 +959,28 @@ struct DestinationDetailView: View {
         HStack(alignment: .top, spacing: 14) {
             ZStack {
                 LinearGradient(colors: destination.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
-                Text("\(index + 1)").font(.headline).foregroundStyle(.white)
+                Text("\(index + 1)").font(.app(.headline)).foregroundStyle(.white)
             }
             .frame(width: 44, height: 44)
             .clipShape(.rect(cornerRadius: 12))
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(item.name).font(.body.weight(.semibold)).foregroundStyle(.primary)
+                    Text(item.name).font(.app(.body, .semibold)).foregroundStyle(.primary)
                     Text(item.cost)
-                        .font(.caption2.weight(.bold)).foregroundStyle(.secondary)
+                        .font(.app(.caption2, .bold)).foregroundStyle(.secondary)
                         .padding(.horizontal, 6).padding(.vertical, 2)
                         .background(.secondary.opacity(0.12), in: .capsule)
                 }
                 Text(item.detail)
-                    .font(.subheadline).foregroundStyle(.secondary)
+                    .font(.app(.subheadline)).foregroundStyle(.secondary)
                     .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
                 Label(item.visitAdvice(isRestaurant: isRestaurant), systemImage: "checkmark.circle")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.app(.caption)).foregroundStyle(.secondary)
                     .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
-            Image(systemName: "map").font(.callout.weight(.semibold)).foregroundStyle(.tint)
+            Image(systemName: "map").font(.app(.callout, .semibold)).foregroundStyle(.tint)
         }
         .padding(14)
         .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))

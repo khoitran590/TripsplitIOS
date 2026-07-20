@@ -156,14 +156,14 @@ struct HomeScreen: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Your Trips")
-                    .font(.headline)
+                    .font(.app(.headline))
                     .padding(.leading, 4)
                 Spacer()
                 Button {
                     if auth.isAuthenticated { showAddTrip = true } else { showSignInAlert = true }
                 } label: {
                     Label("Add Trip", systemImage: "plus")
-                        .font(.subheadline.weight(.semibold))
+                        .font(.app(.subheadline, .semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 14)
                         .frame(minHeight: 44)
@@ -176,18 +176,18 @@ struct HomeScreen: View {
             if store.myTrips.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "suitcase")
-                        .font(.largeTitle)
+                        .font(.app(.largeTitle))
                         .foregroundStyle(.tertiary)
                     Text("No trips yet")
-                        .font(.subheadline.weight(.medium))
+                        .font(.app(.subheadline, .medium))
                     Text("Create a trip to start tracking expenses.")
-                        .font(.caption)
+                        .font(.app(.caption))
                         .foregroundStyle(.secondary)
                     Button {
                         if auth.isAuthenticated { showAddTrip = true } else { showSignInAlert = true }
                     } label: {
                         Label("Create your first trip", systemImage: "plus")
-                            .font(.subheadline.weight(.semibold))
+                            .font(.app(.subheadline, .semibold))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 18)
                             .frame(minHeight: 44)
@@ -239,19 +239,19 @@ struct HomeScreen: View {
                 Button { showArchivedTrips = true } label: {
                     HStack(spacing: 10) {
                         Image(systemName: "archivebox")
-                            .font(.subheadline.weight(.semibold))
+                            .font(.app(.subheadline, .semibold))
                             .foregroundStyle(.secondary)
                         Text("Archived Trips")
-                            .font(.subheadline.weight(.semibold))
+                            .font(.app(.subheadline, .semibold))
                         Text(verbatim: "\(store.archivedTrips.count)")
-                            .font(.caption.weight(.bold))
+                            .font(.app(.caption, .bold))
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 3)
                             .background(.secondary.opacity(0.15), in: .capsule)
                         Spacer()
                         Image(systemName: "chevron.right")
-                            .font(.caption.weight(.bold))
+                            .font(.app(.caption, .bold))
                             .foregroundStyle(.secondary)
                     }
                     .padding(.horizontal, 14)
@@ -274,7 +274,7 @@ struct HomeScreen: View {
         case .syncing:
             HStack(spacing: 8) {
                 ProgressView()
-                Text("Saving to cloud…").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                Text("Saving to cloud…").font(.app(.caption, .medium)).foregroundStyle(.secondary)
                 Spacer()
             }
             .padding(.horizontal, 14).padding(.vertical, 10)
@@ -380,7 +380,7 @@ struct HomeScreen: View {
         return VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Recent Transactions")
-                    .font(.headline)
+                    .font(.app(.headline))
                     .padding(.leading, 4)
                 Spacer()
                 if isSelectingTransactions {
@@ -391,7 +391,7 @@ struct HomeScreen: View {
                             selectedTransactionIDs = Set(visibleDeletableTransactions.map(\.id))
                         }
                     }
-                    .font(.subheadline.weight(.semibold))
+                    .font(.app(.subheadline, .semibold))
                     .foregroundStyle(Theme.accent)
                     .buttonStyle(.plain)
                     .frame(minHeight: 44)
@@ -401,7 +401,7 @@ struct HomeScreen: View {
                         isSelectingTransactions = false
                         selectedTransactionIDs.removeAll()
                     }
-                    .font(.subheadline.weight(.semibold))
+                    .font(.app(.subheadline, .semibold))
                     .foregroundStyle(.secondary)
                     .buttonStyle(.plain)
                     .frame(minHeight: 44)
@@ -411,7 +411,7 @@ struct HomeScreen: View {
                     Button("Select") {
                         isSelectingTransactions = true
                     }
-                    .font(.subheadline.weight(.semibold))
+                    .font(.app(.subheadline, .semibold))
                     .foregroundStyle(Theme.accent)
                     .buttonStyle(.plain)
                     .frame(minHeight: 44)
@@ -422,12 +422,12 @@ struct HomeScreen: View {
             if groups.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "tray")
-                        .font(.largeTitle)
+                        .font(.app(.largeTitle))
                         .foregroundStyle(.tertiary)
                     Text("No transactions yet")
-                        .font(.subheadline.weight(.medium))
+                        .font(.app(.subheadline, .medium))
                     Text("Add an expense to a trip to see it here.")
-                        .font(.caption)
+                        .font(.app(.caption))
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity)
@@ -450,7 +450,7 @@ struct HomeScreen: View {
                             .filter { selectedTransactionIDs.contains($0.id) }
                     } label: {
                         Text("Delete\(selectedTransactionIDs.isEmpty ? "" : " (\(selectedTransactionIDs.count))")")
-                            .font(.subheadline.weight(.semibold))
+                            .font(.app(.subheadline, .semibold))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 10)
                     }
@@ -522,18 +522,18 @@ struct HomeScreen: View {
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(verbatim: group.name)
-                            .font(.subheadline.weight(.semibold))
+                            .font(.app(.subheadline, .semibold))
                             .lineLimit(1)
                         Text("\(group.transactions.count) expense\(group.transactions.count == 1 ? "" : "s") • \(group.latestDate.formatted(date: .abbreviated, time: .omitted))")
-                            .font(.caption)
+                            .font(.app(.caption))
                             .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 8)
                     Text(money(group.total, group.currencyCode))
-                        .font(.subheadline.weight(.semibold))
+                        .font(.app(.subheadline, .semibold))
                         .monospacedDigit()
                     Image(systemName: "chevron.down")
-                        .font(.caption.weight(.bold))
+                        .font(.app(.caption, .bold))
                         .foregroundStyle(.secondary)
                         .rotationEffect(.degrees(isExpanded ? 180 : 0))
                 }
@@ -597,13 +597,13 @@ struct SyncFailureBanner: View {
         HStack(spacing: 10) {
             Image(systemName: "exclamationmark.icloud.fill").foregroundStyle(.white)
             VStack(alignment: .leading, spacing: 1) {
-                Text("Couldn't save to cloud").font(.caption.weight(.bold)).foregroundStyle(.white)
+                Text("Couldn't save to cloud").font(.app(.caption, .bold)).foregroundStyle(.white)
                 Text(store.syncErrorMessage ?? "Changes are saved on this device only.")
-                    .font(.caption2).foregroundStyle(.white.opacity(0.85))
+                    .font(.app(.caption2)).foregroundStyle(.white.opacity(0.85))
             }
             Spacer()
             Button { store.retrySync() } label: {
-                Text("Retry").font(.caption.weight(.bold)).foregroundStyle(Color(hex: 0xDC2626))
+                Text("Retry").font(.app(.caption, .bold)).foregroundStyle(Color(hex: 0xDC2626))
                     .padding(.horizontal, 12).padding(.vertical, 6)
                     .background(.white, in: .capsule)
                     .frame(minWidth: 44, minHeight: 44)
@@ -659,12 +659,12 @@ struct BalanceCard: View {
         return VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 4) {
                 Text("Overview")
-                    .font(.subheadline.weight(.semibold))
+                    .font(.app(.subheadline, .semibold))
                 Button {
                     showBudgetInfo = true
                 } label: {
                     Image(systemName: "info.circle")
-                        .font(.footnote.weight(.semibold))
+                        .font(.app(.footnote, .semibold))
                         .foregroundStyle(.secondary)
                         .frame(width: 40, height: 44)
                         .contentShape(.rect)
@@ -680,7 +680,7 @@ struct BalanceCard: View {
                     showConverter = true
                 } label: {
                     Label("Convert", systemImage: "arrow.left.arrow.right")
-                        .font(.subheadline.weight(.semibold))
+                        .font(.app(.subheadline, .semibold))
                         .foregroundStyle(Theme.accent)
                         .padding(.horizontal, 4)
                         .frame(minHeight: 44)
@@ -699,7 +699,7 @@ struct BalanceCard: View {
                 HStack(alignment: .bottom, spacing: 12) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(verbatim: heroValue)
-                            .font(.largeTitle.weight(.bold))
+                            .font(.app(.largeTitle, .bold))
                             .foregroundStyle(isOver ? statusColor : .primary)
                             .lineLimit(1)
                             .minimumScaleFactor(0.78)
@@ -710,7 +710,7 @@ struct BalanceCard: View {
                             Text(verbatim: "·")
                             Text("\(store.myTrips.count) trips")
                         }
-                        .font(.subheadline)
+                        .font(.app(.subheadline))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
@@ -720,13 +720,13 @@ struct BalanceCard: View {
                         Spacer(minLength: 8)
                         VStack(alignment: .trailing, spacing: 5) {
                             Text(LocalizedStringKey(statusText))
-                                .font(.caption.weight(.semibold))
+                                .font(.app(.caption, .semibold))
                                 .foregroundStyle(statusColor)
                                 .padding(.horizontal, 9)
                                 .padding(.vertical, 4)
                                 .background(statusColor.opacity(0.12), in: .capsule)
                             Text("\(Int((fraction * 100).rounded()))% of budget")
-                                .font(.caption)
+                                .font(.app(.caption))
                                 .foregroundStyle(.secondary)
                         }
                         .lineLimit(1)
@@ -747,7 +747,7 @@ struct BalanceCard: View {
                     .frame(height: 8)
                 } else {
                     Text("No budget set · Set one inside a trip")
-                        .font(.caption)
+                        .font(.app(.caption))
                         .foregroundStyle(.secondary)
                 }
 
@@ -755,7 +755,7 @@ struct BalanceCard: View {
 
                 if !totals.unavailableCurrencies.isEmpty {
                     Text("Some trips need an exchange-rate refresh")
-                        .font(.caption2)
+                        .font(.app(.caption2))
                         .foregroundStyle(.secondary)
                 }
             }
@@ -818,11 +818,11 @@ struct BalanceCard: View {
     private func statBox(label: String, value: String, valueColor: Color, background: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(LocalizedStringKey(label))
-                .font(.caption2.weight(.semibold)).tracking(0.5)
+                .font(.app(.caption2, .semibold)).tracking(0.5)
                 .foregroundStyle(.secondary)
                 .lineLimit(1).minimumScaleFactor(0.8)
             Text(verbatim: value)
-                .font(.subheadline.weight(.bold))
+                .font(.app(.subheadline, .bold))
                 .foregroundStyle(valueColor)
                 .lineLimit(1).minimumScaleFactor(0.7)
         }
@@ -840,14 +840,14 @@ struct BalanceCard: View {
 
         return VStack(alignment: .leading, spacing: 8) {
             Text("How your budget adds up")
-                .font(.subheadline.weight(.bold))
+                .font(.app(.subheadline, .bold))
             if budgetedTrips > 0 {
                 Text("This total is the sum of the budgets you set in each trip, converted to your home currency (\(displayCurrency)). Right now \(budgetedTrips) of your \(totalTrips) trips have a budget set — trips without one add nothing.")
             } else {
                 Text("There is no total budget because you haven't set one in any trip yet. Set a budget inside a trip and it will be added here in your home currency (\(displayCurrency)).")
             }
         }
-        .font(.footnote)
+        .font(.app(.footnote))
         .foregroundStyle(.primary)
         .fixedSize(horizontal: false, vertical: true)
         .padding(14)
@@ -950,7 +950,7 @@ struct TripRow: View {
             .overlay(alignment: .bottomLeading) {
                 Label(trip.location?.isEmpty == false ? trip.location! : trip.name,
                       systemImage: "mappin.circle.fill")
-                    .font(.caption.weight(.semibold))
+                    .font(.app(.caption, .semibold))
                     .foregroundStyle(.white)
                     .lineLimit(1)
                     .padding(12)
@@ -963,9 +963,9 @@ struct TripRow: View {
     private var healthBadge: some View {
         HStack(spacing: 4) {
             Image(systemName: isOver ? "exclamationmark.triangle.fill" : "gauge.high")
-                .font(.caption2.weight(.bold))
+                .font(.app(.caption2, .bold))
             Text(isOver ? "Over budget" : "Near limit")
-                .font(.caption2.weight(.bold))
+                .font(.app(.caption2, .bold))
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 9).padding(.vertical, 5)
@@ -976,11 +976,11 @@ struct TripRow: View {
 
     private var titleRow: some View {
         HStack(spacing: 8) {
-            Text(trip.name).font(.headline.weight(.bold)).lineLimit(1)
+            Text(trip.name).font(.app(.headline, .bold)).lineLimit(1)
             Spacer(minLength: 6)
             HStack(spacing: 4) {
-                Image(systemName: "person.2.fill").font(.caption2)
-                Text("\(trip.members.count)").font(.caption.weight(.semibold))
+                Image(systemName: "person.2.fill").font(.app(.caption2))
+                Text("\(trip.members.count)").font(.app(.caption, .semibold))
             }
             .foregroundStyle(.secondary)
         }
@@ -988,9 +988,9 @@ struct TripRow: View {
 
     private var dateRow: some View {
         HStack(spacing: 6) {
-            Image(systemName: "calendar").font(.caption)
+            Image(systemName: "calendar").font(.app(.caption))
             Text(trip.dateRangeText ?? "\(trip.expenses.count) expense\(trip.expenses.count == 1 ? "" : "s")")
-                .font(.caption)
+                .font(.app(.caption))
         }
         .foregroundStyle(.secondary)
     }
@@ -1015,10 +1015,10 @@ struct TripRow: View {
     private func statBox(label: String, value: String, valueColor: Color, background: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(LocalizedStringKey(label))
-                .font(.caption2.weight(.semibold)).tracking(0.5)
+                .font(.app(.caption2, .semibold)).tracking(0.5)
                 .foregroundStyle(.secondary)
             Text(value)
-                .font(.subheadline.weight(.bold)).foregroundStyle(valueColor)
+                .font(.app(.subheadline, .bold)).foregroundStyle(valueColor)
                 .lineLimit(1).minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1029,10 +1029,10 @@ struct TripRow: View {
     private var progress: some View {
         VStack(spacing: 6) {
             HStack {
-                Text("Budget Usage").font(.caption).foregroundStyle(.secondary)
+                Text("Budget Usage").font(.app(.caption)).foregroundStyle(.secondary)
                 Spacer()
                 Text(hasBudget ? "\(Int(percent.rounded()))%" : "No budget set")
-                    .font(.caption.weight(.semibold))
+                    .font(.app(.caption, .semibold))
                     .foregroundStyle(isOver || isNear ? accent : .secondary)
             }
             GeometryReader { geo in
@@ -1086,14 +1086,14 @@ struct CurrencyConverterCard: View {
                         TextField("0", text: $amountText)
                             .keyboardType(.decimalPad)
                             .focused($amountIsFocused)
-                            .font(.title2.weight(.semibold))
+                            .font(.app(.title2, .semibold))
                             .lineLimit(1)
                             .accessibilityLabel("Amount to convert")
                     }
 
                     Button(action: swapCurrencies) {
                         Image(systemName: "arrow.up.arrow.down")
-                            .font(.subheadline.weight(.semibold))
+                            .font(.app(.subheadline, .semibold))
                             .foregroundStyle(Theme.accent)
                             .frame(width: 44, height: 44)
                             .contentShape(.circle)
@@ -1110,7 +1110,7 @@ struct CurrencyConverterCard: View {
                                 Text(verbatim: "—")
                             }
                         }
-                        .font(.title.weight(.bold))
+                        .font(.app(.title, .bold))
                         .lineLimit(1)
                         .minimumScaleFactor(0.78)
                         .accessibilityLabel("Converted amount")
@@ -1131,7 +1131,7 @@ struct CurrencyConverterCard: View {
                             }
                         }
                     }
-                    .font(.caption)
+                    .font(.app(.caption))
                     .foregroundStyle(.secondary)
                 }
                 .padding(20)
@@ -1162,7 +1162,7 @@ struct CurrencyConverterCard: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.caption.weight(.semibold))
+                .font(.app(.caption, .semibold))
                 .foregroundStyle(.secondary)
             HStack(spacing: 12) {
                 content()
@@ -1184,8 +1184,8 @@ struct CurrencyConverterCard: View {
             }
         } label: {
             HStack(spacing: 4) {
-                Text(verbatim: selection.wrappedValue).font(.subheadline.weight(.semibold))
-                Image(systemName: "chevron.down").font(.caption2.weight(.bold))
+                Text(verbatim: selection.wrappedValue).font(.app(.subheadline, .semibold))
+                Image(systemName: "chevron.down").font(.app(.caption2, .bold))
             }
             .padding(.horizontal, 12)
             .frame(minHeight: 44)
@@ -1253,14 +1253,14 @@ struct QuickActionButton: View {
         Button(action: action) {
             HStack(spacing: 10) {
                 Image(systemName: icon)
-                    .font(.body.weight(.semibold))
+                    .font(.app(.body, .semibold))
                     .foregroundStyle(.white)
                     .frame(width: 34, height: 34)
                     .background(
                         LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing),
                         in: .circle
                     )
-                Text(title).font(.subheadline.weight(.semibold))
+                Text(title).font(.app(.subheadline, .semibold))
                 Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1290,7 +1290,7 @@ struct TripPickerSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(prompt)
-                        .font(.subheadline)
+                        .font(.app(.subheadline))
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 4)
                         .padding(.bottom, 2)
@@ -1321,15 +1321,15 @@ struct TripPickerSheet: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(trip.name)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.app(.subheadline, .semibold))
                     .lineLimit(1)
                 Text(trip.dateRangeText ?? "\(trip.expenses.count) expense\(trip.expenses.count == 1 ? "" : "s")")
-                    .font(.caption)
+                    .font(.app(.caption))
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
             Image(systemName: "chevron.right")
-                .font(.caption.weight(.bold))
+                .font(.app(.caption, .bold))
                 .foregroundStyle(.secondary)
         }
         .padding(12)
@@ -1363,7 +1363,7 @@ struct ArchivedTripsSheet: View {
                 } else {
                     VStack(spacing: 12) {
                         Text("Archived trips are hidden from your Home screen and totals, but stay synced and visible to other members.")
-                            .font(.footnote)
+                            .font(.app(.footnote))
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 4)
@@ -1434,16 +1434,16 @@ struct ArchivedTripsSheet: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(verbatim: trip.name)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.app(.subheadline, .semibold))
                     .lineLimit(1)
                 Text(trip.dateRangeText ?? "\(trip.expenses.count) expense\(trip.expenses.count == 1 ? "" : "s")")
-                    .font(.caption)
+                    .font(.app(.caption))
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
             Button { unarchive(trip) } label: {
                 Text("Unarchive")
-                    .font(.caption.weight(.semibold))
+                    .font(.app(.caption, .semibold))
                     .foregroundStyle(Theme.accent)
                     .padding(.horizontal, 12)
                     .frame(minHeight: 44)
@@ -1510,25 +1510,25 @@ struct TransactionRow: View {
         HStack(spacing: 12) {
             if let isSelected {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.title3)
+                    .font(.app(.title3))
                     .foregroundStyle(isSelected ? Theme.accent : .secondary)
             }
 
             Text(transaction.initials)
-                .font(.caption.weight(.bold))
+                .font(.app(.caption, .bold))
                 .foregroundStyle(.white)
                 .frame(width: 40, height: 40)
                 .background(transaction.color, in: .circle)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(transaction.name).font(.subheadline.weight(.semibold))
+                Text(transaction.name).font(.app(.subheadline, .semibold))
                 Text("\(transaction.category) • \(transaction.date)")
-                    .font(.caption)
+                    .font(.app(.caption))
                     .foregroundStyle(.secondary)
             }
             Spacer()
             Text(money(transaction.amount, transaction.currencyCode))
-                .font(.subheadline.weight(.semibold))
+                .font(.app(.subheadline, .semibold))
                 .monospacedDigit()
                 .foregroundStyle(.primary)
         }

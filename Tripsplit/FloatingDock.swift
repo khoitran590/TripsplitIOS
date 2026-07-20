@@ -16,11 +16,11 @@ struct FloatingDock: View {
                 Button { select(tab) } label: {
                     HStack(spacing: isActive ? 8 : 0) {
                         Image(systemName: tab.systemImage)
-                            .font(.system(size: 19, weight: .semibold))
+                            .font(.app(size: 19, weight: .semibold))
                             .frame(width: 22)
                         if isActive {
                             Text(LocalizedStringKey(tab.rawValue))
-                                .font(.caption.weight(.semibold))
+                                .font(.app(.caption, .semibold))
                                 .lineLimit(1)
                                 .fixedSize()
                                 .transition(.opacity.combined(with: .move(edge: .leading)))

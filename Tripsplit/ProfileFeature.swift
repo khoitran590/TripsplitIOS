@@ -158,7 +158,7 @@ struct ProfileDetailView: View {
 
                 if !store.userProfile.bio.trimmingCharacters(in: .whitespaces).isEmpty {
                     Text(store.userProfile.bio)
-                        .font(.body)
+                        .font(.app(.body))
                         .foregroundStyle(.primary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(16)
@@ -196,10 +196,10 @@ struct ProfileDetailView: View {
         VStack(spacing: 12) {
             AvatarView(person: store.currentUser, imageData: store.profileImageData, size: 110)
             Text(store.currentUser.name.isEmpty ? "TripSplit User" : store.currentUser.name)
-                .font(.title.bold())
+                .font(.app(.title, .bold))
             if let email = auth.email {
                 Text(email)
-                    .font(.subheadline)
+                    .font(.app(.subheadline))
                     .foregroundStyle(.secondary)
             }
         }
@@ -227,10 +227,10 @@ struct ProfileDetailView: View {
             HStack(spacing: 14) {
                 SettingsIconBadge(icon: icon, color: color)
                 Text(title)
-                    .font(.body)
+                    .font(.app(.body))
                 Spacer()
                 Text(value)
-                    .font(.body)
+                    .font(.app(.body))
                     .foregroundStyle(.secondary)
             }
             .padding(.vertical, 14)
@@ -242,11 +242,11 @@ struct ProfileDetailView: View {
     private var placesSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Where I've been")
-                .font(.title3.bold())
+                .font(.app(.title3, .bold))
 
             if visitedPlaces.isEmpty {
                 Text("Add places you've visited from Edit, or set a location on your trips.")
-                    .font(.subheadline)
+                    .font(.app(.subheadline))
                     .foregroundStyle(.secondary)
             } else {
                 PlaceChips(places: visitedPlaces)
@@ -266,7 +266,7 @@ struct PlaceChips: View {
         FlowLayout(spacing: 8) {
             ForEach(places, id: \.self) { place in
                 Label(place, systemImage: "mappin")
-                    .font(.subheadline.weight(.medium))
+                    .font(.app(.subheadline, .medium))
                     .padding(.horizontal, 12)
                     .padding(.vertical, 7)
                     .background(.secondary.opacity(0.12), in: .capsule)

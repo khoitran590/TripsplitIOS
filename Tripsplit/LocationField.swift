@@ -90,10 +90,10 @@ struct LocationField: View {
                                     .foregroundStyle(Theme.accent)
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text(suggestion.title)
-                                        .font(.subheadline).foregroundStyle(.primary)
+                                        .font(.app(.subheadline)).foregroundStyle(.primary)
                                     if !suggestion.subtitle.isEmpty {
                                         Text(suggestion.subtitle)
-                                            .font(.caption).foregroundStyle(.secondary)
+                                            .font(.app(.caption)).foregroundStyle(.secondary)
                                             .lineLimit(1)
                                     }
                                 }

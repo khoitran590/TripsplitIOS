@@ -368,12 +368,12 @@ struct ItineraryPlannerSection: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Your itineraries")
-                    .font(.title2.bold())
+                    .font(.app(.title2, .bold))
                 Spacer()
                 if !store.itineraryTrips.isEmpty {
                     Button(action: onCreate) {
                         Label("New", systemImage: "plus")
-                            .font(.subheadline.weight(.semibold))
+                            .font(.app(.subheadline, .semibold))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 8)
@@ -387,7 +387,7 @@ struct ItineraryPlannerSection: View {
                 Button(action: onCreate) {
                     HStack(spacing: 14) {
                         Image(systemName: "map.fill")
-                            .font(.title2)
+                            .font(.app(.title2))
                             .foregroundStyle(.white)
                             .frame(width: 52, height: 52)
                             .background(
@@ -399,16 +399,16 @@ struct ItineraryPlannerSection: View {
                             )
                         VStack(alignment: .leading, spacing: 3) {
                             Text("Build your own itinerary")
-                                .font(.subheadline.weight(.semibold))
+                                .font(.app(.subheadline, .semibold))
                                 .foregroundStyle(.primary)
                             Text("Set a budget and days, plan places to go, things to do, and where to eat.")
-                                .font(.caption)
+                                .font(.app(.caption))
                                 .foregroundStyle(.secondary)
                                 .multilineTextAlignment(.leading)
                         }
                         Spacer(minLength: 0)
                         Image(systemName: "chevron.right")
-                            .font(.footnote.weight(.semibold))
+                            .font(.app(.footnote, .semibold))
                             .foregroundStyle(.tertiary)
                     }
                     .padding(14)
@@ -456,7 +456,7 @@ struct ItineraryTripCard: View {
                     .frame(height: 150)
                     .clipShape(.rect(cornerRadius: 16))
                 Text("\(dayCount) day\(dayCount == 1 ? "" : "s")")
-                    .font(.caption2.weight(.bold))
+                    .font(.app(.caption2, .bold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
@@ -465,18 +465,18 @@ struct ItineraryTripCard: View {
             }
             VStack(alignment: .leading, spacing: 3) {
                 Text(verbatim: trip.name)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.app(.subheadline, .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 if let location = trip.location, !location.isEmpty {
                     Text(verbatim: location)
-                        .font(.caption)
+                        .font(.app(.caption))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
                 if let itinerary = trip.itinerary, itinerary.totalBudget > 0 {
                     Text(verbatim: "\(money(itinerary.totalBudget, trip.currencyCode)) · \(money(itinerary.budget(forDay: 0), trip.currencyCode))/day")
-                        .font(.caption.weight(.medium))
+                        .font(.app(.caption, .medium))
                         .foregroundStyle(Theme.accent)
                         .lineLimit(1)
                 }
@@ -558,9 +558,9 @@ struct CreateItineraryView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Build an itinerary")
-                .font(.system(.largeTitle).weight(.bold))
+                .font(.app(.largeTitle, .bold))
             Text("Plan each day: where to go, what to do, and where to eat.")
-                .font(.subheadline)
+                .font(.app(.subheadline))
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -571,7 +571,7 @@ struct CreateItineraryView: View {
             HStack(spacing: 10) {
                 Image(systemName: "map.fill").foregroundStyle(.secondary)
                 TextField("Itinerary name (e.g. Tokyo Highlights)", text: $name)
-                    .font(.body.weight(.semibold))
+                    .font(.app(.body, .semibold))
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
@@ -580,7 +580,7 @@ struct CreateItineraryView: View {
             LocationField(text: $location)
 
             HStack {
-                Text("Currency").font(.subheadline).foregroundStyle(.secondary)
+                Text("Currency").font(.app(.subheadline)).foregroundStyle(.secondary)
                 Spacer()
                 Menu {
                     Picker("Currency", selection: $currency) {
@@ -588,8 +588,8 @@ struct CreateItineraryView: View {
                     }
                 } label: {
                     HStack(spacing: 4) {
-                        Text(currency).font(.subheadline.weight(.semibold))
-                        Image(systemName: "chevron.down").font(.caption2.weight(.bold))
+                        Text(currency).font(.app(.subheadline, .semibold))
+                        Image(systemName: "chevron.down").font(.app(.caption2, .bold))
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
@@ -602,14 +602,14 @@ struct CreateItineraryView: View {
     private var budgetCard: some View {
         TripCard(title: "Total budget", icon: "wallet.bifold.fill") {
             Text("Divided evenly across the days of your itinerary.")
-                .font(.footnote)
+                .font(.app(.footnote))
                 .foregroundStyle(.secondary)
             HStack(spacing: 2) {
                 Text(verbatim: currencySymbol(currency)).foregroundStyle(.secondary)
                 TextField("0.00", text: $budgetText)
                     .keyboardType(.decimalPad)
             }
-            .font(.title3.weight(.semibold))
+            .font(.app(.title3, .semibold))
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
             .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
@@ -620,24 +620,24 @@ struct CreateItineraryView: View {
         TripCard(title: "How many days?", icon: "calendar") {
             Stepper(value: $dayCount, in: 1...30) {
                 Text("\(dayCount) day\(dayCount == 1 ? "" : "s")")
-                    .font(.subheadline.weight(.semibold))
+                    .font(.app(.subheadline, .semibold))
             }
             if budget > 0 {
                 HStack(spacing: 6) {
                     Image(systemName: "chart.pie.fill")
-                        .font(.caption)
+                        .font(.app(.caption))
                         .foregroundStyle(Theme.accent)
                     Text("About \(money(budget / Double(dayCount), currency)) per day")
-                        .font(.footnote.weight(.medium))
+                        .font(.app(.footnote, .medium))
                         .foregroundStyle(.secondary)
                 }
             }
             Toggle("Add a start date", isOn: $hasStartDate.animation(.snappy))
-                .font(.subheadline.weight(.medium))
+                .font(.app(.subheadline, .medium))
                 .tint(Theme.accent)
             if hasStartDate {
                 DatePicker("Starts", selection: $startDate, displayedComponents: .date)
-                    .font(.subheadline)
+                    .font(.app(.subheadline))
             }
         }
     }
@@ -648,10 +648,10 @@ struct CreateItineraryView: View {
     private var aiPlanCard: some View {
         TripCard(title: "AI trip planner", icon: "sparkles") {
             Text("Want AI to put together a day-to-day plan for your \(dayCount) day\(dayCount == 1 ? "" : "s")? It drafts places to go, things to do, and where to eat — you choose whether to add or discard it.")
-                .font(.footnote)
+                .font(.app(.footnote))
                 .foregroundStyle(.secondary)
             Toggle("Draft my days with AI", isOn: $wantsAIPlan)
-                .font(.subheadline.weight(.medium))
+                .font(.app(.subheadline, .medium))
                 .tint(Theme.accent)
         }
     }
@@ -659,7 +659,7 @@ struct CreateItineraryView: View {
     private var friendsCard: some View {
         TripCard(title: "Who's coming?", icon: "person.2.fill") {
             Text("Add friends by name now — you can invite people with an account by email once the itinerary is created.")
-                .font(.footnote)
+                .font(.app(.footnote))
                 .foregroundStyle(.secondary)
 
             FlowLayout(spacing: 8) {
@@ -682,7 +682,7 @@ struct CreateItineraryView: View {
                     .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
                 Button { addMember() } label: {
                     Image(systemName: "plus")
-                        .font(.subheadline.weight(.bold))
+                        .font(.app(.subheadline, .bold))
                         .foregroundStyle(.white)
                         .frame(width: 40, height: 40)
                 }
@@ -697,14 +697,14 @@ struct CreateItineraryView: View {
         HStack(spacing: 6) {
             AvatarView(person: person, imageData: person.id == store.currentUser.id ? store.profileImageData : nil, size: 24)
             label
-                .font(.footnote.weight(.medium))
+                .font(.app(.footnote, .medium))
                 .lineLimit(1)
             if removable {
                 Button {
                     members.removeAll { $0.id == person.id }
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.footnote)
+                        .font(.app(.footnote))
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
@@ -722,7 +722,7 @@ struct CreateItineraryView: View {
         } label: {
             Label("Create itinerary", systemImage: "arrow.right")
                 .labelStyle(.titleAndIcon)
-                .font(.headline)
+                .font(.app(.headline))
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 15)
@@ -994,16 +994,16 @@ struct ItineraryDetailView: View {
                 if let location = trip.location, !location.isEmpty {
                     HStack(spacing: 5) {
                         Image(systemName: "mappin.and.ellipse")
-                            .font(.caption.weight(.semibold))
+                            .font(.app(.caption, .semibold))
                         Text(verbatim: location)
-                            .font(.subheadline.weight(.semibold))
+                            .font(.app(.subheadline, .semibold))
                             .lineLimit(1)
                     }
                     .foregroundStyle(.white)
                 }
                 if let range = trip.dateRangeText {
                     Text(verbatim: range)
-                        .font(.caption.weight(.medium))
+                        .font(.app(.caption, .medium))
                         .foregroundStyle(.white.opacity(0.85))
                 }
             }
@@ -1011,7 +1011,7 @@ struct ItineraryDetailView: View {
         }
         .overlay(alignment: .topTrailing) {
             Text("\(itinerary.days.count) day\(itinerary.days.count == 1 ? "" : "s")")
-                .font(.caption2.weight(.bold))
+                .font(.app(.caption2, .bold))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 9)
                 .padding(.vertical, 4)
@@ -1026,10 +1026,10 @@ struct ItineraryDetailView: View {
                             ProgressView().controlSize(.mini).tint(.white)
                         } else {
                             Image(systemName: "camera.fill")
-                                .font(.caption2.weight(.bold))
+                                .font(.app(.caption2, .bold))
                         }
                         Text(hasCover(trip) ? "Replace" : "Add photo")
-                            .font(.caption2.weight(.bold))
+                            .font(.app(.caption2, .bold))
                     }
                     .foregroundStyle(.white)
                     .padding(.horizontal, 9)
@@ -1046,9 +1046,9 @@ struct ItineraryDetailView: View {
                                 ProgressView().controlSize(.mini).tint(.white)
                             } else {
                                 Image(systemName: "crop")
-                                    .font(.caption2.weight(.bold))
+                                    .font(.app(.caption2, .bold))
                             }
-                            Text("Adjust").font(.caption2.weight(.bold))
+                            Text("Adjust").font(.app(.caption2, .bold))
                         }
                         .foregroundStyle(.white)
                         .padding(.horizontal, 9)
@@ -1151,20 +1151,20 @@ struct ItineraryDetailView: View {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(verbatim: money(itinerary.totalBudget, trip.currencyCode))
-                        .font(.title2.bold())
+                        .font(.app(.title2, .bold))
                         .monospacedDigit()
                     Text("Total budget")
-                        .font(.caption)
+                        .font(.app(.caption))
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(verbatim: money(itinerary.budget(forDay: 0), trip.currencyCode))
-                        .font(.title3.weight(.semibold))
+                        .font(.app(.title3, .semibold))
                         .foregroundStyle(Theme.accent)
                         .monospacedDigit()
                     Text("Per day · \(itinerary.days.count) day\(itinerary.days.count == 1 ? "" : "s")")
-                        .font(.caption)
+                        .font(.app(.caption))
                         .foregroundStyle(.secondary)
                 }
             }
@@ -1173,10 +1173,10 @@ struct ItineraryDetailView: View {
                 let over = itinerary.plannedCost > itinerary.totalBudget && itinerary.totalBudget > 0
                 HStack(spacing: 6) {
                     Image(systemName: over ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                        .font(.caption)
+                        .font(.app(.caption))
                         .foregroundStyle(over ? Theme.negative : Theme.positive)
                     Text("Planned so far: \(money(itinerary.plannedCost, trip.currencyCode))")
-                        .font(.footnote.weight(.medium))
+                        .font(.app(.footnote, .medium))
                         .foregroundStyle(.secondary)
                 }
                 if itinerary.totalBudget > 0 {
@@ -1190,7 +1190,7 @@ struct ItineraryDetailView: View {
                 isEditingBudget = true
             } label: {
                 Label("Edit budget", systemImage: "pencil")
-                    .font(.subheadline.weight(.semibold))
+                    .font(.app(.subheadline, .semibold))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)
             }
@@ -1211,14 +1211,14 @@ struct ItineraryDetailView: View {
                     } label: {
                         VStack(spacing: 1) {
                             Text("Day \(index + 1)")
-                                .font(.subheadline.weight(.semibold))
+                                .font(.app(.subheadline, .semibold))
                             if let date = dayDate(trip, index: index) {
                                 Text(verbatim: date.formatted(.dateTime.month(.abbreviated).day()))
-                                    .font(.system(size: 10, weight: .medium))
+                                    .font(.app(size: 10, weight: .medium))
                                     .opacity(0.8)
                             } else if !itinerary.days[index].stops.isEmpty {
                                 Text("\(itinerary.days[index].stops.count) stop\(itinerary.days[index].stops.count == 1 ? "" : "s")")
-                                    .font(.system(size: 10, weight: .medium))
+                                    .font(.app(size: 10, weight: .medium))
                                     .opacity(0.8)
                             }
                         }
@@ -1246,7 +1246,7 @@ struct ItineraryDetailView: View {
                     addDay()
                 } label: {
                     Label("Add day", systemImage: "plus")
-                        .font(.subheadline.weight(.semibold))
+                        .font(.app(.subheadline, .semibold))
                         .foregroundStyle(.primary)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 12)
@@ -1274,13 +1274,13 @@ struct ItineraryDetailView: View {
             let planned = itinerary.plannedCost(forDay: dayIndex)
             HStack {
                 Text("Day budget")
-                    .font(.footnote)
+                    .font(.app(.footnote))
                     .foregroundStyle(.secondary)
                 Spacer()
                 Text(verbatim: planned > 0
                         ? "\(money(planned, trip.currencyCode)) / \(money(dayBudget, trip.currencyCode))"
                         : money(dayBudget, trip.currencyCode))
-                    .font(.footnote.weight(.semibold))
+                    .font(.app(.footnote, .semibold))
                     .foregroundStyle(planned > dayBudget && dayBudget > 0 ? Theme.negative : Theme.accent)
                     .monospacedDigit()
             }
@@ -1293,10 +1293,10 @@ struct ItineraryDetailView: View {
                 if day.stops.isEmpty {
                     VStack(spacing: 8) {
                         Image(systemName: "sparkles")
-                            .font(.title3)
+                            .font(.app(.title3))
                             .foregroundStyle(.tertiary)
                         Text("Nothing planned yet. Add a location, an activity, or a restaurant.")
-                            .font(.footnote)
+                            .font(.app(.footnote))
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
                     }
@@ -1333,7 +1333,7 @@ struct ItineraryDetailView: View {
                 isAddingStop = true
             } label: {
                 Label("Add to this day", systemImage: "plus")
-                    .font(.subheadline.weight(.semibold))
+                    .font(.app(.subheadline, .semibold))
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
@@ -1363,30 +1363,30 @@ struct ItineraryDetailView: View {
             VStack(spacing: 2) {
                 if let time = stop.time {
                     Text(verbatim: time.formatted(date: .omitted, time: .shortened))
-                        .font(.caption2.weight(.semibold))
+                        .font(.app(.caption2, .semibold))
                         .foregroundStyle(.secondary)
                 } else {
                     Text("Anytime")
-                        .font(.caption2)
+                        .font(.app(.caption2))
                         .foregroundStyle(.tertiary)
                 }
             }
             .frame(width: 58)
 
             Image(systemName: stop.kind.icon)
-                .font(.subheadline)
+                .font(.app(.subheadline))
                 .foregroundStyle(.white)
                 .frame(width: 32, height: 32)
                 .background(stop.kind.tint, in: .circle)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(verbatim: stop.name)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.app(.subheadline, .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 if !stop.notes.isEmpty {
                     Text(verbatim: stop.notes)
-                        .font(.caption)
+                        .font(.app(.caption))
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
@@ -1394,12 +1394,12 @@ struct ItineraryDetailView: View {
             Spacer(minLength: 0)
             if stop.cost > 0 {
                 Text(verbatim: money(stop.cost, currencyCode))
-                    .font(.caption.weight(.bold))
+                    .font(.app(.caption, .bold))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
             Image(systemName: "chevron.right")
-                .font(.caption2.weight(.semibold))
+                .font(.app(.caption2, .semibold))
                 .foregroundStyle(.tertiary)
         }
         .padding(10)
@@ -1417,14 +1417,14 @@ struct ItineraryDetailView: View {
             if let suggestion = itinerary.suggestion {
                 HStack(alignment: .firstTextBaseline) {
                     Text("Drafted \(suggestion.generatedAt.formatted(.relative(presentation: .named)))")
-                        .font(.caption)
+                        .font(.app(.caption))
                         .foregroundStyle(.secondary)
                     Spacer()
                     Button(role: .destructive) {
                         discardSuggestion()
                     } label: {
                         Label("Discard", systemImage: "trash")
-                            .font(.caption.weight(.semibold))
+                            .font(.app(.caption, .semibold))
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(Theme.negative)
@@ -1446,12 +1446,12 @@ struct ItineraryDetailView: View {
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: showAllSuggestionDays ? "chevron.up" : "chevron.down")
-                                .font(.caption2.weight(.bold))
+                                .font(.app(.caption2, .bold))
                             Text(showAllSuggestionDays
                                 ? "Show fewer days"
                                 : "Show all \(suggestion.days.count) days")
                         }
-                        .font(.footnote.weight(.semibold))
+                        .font(.app(.footnote, .semibold))
                         .foregroundStyle(Theme.accent)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 9)
@@ -1467,7 +1467,7 @@ struct ItineraryDetailView: View {
                         Image(systemName: "checkmark.circle.fill")
                         Text("Add to my plan")
                     }
-                    .font(.subheadline.weight(.semibold))
+                    .font(.app(.subheadline, .semibold))
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
@@ -1493,7 +1493,7 @@ struct ItineraryDetailView: View {
                         if isGeneratingPlan { ProgressView() }
                         Label("Suggest a different plan", systemImage: "arrow.clockwise")
                     }
-                    .font(.subheadline.weight(.semibold))
+                    .font(.app(.subheadline, .semibold))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 11)
                 }
@@ -1502,26 +1502,26 @@ struct ItineraryDetailView: View {
                 .disabled(isGeneratingPlan || isAICoolingDown)
 
                 Text("Not ready to decide? This draft stays saved right here until you add or discard it.")
-                    .font(.caption2)
+                    .font(.app(.caption2))
                     .foregroundStyle(.tertiary)
             } else if isGeneratingPlan {
                 HStack(spacing: 10) {
                     ProgressView()
                     Text("Planning your days — places to go, things to do, where to eat…")
-                        .font(.footnote)
+                        .font(.app(.footnote))
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 6)
             } else {
                 Text("Let AI draft your whole trip: a day-by-day timeline of places to go, activities worth checking out, and where to eat — with times and estimated costs. You decide whether to use it.")
-                    .font(.footnote)
+                    .font(.app(.footnote))
                     .foregroundStyle(.secondary)
                 Button {
                     generateSuggestion(trip, itinerary)
                 } label: {
                     Label("Suggest a day-by-day plan", systemImage: "sparkles")
-                        .font(.subheadline.weight(.semibold))
+                        .font(.app(.subheadline, .semibold))
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
@@ -1533,13 +1533,13 @@ struct ItineraryDetailView: View {
 
             if let aiMessage {
                 Text(verbatim: aiMessage)
-                    .font(.caption)
+                    .font(.app(.caption))
                     .foregroundStyle(Theme.negative)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             if aiCooldownSecondsRemaining > 0 {
                 Text("Planner available in \(aiCooldownSecondsRemaining) seconds")
-                    .font(.caption2.monospacedDigit())
+                    .font(.app(.caption2).monospacedDigit())
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityIdentifier("itinerary-ai-cooldown")
@@ -1573,10 +1573,10 @@ struct ItineraryDetailView: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 8) {
                     Text("Day \(number)")
-                        .font(.subheadline.weight(.bold))
+                        .font(.app(.subheadline, .bold))
                     if !day.title.isEmpty {
                         Text(verbatim: day.title)
-                            .font(.subheadline)
+                            .font(.app(.subheadline))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
@@ -1584,7 +1584,7 @@ struct ItineraryDetailView: View {
                 Text(verbatim: dayCost > 0
                         ? "\(day.stops.count) stop\(day.stops.count == 1 ? "" : "s") · \(money(dayCost, currencyCode))"
                         : "\(day.stops.count) stop\(day.stops.count == 1 ? "" : "s")")
-                    .font(.caption2)
+                    .font(.app(.caption2))
                     .foregroundStyle(.tertiary)
                     .monospacedDigit()
             }
@@ -1597,24 +1597,24 @@ struct ItineraryDetailView: View {
     private func suggestionStopRow(_ stop: ItinerarySuggestionStop, currencyCode: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Text(verbatim: displayTime(stop.time) ?? "—")
-                .font(.caption2.weight(.semibold))
+                .font(.app(.caption2, .semibold))
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
                 .frame(width: 52, alignment: .leading)
                 .padding(.top, 3)
             Image(systemName: stop.kind.icon)
-                .font(.caption)
+                .font(.app(.caption))
                 .foregroundStyle(stop.kind.tint)
                 .frame(width: 20)
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 1) {
                 Text(verbatim: stop.name)
-                    .font(.footnote.weight(.semibold))
+                    .font(.app(.footnote, .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(2)
                 if !stop.notes.isEmpty {
                     Text(verbatim: stop.notes)
-                        .font(.caption2)
+                        .font(.app(.caption2))
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
@@ -1622,7 +1622,7 @@ struct ItineraryDetailView: View {
             Spacer(minLength: 0)
             if stop.cost > 0 {
                 Text(verbatim: money(stop.cost, currencyCode))
-                    .font(.caption2.weight(.bold))
+                    .font(.app(.caption2, .bold))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
                     .padding(.top, 3)
@@ -1737,7 +1737,7 @@ struct ItineraryDetailView: View {
                                 size: 40
                             )
                             Text(LocalizedStringKey(member.id == store.currentUser.id ? "You" : member.name))
-                                .font(.caption)
+                                .font(.app(.caption))
                                 .lineLimit(1)
                         }
                         .frame(width: 74)
@@ -1750,7 +1750,7 @@ struct ItineraryDetailView: View {
 
                 HStack(spacing: 10) {
                     TextField("Add friend's name", text: $manualMemberName)
-                        .font(.subheadline)
+                        .font(.app(.subheadline))
                         .padding(.horizontal, 14)
                         .padding(.vertical, 10)
                         .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
@@ -1759,7 +1759,7 @@ struct ItineraryDetailView: View {
                         manualMemberName = ""
                     } label: {
                         Image(systemName: "plus")
-                            .font(.subheadline.weight(.bold))
+                            .font(.app(.subheadline, .bold))
                             .foregroundStyle(.white)
                             .frame(width: 40, height: 40)
                     }
@@ -1772,7 +1772,7 @@ struct ItineraryDetailView: View {
                     .textInputAutocapitalization(.never)
                     .keyboardType(.emailAddress)
                     .autocorrectionDisabled()
-                    .font(.subheadline)
+                    .font(.app(.subheadline))
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
@@ -1782,7 +1782,7 @@ struct ItineraryDetailView: View {
                         if isInviting { ProgressView().tint(.white) }
                         Label("Invite Member", systemImage: "person.badge.plus")
                     }
-                    .font(.subheadline.weight(.semibold))
+                    .font(.app(.subheadline, .semibold))
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
@@ -1797,7 +1797,7 @@ struct ItineraryDetailView: View {
                         if isGeneratingLink { ProgressView().tint(.white) }
                         Label("Generate Invitation Link", systemImage: "link")
                     }
-                    .font(.subheadline.weight(.semibold))
+                    .font(.app(.subheadline, .semibold))
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
@@ -1809,7 +1809,7 @@ struct ItineraryDetailView: View {
                 if let inviteLink {
                     HStack(spacing: 8) {
                         Text(verbatim: inviteLink.absoluteString)
-                            .font(.caption)
+                            .font(.app(.caption))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -1818,14 +1818,14 @@ struct ItineraryDetailView: View {
                             inviteMessage = String(localized: "Invitation link copied.")
                         } label: {
                             Image(systemName: "doc.on.doc")
-                                .font(.caption.weight(.bold))
+                                .font(.app(.caption, .bold))
                                 .frame(width: 38, height: 38)
                                 .contentShape(.rect)
                         }
                         .buttonStyle(.plain)
                         ShareLink(item: inviteLink) {
                             Image(systemName: "square.and.arrow.up")
-                                .font(.caption.weight(.bold))
+                                .font(.app(.caption, .bold))
                                 .frame(width: 38, height: 38)
                                 .contentShape(.rect)
                         }
@@ -1837,7 +1837,7 @@ struct ItineraryDetailView: View {
 
                 if let inviteMessage {
                     Text(verbatim: inviteMessage)
-                        .font(.caption)
+                        .font(.app(.caption))
                         .foregroundStyle(inviteMessage.localizedCaseInsensitiveContains("invited") || inviteMessage.localizedCaseInsensitiveContains("copied") || inviteMessage.localizedCaseInsensitiveContains("ready") ? Theme.positive : Theme.negative)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -2054,7 +2054,7 @@ struct ItineraryStopEditorView: View {
                                 Image(systemName: kind.icon)
                                     .foregroundStyle(kind.tint)
                                 TextField(namePlaceholder, text: nameBinding)
-                                    .font(.body.weight(.semibold))
+                                    .font(.app(.body, .semibold))
                                     .focused($nameFocused)
                                     .autocorrectionDisabled()
                                 if !name.isEmpty {
@@ -2078,16 +2078,16 @@ struct ItineraryStopEditorView: View {
                                         Button { select(suggestion) } label: {
                                             HStack(spacing: 10) {
                                                 Image(systemName: kind.icon)
-                                                    .font(.footnote)
+                                                    .font(.app(.footnote))
                                                     .foregroundStyle(kind.tint)
                                                     .frame(width: 22)
                                                 VStack(alignment: .leading, spacing: 1) {
                                                     Text(verbatim: suggestion.title)
-                                                        .font(.subheadline)
+                                                        .font(.app(.subheadline))
                                                         .foregroundStyle(.primary)
                                                     if !suggestion.subtitle.isEmpty {
                                                         Text(verbatim: suggestion.subtitle)
-                                                            .font(.caption)
+                                                            .font(.app(.caption))
                                                             .foregroundStyle(.secondary)
                                                             .lineLimit(1)
                                                     }
@@ -2109,11 +2109,11 @@ struct ItineraryStopEditorView: View {
 
                         TripCard(title: "When?", icon: "clock.fill") {
                             Toggle("Set a time", isOn: $hasTime.animation(.snappy))
-                                .font(.subheadline.weight(.medium))
+                                .font(.app(.subheadline, .medium))
                                 .tint(Theme.accent)
                             if hasTime {
                                 DatePicker("Time", selection: $time, displayedComponents: .hourAndMinute)
-                                    .font(.subheadline)
+                                    .font(.app(.subheadline))
                             }
                         }
 
@@ -2123,7 +2123,7 @@ struct ItineraryStopEditorView: View {
                                 TextField("0.00", text: $costText)
                                     .keyboardType(.decimalPad)
                             }
-                            .font(.title3.weight(.semibold))
+                            .font(.app(.title3, .semibold))
                             .padding(.horizontal, 14)
                             .padding(.vertical, 12)
                             .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
@@ -2132,7 +2132,7 @@ struct ItineraryStopEditorView: View {
                         TripCard(title: "Notes", icon: "note.text") {
                             TextField("Anything to remember (tickets, reservations…)", text: $notes, axis: .vertical)
                                 .lineLimit(2...5)
-                                .font(.subheadline)
+                                .font(.app(.subheadline))
                                 .padding(.horizontal, 14)
                                 .padding(.vertical, 12)
                                 .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))

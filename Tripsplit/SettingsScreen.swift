@@ -17,7 +17,9 @@ struct SettingsScreen: View {
     @State private var showNotificationSettings = false
     @AppStorage("appearancePreference") private var appearance: AppearancePreference = .system
     @AppStorage("displayCurrency") private var displayCurrency = "USD"
+    @State private var showFontPicker = false
     @State private var themeManager = ThemeManager.shared
+    @State private var fontManager = FontManager.shared
 
     var body: some View {
         Group {
@@ -64,7 +66,7 @@ struct SettingsScreen: View {
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Settings")
-                        .font(.title2.bold())
+                        .font(.app(.title2, .bold))
                         .padding(.bottom, 8)
 
                     PlainSettingsRow(icon: "person.fill", title: "Personal information",
@@ -83,7 +85,7 @@ struct SettingsScreen: View {
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Preferences")
-                        .font(.title2.bold())
+                        .font(.app(.title2, .bold))
                         .padding(.bottom, 8)
 
                     PlainSettingsRow(icon: "bell.fill", title: "Notifications",
@@ -116,6 +118,11 @@ struct SettingsScreen: View {
                                      iconColor: Color(hex: 0x3B82F6)) {
                         showLanguagePicker = true
                     }
+                    PlainSettingsRow(icon: "textformat", title: "Change fonts",
+                                     value: fontManager.selection.label,
+                                     iconColor: Color(hex: 0x8B5CF6)) {
+                        showFontPicker = true
+                    }
                     themePicker
                 }
 
@@ -143,6 +150,9 @@ struct SettingsScreen: View {
         .sheet(isPresented: $showLanguagePicker) {
             LanguagePickerView()
         }
+        .sheet(isPresented: $showFontPicker) {
+            FontPickerView()
+        }
         .sheet(isPresented: $showPaymentSettings) {
             PaymentPreferencesView()
         }
@@ -168,16 +178,16 @@ struct SettingsScreen: View {
                     .frame(width: 32, height: 32)
                     .overlay {
                         Image(systemName: "swatchpalette.fill")
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(.app(size: 15, weight: .semibold))
                             .foregroundStyle(.white)
                     }
                     .shadow(color: Theme.accent.opacity(0.35), radius: 4, y: 2)
                 Text("Theme")
-                    .font(.body)
+                    .font(.app(.body))
                 Spacer()
                 // Theme names are proper nouns — shown verbatim, not localized.
                 Text(verbatim: themeManager.selection.label)
-                    .font(.subheadline)
+                    .font(.app(.subheadline))
                     .foregroundStyle(.secondary)
             }
             .padding(.top, 16)
@@ -213,7 +223,7 @@ struct SettingsScreen: View {
                     .overlay {
                         if isSelected {
                             Image(systemName: "checkmark")
-                                .font(.subheadline.weight(.bold))
+                                .font(.app(.subheadline, .bold))
                                 .foregroundStyle(.white)
                         }
                     }
@@ -224,7 +234,7 @@ struct SettingsScreen: View {
                     }
 
                 Text(verbatim: theme.label)
-                    .font(.caption2)
+                    .font(.app(.caption2))
                     .foregroundStyle(isSelected ? .primary : .secondary)
             }
             .contentShape(.rect)
@@ -244,17 +254,17 @@ struct SettingsScreen: View {
 
                     VStack(alignment: .leading, spacing: 3) {
                         Text(displayName)
-                            .font(.title3.weight(.semibold))
+                            .font(.app(.title3, .semibold))
                             .foregroundStyle(.primary)
                         Text("Show profile")
-                            .font(.subheadline)
+                            .font(.app(.subheadline))
                             .foregroundStyle(.secondary)
                     }
 
                     Spacer()
 
                     Image(systemName: "chevron.right")
-                        .font(.footnote.weight(.semibold))
+                        .font(.app(.footnote, .semibold))
                         .foregroundStyle(.tertiary)
                 }
                 Divider()
@@ -269,14 +279,14 @@ struct SettingsScreen: View {
         HStack(spacing: 14) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Plan your next adventure")
-                    .font(.headline)
+                    .font(.app(.headline))
                 Text("Browse curated trips and split costs with friends.")
-                    .font(.subheadline)
+                    .font(.app(.subheadline))
                     .foregroundStyle(.secondary)
             }
             Spacer()
             Image(systemName: "airplane.departure")
-                .font(.system(size: 34, weight: .semibold))
+                .font(.app(size: 34, weight: .semibold))
                 .foregroundStyle(Theme.accent)
         }
         .padding(16)
@@ -287,13 +297,13 @@ struct SettingsScreen: View {
     private var versionFooter: some View {
         VStack(spacing: 6) {
             Text("TripSplit")
-                .font(.headline)
+                .font(.app(.headline))
                 .foregroundStyle(.tertiary)
             Text("Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1") (\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"))")
-                .font(.caption)
+                .font(.app(.caption))
                 .foregroundStyle(.tertiary)
             Text("Terms & Privacy")
-                .font(.caption)
+                .font(.app(.caption))
                 .foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity)
@@ -325,20 +335,20 @@ struct PlainSettingsRow: View {
                     SettingsIconBadge(icon: icon, color: iconColor ?? tint ?? Theme.accent)
 
                     Text(title)
-                        .font(.body)
+                        .font(.app(.body))
                         .foregroundStyle(tint ?? .primary)
 
                     Spacer()
 
                     if let value {
                         Text(value)
-                            .font(.subheadline)
+                            .font(.app(.subheadline))
                             .foregroundStyle(.secondary)
                     }
 
                     if showsChevron {
                         Image(systemName: "chevron.right")
-                            .font(.footnote.weight(.semibold))
+                            .font(.app(.footnote, .semibold))
                             .foregroundStyle(.tertiary)
                     }
                 }
@@ -364,7 +374,7 @@ struct SettingsIconBadge: View {
             .frame(width: 32, height: 32)
             .overlay {
                 Image(systemName: icon)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.app(size: 15, weight: .semibold))
                     .foregroundStyle(.white)
             }
             .shadow(color: color.opacity(0.35), radius: 4, y: 2)
@@ -398,7 +408,7 @@ struct ProfileAvatar: View {
                 )
                 .overlay(
                     Text(initials)
-                        .font(.system(size: size * 0.4, weight: .semibold))
+                        .font(.app(size: size * 0.4, weight: .semibold))
                         .foregroundStyle(.white)
                 )
             } else {

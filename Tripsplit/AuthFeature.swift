@@ -542,7 +542,7 @@ struct AuthView: View {
                 .frame(width: 58, height: 58)
                 .clipShape(.rect(cornerRadius: 16, style: .continuous))
             Text("TripSplit")
-                .font(.headline)
+                .font(.app(.headline))
         }
         .padding(.top, 12)
     }
@@ -553,9 +553,9 @@ struct AuthView: View {
         VStack(spacing: 16) {
             VStack(spacing: 6) {
                 Text(LocalizedStringKey(mode.title))
-                    .font(.title.bold())
+                    .font(.app(.title, .bold))
                 Text(LocalizedStringKey(subtitle))
-                    .font(.subheadline)
+                    .font(.app(.subheadline))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
@@ -589,7 +589,7 @@ struct AuthView: View {
 
             if mode == .signIn {
                 Button("Forgot password?") { switchMode(.forgot) }
-                    .font(.subheadline)
+                    .font(.app(.subheadline))
                     .foregroundStyle(.secondary)
             }
 
@@ -617,7 +617,7 @@ struct AuthView: View {
                 TextField(placeholder, text: text)
             }
         }
-        .font(.body)
+        .font(.app(.body))
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
         .background(.secondary.opacity(0.1), in: .rect(cornerRadius: 14))
@@ -632,7 +632,7 @@ struct AuthView: View {
             HStack(spacing: 8) {
                 if isWorking { ProgressView().tint(.white) }
                 Text(LocalizedStringKey(isWorking ? "Please wait…" : mode.action))
-                    .font(.headline)
+                    .font(.app(.headline))
                     .foregroundStyle(.white)
             }
             .frame(maxWidth: .infinity)
@@ -648,7 +648,7 @@ struct AuthView: View {
         HStack(spacing: 12) {
             Rectangle().fill(.secondary.opacity(0.25)).frame(height: 1)
             Text("or")
-                .font(.footnote)
+                .font(.app(.footnote))
                 .foregroundStyle(.secondary)
             Rectangle().fill(.secondary.opacity(0.25)).frame(height: 1)
         }
@@ -726,7 +726,7 @@ struct AuthView: View {
                 Button("Sign up") { switchMode(.signUp) }
                     .fontWeight(.semibold)
             }
-            .font(.subheadline)
+            .font(.app(.subheadline))
         case .signUp:
             HStack(spacing: 5) {
                 Text("Already have an account?")
@@ -734,16 +734,16 @@ struct AuthView: View {
                 Button("Login") { switchMode(.signIn) }
                     .fontWeight(.semibold)
             }
-            .font(.subheadline)
+            .font(.app(.subheadline))
         case .forgot:
             Button("Back to login") { switchMode(.signIn) }
-                .font(.subheadline)
+                .font(.app(.subheadline))
         }
     }
 
     private func banner(_ text: String, icon: String, color: Color) -> some View {
         Label(text, systemImage: icon)
-            .font(.footnote.weight(.medium))
+            .font(.app(.footnote, .medium))
             .foregroundStyle(color)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(12)
@@ -825,12 +825,12 @@ struct ChangePasswordView: View {
 
                 if !confirm.isEmpty && !passwordsMatch {
                     Text("New passwords don't match.")
-                        .font(.footnote)
+                        .font(.app(.footnote))
                         .foregroundStyle(Color(hex: 0xEF4444))
                 }
                 if let errorMessage {
                     Text(errorMessage)
-                        .font(.footnote)
+                        .font(.app(.footnote))
                         .foregroundStyle(Color(hex: 0xEF4444))
                 }
             }
