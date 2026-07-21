@@ -92,6 +92,16 @@ actor ProfilesRepository {
                            extraHeaders: ["Prefer": "return=minimal"])
     }
 
+    /// The user's own profile share token, used to build their shareable profile link.
+    /// `share_token` is intentionally kept out of `UserProfile` so the client never
+    /// PATCHes it; it's read on its own here.
+    func fetchShareToken(userID: UUID, accessToken: String) async throws -> String? {
+        struct Row: Decodable { let share_token: String? }
+        let path = "/rest/v1/profiles?user_id=eq.\(userID.uuidString.lowercased())&select=share_token"
+        let data = try await send("GET", path, accessToken: accessToken)
+        return try JSONDecoder().decode([Row].self, from: data).first?.share_token
+    }
+
     private func send(
         _ method: String,
         _ path: String,
@@ -128,6 +138,61 @@ actor ProfilesRepository {
     }
 }
 
+// MARK: - Profile tab
+
+/// Root of the Profile dock tab: hosts the profile page in its own navigation
+/// stack, or a sign-in prompt while signed out (mirroring the Explore tab lock).
+struct ProfileScreen: View {
+    @Environment(AuthStore.self) private var auth
+    @State private var showSignIn = false
+
+    var body: some View {
+        NavigationStack {
+            if auth.isAuthenticated {
+                ProfileDetailView()
+            } else {
+                ZStack {
+                    AppBackground()
+                    VStack(spacing: 16) {
+                        Image(systemName: "person.crop.circle.badge.questionmark")
+                            .font(.app(size: 40))
+                            .foregroundStyle(.secondary)
+                        Text("Your profile lives here")
+                            .font(.app(.title3, .semibold))
+                        Text("Sign in to set up your photo, bio, and the places you've been.")
+                            .font(.app(.subheadline))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                        Button {
+                            showSignIn = true
+                        } label: {
+                            Text("Sign In")
+                                .font(.app(.subheadline, .semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 24)
+                                .padding(.vertical, 12)
+                        }
+                        .buttonStyle(.plain)
+                        .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+                    }
+                    .padding(.horizontal, 32)
+                }
+                .sheet(isPresented: $showSignIn) {
+                    SettingsScreen()
+                }
+            }
+        }
+    }
+}
+
+/// A place the user has been, with an optional date drawn from a matching trip.
+/// Used to render the "Where I've been" passport-style cards.
+struct VisitedPlace: Identifiable {
+    let name: String
+    let date: Date?
+    var id: String { name.lowercased() }
+}
+
 // MARK: - Profile page ("Show profile")
 
 /// The user's public-facing profile card: photo, name, bio, birthday, and the
@@ -135,20 +200,38 @@ actor ProfilesRepository {
 struct ProfileDetailView: View {
     @Environment(TripStore.self) private var store
     @Environment(AuthStore.self) private var auth
+    @Environment(FriendsStore.self) private var friends
 
     @State private var showEditor = false
+    @State private var selectedTrip: Trip?
+    /// A friend's profile opened from the Friends rail.
+    @State private var viewingProfile: SharedProfileLink?
 
     /// The user's own list first, then any trip locations not already in it.
-    private var visitedPlaces: [String] {
-        var places = store.userProfile.visitedPlaces
+    /// A trip's start (or end) date is attached so the cards can show when they went.
+    private var visitedPlaces: [VisitedPlace] {
+        var places = store.userProfile.visitedPlaces.map { VisitedPlace(name: $0, date: nil) }
         for trip in store.trips {
             guard let location = trip.location?.trimmingCharacters(in: .whitespaces),
-                  !location.isEmpty,
-                  !places.contains(where: { $0.caseInsensitiveCompare(location) == .orderedSame })
-            else { continue }
-            places.append(location)
+                  !location.isEmpty else { continue }
+            let tripDate = trip.startDate ?? trip.endDate
+            if let index = places.firstIndex(where: { $0.name.caseInsensitiveCompare(location) == .orderedSame }) {
+                // Fill in a date for a place the user typed manually, if the trip has one.
+                if places[index].date == nil, let tripDate {
+                    places[index] = VisitedPlace(name: places[index].name, date: tripDate)
+                }
+            } else {
+                places.append(VisitedPlace(name: location, date: tripDate))
+            }
         }
         return places
+    }
+
+    /// Trips the signed-in user created, newest first — the profile's "My trips" rail.
+    private var myTrips: [Trip] {
+        store.trips
+            .filter { $0.creatorID == store.currentUser.id }
+            .sorted { ($0.startDate ?? .distantPast) > ($1.startDate ?? .distantPast) }
     }
 
     var body: some View {
@@ -167,7 +250,13 @@ struct ProfileDetailView: View {
 
                 detailsCard
 
+                FriendsSection { token in
+                    viewingProfile = SharedProfileLink(token: token)
+                }
+
                 placesSection
+
+                tripsSection
             }
             .padding()
             .padding(.bottom, 80) // Clearance for the floating dock.
@@ -183,12 +272,29 @@ struct ProfileDetailView: View {
         .navigationTitle("Profile")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                if let url = friends.shareURL() {
+                    ShareLink(item: url, subject: Text(verbatim: store.currentUser.name),
+                              message: Text("Add me on TripSplit")) {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Edit") { showEditor = true }
             }
         }
+        .task { await friends.refresh() }
         .sheet(isPresented: $showEditor) {
             EditProfileView()
+        }
+        .sheet(item: $selectedTrip) { trip in
+            TripDetailView(tripID: trip.id)
+        }
+        .sheet(item: $viewingProfile) { link in
+            NavigationStack {
+                SharedProfileView(token: link.token)
+            }
         }
     }
 
@@ -240,7 +346,7 @@ struct ProfileDetailView: View {
 
     @ViewBuilder
     private var placesSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             Text("Where I've been")
                 .font(.app(.title3, .bold))
 
@@ -249,29 +355,129 @@ struct ProfileDetailView: View {
                     .font(.app(.subheadline))
                     .foregroundStyle(.secondary)
             } else {
-                PlaceChips(places: visitedPlaces)
+                // Full-bleed horizontal rail of passport-style cards (negative padding
+                // cancels the parent's inset so the row runs edge to edge like a gallery).
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 14) {
+                        ForEach(visitedPlaces) { VisitedPlaceCard(place: $0) }
+                    }
+                    .padding(.horizontal, 16)
+                }
+                .padding(.horizontal, -16)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+    }
+
+    @ViewBuilder
+    private var tripsSection: some View {
+        if !myTrips.isEmpty {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("My trips")
+                    .font(.app(.title3, .bold))
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 14) {
+                        ForEach(myTrips) { trip in
+                            Button { selectedTrip = trip } label: {
+                                ProfileTripCard(trip: trip)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                }
+                .padding(.horizontal, -16)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }
 
-/// Wrapping rows of place-name chips.
-struct PlaceChips: View {
-    let places: [String]
+/// A passport-stamp style card for a visited place: a location glyph on a tinted
+/// panel, with the place name and (when known) the month/year shown beneath it.
+/// Modeled on the reference "Where … has been" cards, styled to the app theme.
+struct VisitedPlaceCard: View {
+    let place: VisitedPlace
+
+    /// Deterministic accent per place so the rail reads as a varied set of stamps
+    /// rather than one repeated color.
+    private static let tints: [UInt32] = [0x6366F1, 0x0EA5E9, 0x10B981, 0xF59E0B, 0xEC4899, 0x14B8A6]
+    private var tint: Color {
+        Color(hex: Self.tints[abs(place.id.hashValue) % Self.tints.count])
+    }
+
+    private var monthYear: String? {
+        place.date?.formatted(.dateTime.month(.wide).year())
+    }
 
     var body: some View {
-        FlowLayout(spacing: 8) {
-            ForEach(places, id: \.self) { place in
-                Label(place, systemImage: "mappin")
-                    .font(.app(.subheadline, .medium))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 7)
-                    .background(.secondary.opacity(0.12), in: .capsule)
+        VStack(alignment: .leading, spacing: 8) {
+            ZStack(alignment: .topLeading) {
+                RoundedRectangle(cornerRadius: 20)
+                    .fill(tint.opacity(0.14))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 20)
+                            .strokeBorder(tint.opacity(0.35), lineWidth: 1.5)
+                    }
+                Image(systemName: "airplane")
+                    .font(.app(size: 15, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .padding(14)
+                Image(systemName: "globe.americas.fill")
+                    .font(.app(size: 46, weight: .regular))
+                    .foregroundStyle(tint.opacity(0.9))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            }
+            .frame(width: 150, height: 132)
+
+            Text(place.name)
+                .font(.app(.subheadline, .semibold))
+                .lineLimit(1)
+            Text(verbatim: monthYear ?? " ")
+                .font(.app(.caption))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .frame(width: 150, alignment: .leading)
+    }
+}
+
+/// A compact trip card for the profile's "My trips" rail: cover image with the
+/// trip name, location, and dates beneath. Tapping opens the trip detail sheet.
+struct ProfileTripCard: View {
+    let trip: Trip
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TripCoverView(trip: trip)
+                .frame(width: 220, height: 148)
+                .clipShape(.rect(cornerRadius: 18))
+
+            Text(trip.name)
+                .font(.app(.subheadline, .semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+
+            if let location = trip.location?.trimmingCharacters(in: .whitespaces), !location.isEmpty {
+                Label {
+                    Text(verbatim: location)
+                } icon: {
+                    Image(systemName: "mappin.and.ellipse")
+                }
+                .font(.app(.caption))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
+
+            if let dates = trip.dateRangeText {
+                Text(verbatim: dates)
+                    .font(.app(.caption))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
         }
+        .frame(width: 220, alignment: .leading)
     }
 }
 

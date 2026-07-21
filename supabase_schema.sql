@@ -1289,3 +1289,247 @@ grant execute on function public.fetch_normalized_trips() to authenticated;
 
 -- Run as the migration owner so legacy rows are ready before table-backed reads begin.
 select public.backfill_normalized_trip_storage();
+
+-- Profile sharing & friends --------------------------------------------------
+--
+-- A user can share their profile with a stable, unguessable link
+-- (tripsplit://profile?token=<share_token>). Anyone who opens the link views the
+-- profile through profile_by_token() — a SECURITY DEFINER function, so a viewer who
+-- isn't a trip member still sees the owner's name/bio/places and a lightweight trip
+-- summary. Adding someone creates a pending row in `friendships`; the addressee
+-- confirms before the two are connected. All reads/writes go through the RPCs below,
+-- never direct table access, so no profile is exposed app-wide.
+
+alter table public.profiles add column if not exists share_token text;
+update public.profiles set share_token = encode(gen_random_bytes(18), 'hex') where share_token is null;
+alter table public.profiles alter column share_token set default encode(gen_random_bytes(18), 'hex');
+alter table public.profiles alter column share_token set not null;
+create unique index if not exists profiles_share_token_idx on public.profiles (share_token);
+
+create table if not exists public.friendships (
+    id           uuid primary key default gen_random_uuid(),
+    requester_id uuid not null references auth.users (id) on delete cascade,
+    addressee_id uuid not null references auth.users (id) on delete cascade,
+    status       text not null default 'pending' check (status in ('pending', 'accepted')),
+    created_at   timestamptz not null default now(),
+    responded_at timestamptz,
+    constraint friendships_distinct check (requester_id <> addressee_id),
+    unique (requester_id, addressee_id)
+);
+
+create index if not exists friendships_addressee_idx on public.friendships (addressee_id, status);
+create index if not exists friendships_requester_idx on public.friendships (requester_id, status);
+
+alter table public.friendships enable row level security;
+-- Direct reads are limited to your own edges; all mutations flow through the RPCs.
+drop policy if exists "Users view their friendships" on public.friendships;
+create policy "Users view their friendships"
+    on public.friendships for select
+    using (auth.uid() = requester_id or auth.uid() = addressee_id);
+
+-- View a profile (and its trip summary) by its share token. SECURITY DEFINER so the
+-- viewer need not be a trip member. `date_of_birth` is only ever stored when the owner
+-- opted to show it, so returning it as-is respects that opt-in.
+create or replace function public.profile_by_token(p_token text)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+    v_viewer uuid := auth.uid();
+    v_owner uuid;
+    v_friend_status text;
+    v_result jsonb;
+begin
+    if p_token is null or p_token !~ '^[a-f0-9]{36}$' then
+        raise exception 'This profile link is invalid.';
+    end if;
+    select user_id into v_owner from public.profiles where share_token = p_token;
+    if v_owner is null then
+        raise exception 'This profile link is invalid.';
+    end if;
+
+    if v_viewer is not null and v_viewer <> v_owner then
+        select case
+            when status = 'accepted' then 'accepted'
+            when requester_id = v_viewer then 'requested' -- I sent it, awaiting them
+            else 'incoming'                                -- they sent me one
+        end into v_friend_status
+        from public.friendships
+        where (requester_id = v_viewer and addressee_id = v_owner)
+           or (requester_id = v_owner and addressee_id = v_viewer)
+        limit 1;
+    end if;
+
+    select jsonb_build_object(
+        'userID', p.user_id,
+        'isSelf', v_owner = v_viewer,
+        'friendStatus', coalesce(v_friend_status, 'none'),
+        'displayName', coalesce(p.display_name, ''),
+        'avatarPath', p.avatar_path,
+        'bio', coalesce(p.bio, ''),
+        'dateOfBirth', p.date_of_birth,
+        'visitedPlaces', coalesce(p.visited_places, '[]'::jsonb),
+        'trips', coalesce((
+            select jsonb_agg(jsonb_build_object(
+                'id', t.id,
+                'name', coalesce(t.name, t.metadata->>'name', 'Trip'),
+                'location', t.metadata->>'location',
+                'startDate', t.metadata->>'startDate',
+                'endDate', t.metadata->>'endDate',
+                'coverImageURL', t.metadata->>'coverImageURL'
+            ) order by coalesce(t.metadata->>'startDate', '') desc)
+            from public.trips t
+            where t.user_id = p.user_id
+        ), '[]'::jsonb)
+    ) into v_result
+    from public.profiles p
+    where p.user_id = v_owner;
+
+    return v_result;
+end;
+$$;
+
+-- Send a friend request to the owner of a share token. If the owner already has a
+-- pending request out to the viewer, this accepts it (mutual add). Returns the
+-- resulting edge state: 'requested' (new pending) or 'accepted'.
+create or replace function public.send_friend_request(p_token text)
+returns text
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_viewer uuid := auth.uid();
+    v_owner uuid;
+    v_existing public.friendships%rowtype;
+begin
+    if v_viewer is null then raise exception 'You must be signed in.'; end if;
+    if p_token is null or p_token !~ '^[a-f0-9]{36}$' then
+        raise exception 'This profile link is invalid.';
+    end if;
+    select user_id into v_owner from public.profiles where share_token = p_token;
+    if v_owner is null then raise exception 'This profile link is invalid.'; end if;
+    if v_owner = v_viewer then raise exception 'You cannot add yourself.'; end if;
+
+    select * into v_existing from public.friendships
+    where requester_id = v_owner and addressee_id = v_viewer;
+    if found then
+        if v_existing.status = 'pending' then
+            update public.friendships set status = 'accepted', responded_at = now()
+            where id = v_existing.id;
+        end if;
+        return 'accepted';
+    end if;
+
+    select * into v_existing from public.friendships
+    where requester_id = v_viewer and addressee_id = v_owner;
+    if found then
+        return case when v_existing.status = 'accepted' then 'accepted' else 'requested' end;
+    end if;
+
+    insert into public.friendships (requester_id, addressee_id, status)
+    values (v_viewer, v_owner, 'pending');
+    return 'requested';
+end;
+$$;
+
+-- Accept (or decline/delete) an incoming friend request addressed to the caller.
+create or replace function public.respond_friend_request(p_friendship_id uuid, p_accept boolean)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare v_viewer uuid := auth.uid();
+begin
+    if v_viewer is null then raise exception 'You must be signed in.'; end if;
+    if p_accept then
+        update public.friendships set status = 'accepted', responded_at = now()
+        where id = p_friendship_id and addressee_id = v_viewer and status = 'pending';
+        if not found then raise exception 'This friend request is no longer available.'; end if;
+    else
+        delete from public.friendships
+        where id = p_friendship_id and addressee_id = v_viewer and status = 'pending';
+    end if;
+end;
+$$;
+
+-- Remove a friend (or withdraw a pending request) in either direction.
+create or replace function public.remove_friend(p_other_user_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare v_viewer uuid := auth.uid();
+begin
+    if v_viewer is null then raise exception 'You must be signed in.'; end if;
+    delete from public.friendships
+    where (requester_id = v_viewer and addressee_id = p_other_user_id)
+       or (requester_id = p_other_user_id and addressee_id = v_viewer);
+end;
+$$;
+
+-- One round trip for the Friends screen: accepted friends, incoming requests
+-- (awaiting the caller's response), and the caller's outgoing pending requests.
+create or replace function public.friends_overview()
+returns jsonb
+language sql
+stable
+security definer
+set search_path = public
+as $$
+    select jsonb_build_object(
+        'friends', coalesce((
+            select jsonb_agg(jsonb_build_object(
+                'userID', p.user_id,
+                'displayName', coalesce(p.display_name, ''),
+                'avatarPath', p.avatar_path,
+                'bio', coalesce(p.bio, ''),
+                'shareToken', p.share_token
+            ) order by lower(coalesce(nullif(p.display_name, ''), p.email)))
+            from public.friendships f
+            join public.profiles p
+              on p.user_id = case when f.requester_id = auth.uid() then f.addressee_id else f.requester_id end
+            where f.status = 'accepted'
+              and (f.requester_id = auth.uid() or f.addressee_id = auth.uid())
+        ), '[]'::jsonb),
+        'incoming', coalesce((
+            select jsonb_agg(jsonb_build_object(
+                'friendshipID', f.id,
+                'userID', p.user_id,
+                'displayName', coalesce(p.display_name, ''),
+                'avatarPath', p.avatar_path,
+                'bio', coalesce(p.bio, '')
+            ) order by f.created_at desc)
+            from public.friendships f
+            join public.profiles p on p.user_id = f.requester_id
+            where f.status = 'pending' and f.addressee_id = auth.uid()
+        ), '[]'::jsonb),
+        'outgoing', coalesce((
+            select jsonb_agg(jsonb_build_object(
+                'friendshipID', f.id,
+                'userID', p.user_id,
+                'displayName', coalesce(p.display_name, ''),
+                'avatarPath', p.avatar_path
+            ) order by f.created_at desc)
+            from public.friendships f
+            join public.profiles p on p.user_id = f.addressee_id
+            where f.status = 'pending' and f.requester_id = auth.uid()
+        ), '[]'::jsonb)
+    );
+$$;
+
+revoke all on function public.profile_by_token(text) from public, anon;
+revoke all on function public.send_friend_request(text) from public, anon;
+revoke all on function public.respond_friend_request(uuid, boolean) from public, anon;
+revoke all on function public.remove_friend(uuid) from public, anon;
+revoke all on function public.friends_overview() from public, anon;
+grant execute on function public.profile_by_token(text) to authenticated;
+grant execute on function public.send_friend_request(text) to authenticated;
+grant execute on function public.respond_friend_request(uuid, boolean) to authenticated;
+grant execute on function public.remove_friend(uuid) to authenticated;
+grant execute on function public.friends_overview() to authenticated;

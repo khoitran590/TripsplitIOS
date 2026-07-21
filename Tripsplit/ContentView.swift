@@ -87,6 +87,7 @@ enum DockTab: String, CaseIterable, Identifiable, Hashable {
     case home = "Home"
     case map = "Map"
     case rec = "Explore"
+    case profile = "Profile"
 
     var id: Self { self }
 
@@ -95,6 +96,7 @@ enum DockTab: String, CaseIterable, Identifiable, Hashable {
         case .home: "house.fill"
         case .map: "map.fill"
         case .rec: "globe"
+        case .profile: "person.fill"
         }
     }
 }
@@ -104,6 +106,9 @@ struct ContentView: View {
     @State private var store = TripStore()
     @State private var auth = AuthStore()
     @State private var mapModel = ExploreMapModel()
+    @State private var friends = FriendsStore()
+    /// A profile share link opened via `tripsplit://profile?token=…`, shown as a sheet.
+    @State private var sharedProfile: SharedProfileLink?
     /// Tabs the user has opened at least once. Screens are created lazily on first visit
     /// and then kept alive (hidden, not destroyed) so returning to a tab is instant —
     /// the old `switch` tore down and rebuilt the whole screen (map region, scroll
@@ -179,9 +184,17 @@ struct ContentView: View {
         .sheet(isPresented: $showProfileSetup) {
             ProfileSetupView()
         }
+        // Same rule as above: attach before the `.environment(...)` modifiers so the
+        // shared profile sheet inherits FriendsStore/AuthStore/TripStore.
+        .sheet(item: $sharedProfile) { link in
+            NavigationStack {
+                SharedProfileView(token: link.token)
+            }
+        }
         .environment(store)
         .environment(auth)
         .environment(mapModel)
+        .environment(friends)
         .task(id: auth.session?.accessToken) {
             // Keep the trip store's token + identity in sync with the auth session and
             // reload the user's trips from Supabase whenever they sign in (or back out).
@@ -190,10 +203,20 @@ struct ContentView: View {
                 try await auth.refreshSession().accessToken
             }
             store.bindIdentity(accessToken: auth.session?.accessToken)
+            // Wire the friends store to the session before any awaits so the Profile
+            // tab's own refresh never races an unset store reference.
+            friends.store = store
             // Load the cloud profile first so `loadFromCloud`'s member healing uses
             // the authoritative name/avatar rather than the local cache.
             await store.loadProfileFromCloud()
             await store.loadFromCloud()
+            // Keep the friends graph in sync with the session: load it when signed in,
+            // clear it on sign-out so one account's friends never linger for the next.
+            if auth.isAuthenticated {
+                await friends.refresh()
+            } else {
+                friends.reset()
+            }
             // Fresh account with no display name: offer the one-time profile setup so
             // the user doesn't show up to trip mates as a bare email handle.
             if auth.isAuthenticated, !promptedProfileSetup,
@@ -203,7 +226,14 @@ struct ContentView: View {
             }
         }
         .onOpenURL { url in
-            if auth.isAuthenticated {
+            // Profile share links open a viewable profile card; they don't need to be
+            // held for sign-in (SharedProfileView shows its own signed-out prompt).
+            if url.scheme == "tripsplit", url.host == "profile",
+               let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+               let token = components.queryItems?.first(where: { $0.name == "token" })?.value,
+               !token.isEmpty {
+                sharedProfile = SharedProfileLink(token: token)
+            } else if auth.isAuthenticated {
                 Task { await acceptInvite(url) }
             } else {
                 // Hold the link and point the user at sign-in; redeemed automatically
@@ -246,6 +276,8 @@ struct ContentView: View {
             } else {
                 LockedExploreScreen(selectedTab: $selectedTab)
             }
+        case .profile:
+            ProfileScreen()
         }
     }
 
