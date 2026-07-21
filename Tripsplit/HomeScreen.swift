@@ -164,7 +164,7 @@ struct HomeScreen: View {
                 } label: {
                     Label("Add Trip", systemImage: "plus")
                         .font(.app(.subheadline, .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Theme.onAccent)
                         .padding(.horizontal, 14)
                         .frame(minHeight: 44)
                         .contentShape(.capsule)
@@ -188,7 +188,7 @@ struct HomeScreen: View {
                     } label: {
                         Label("Create your first trip", systemImage: "plus")
                             .font(.app(.subheadline, .semibold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(Theme.onAccent)
                             .padding(.horizontal, 18)
                             .frame(minHeight: 44)
                             .contentShape(.capsule)

@@ -440,13 +440,7 @@ struct SharedProfileView: View {
                 errorState
             }
         }
-        .background {
-            LinearGradient(
-                colors: [Color(.systemIndigo).opacity(0.25), Color(.systemBackground)],
-                startPoint: .top, endPoint: .bottom
-            )
-            .ignoresSafeArea()
-        }
+        .background { AppBackground() }
         .navigationTitle("Profile")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -562,7 +556,7 @@ struct SharedProfileView: View {
                         Label(friendStatus == "incoming" ? "Accept friend" : "Add friend",
                               systemImage: "person.badge.plus")
                             .font(.app(.subheadline, .semibold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(Theme.onAccent)
                     }
                 }
                 .frame(maxWidth: .infinity)

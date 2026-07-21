@@ -322,7 +322,7 @@ struct LockedExploreScreen: View {
                 } label: {
                     Text("Sign In")
                         .font(.app(.subheadline, .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Theme.onAccent)
                         .padding(.horizontal, 24)
                         .padding(.vertical, 12)
                 }

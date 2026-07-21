@@ -77,13 +77,53 @@ final class TripsplitAppTests: XCTestCase {
         let encoded = try JSONEncoder().encode(trip)
         var json = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         ["deletedExpenses", "settlementRecords", "comments", "location", "startDate", "endDate",
-         "coverImageURL", "allowMembersToPayForOthers", "archivedBy", "itinerary"].forEach { json.removeValue(forKey: $0) }
+         "coverImageURL", "allowMembersToPayForOthers", "archivedBy", "itinerary", "sharedMapPlaces"].forEach { json.removeValue(forKey: $0) }
         let legacyData = try JSONSerialization.data(withJSONObject: json)
         let decoded = try JSONDecoder().decode(Trip.self, from: legacyData)
         XCTAssertEqual(decoded.name, "Legacy")
         XCTAssertTrue(decoded.deletedExpenses.isEmpty)
         XCTAssertTrue(decoded.settlementRecords.isEmpty)
         XCTAssertFalse(decoded.allowMembersToPayForOthers)
+        XCTAssertTrue(decoded.sharedMapPlaces.isEmpty)
+    }
+
+    func testSharedTripPlacesRoundTrip() throws {
+        let place = SavedMapPlace(
+            key: "museum@1,2",
+            name: "Museum",
+            latitude: 1,
+            longitude: 2,
+            address: "1 Main Street",
+            category: "attractions"
+        )
+        let trip = Trip(
+            name: "Shared map",
+            currencyCode: "USD",
+            creatorID: alice.id,
+            members: [alice, bob],
+            budgets: [:],
+            sharedMapPlaces: [place]
+        )
+        let decoded = try JSONDecoder().decode(Trip.self, from: JSONEncoder().encode(trip))
+        XCTAssertEqual(decoded.sharedMapPlaces, [place])
+    }
+
+    func testFeedLocationRoundTrip() throws {
+        let location = ExpenseLocation(
+            name: "Umeda Sky Building",
+            address: "Osaka, Japan",
+            latitude: 34.7053,
+            longitude: 135.4907
+        )
+        let post = FeedPost(
+            authorID: alice.id,
+            authorName: alice.name,
+            text: "Great view",
+            locationName: location.name,
+            location: location
+        )
+        let decoded = try JSONDecoder().decode(FeedPost.self, from: JSONEncoder().encode(post))
+        XCTAssertEqual(decoded.location, location)
     }
 
     func testLegacyExpenseDecodesWithoutLocation() throws {

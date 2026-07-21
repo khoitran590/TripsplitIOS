@@ -235,6 +235,10 @@ struct Trip: Identifiable, Codable {
     /// cards in Explore.
     var itinerary: Itinerary? = nil
 
+    /// Places bookmarked for this trip by any member. Because these snapshots live in
+    /// the shared trip blob, every member sees the same wishlist pins on the map.
+    var sharedMapPlaces: [SavedMapPlace] = []
+
     init(
         id: UUID = UUID(),
         name: String,
@@ -252,7 +256,8 @@ struct Trip: Identifiable, Codable {
         coverImageURL: String? = nil,
         allowMembersToPayForOthers: Bool = false,
         archivedBy: [Person.ID] = [],
-        itinerary: Itinerary? = nil
+        itinerary: Itinerary? = nil,
+        sharedMapPlaces: [SavedMapPlace] = []
     ) {
         self.id = id
         self.name = name
@@ -271,11 +276,12 @@ struct Trip: Identifiable, Codable {
         self.allowMembersToPayForOthers = allowMembersToPayForOthers
         self.archivedBy = archivedBy
         self.itinerary = itinerary
+        self.sharedMapPlaces = sharedMapPlaces
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, currencyCode, creatorID, members, budgets, expenses, deletedExpenses, settlementRecords, comments
-        case location, startDate, endDate, coverImageURL, allowMembersToPayForOthers, archivedBy, itinerary
+        case location, startDate, endDate, coverImageURL, allowMembersToPayForOthers, archivedBy, itinerary, sharedMapPlaces
     }
 
     // Custom decoder so trips saved before `settlementRecords` (and the new expense
@@ -299,6 +305,7 @@ struct Trip: Identifiable, Codable {
         allowMembersToPayForOthers = try c.decodeIfPresent(Bool.self, forKey: .allowMembersToPayForOthers) ?? false
         archivedBy = try c.decodeIfPresent([Person.ID].self, forKey: .archivedBy) ?? []
         itinerary = try c.decodeIfPresent(Itinerary.self, forKey: .itinerary)
+        sharedMapPlaces = try c.decodeIfPresent([SavedMapPlace].self, forKey: .sharedMapPlaces) ?? []
     }
 
     /// Whether `userID` has archived this trip for themselves.

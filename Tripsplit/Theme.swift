@@ -283,15 +283,15 @@ enum AppTheme: String, CaseIterable, Identifiable {
         switch self {
         // Classic: a clear "ocean blue" — warmer and friendlier than the old muted
         // indigo, but still soft enough that tinted glass stays legible over it.
-        case .classic: Color(hex: 0x3E86B8)
-        case .matcha: Color(hex: 0x6F9163)
-        case .butter: Color(hex: 0xC29B3E)
-        case .chocolate: Color(hex: 0x96755A)
-        case .gothic: Color(hex: 0x6B7688)
-        case .y2k: Color(hex: 0x9C92DE)
+        case .classic: Color(light: 0x256A99, dark: 0x69B4E5)
+        case .matcha: Color(light: 0x527348, dark: 0x9AC28D)
+        case .butter: Color(light: 0x7B5C15, dark: 0xE1C36D)
+        case .chocolate: Color(light: 0x76533B, dark: 0xC7A78D)
+        case .gothic: Color(light: 0x536071, dark: 0xAAB7CA)
+        case .y2k: Color(light: 0x6659AE, dark: 0xBDB3F5)
         // Paper: warm editorial cream with a terracotta accent that reads the
         // same over both the light parchment and dark charcoal backdrops.
-        case .paper: Color(hex: 0xF26A4B)
+        case .paper: Color(light: 0xB94730, dark: 0xFF8C73)
         // Pop: saturated indigo, lifted to periwinkle in dark mode so it stays
         // legible on near-black.
         case .pop: Color(light: 0x4F46E5, dark: 0x818CF8)
@@ -302,14 +302,14 @@ enum AppTheme: String, CaseIterable, Identifiable {
     var accentSecondary: Color {
         switch self {
         // Seafoam companion: blue → aqua gradients read "coastline", not corporate.
-        case .classic: Color(hex: 0x5BB49E)
-        case .matcha: Color(hex: 0x9DB884)
-        case .butter: Color(hex: 0xDCC17E)
-        case .chocolate: Color(hex: 0xB39B84)
-        case .gothic: Color(hex: 0x9AA5B4)
-        case .y2k: Color(hex: 0xDBA3C3)
+        case .classic: Color(light: 0x347D6D, dark: 0x72C8B3)
+        case .matcha: Color(light: 0x667F52, dark: 0xB0CD96)
+        case .butter: Color(light: 0x896C27, dark: 0xE7CF8C)
+        case .chocolate: Color(light: 0x806A57, dark: 0xCAB5A1)
+        case .gothic: Color(light: 0x667487, dark: 0xB8C3D2)
+        case .y2k: Color(light: 0x9A577E, dark: 0xE5B5D2)
         // Warm taupe companion so terracotta → sand gradients feel like paper stock.
-        case .paper: Color(hex: 0xA89F8F)
+        case .paper: Color(light: 0x746B5C, dark: 0xC7BDAE)
         // Teal companion (brightened in dark mode to match the lifted indigo).
         case .pop: Color(light: 0x14B8A6, dark: 0x2DD4BF)
         }
@@ -441,13 +441,21 @@ enum Theme {
     /// Backdrop for presented sheets (add trip, trip detail, add expense, split, settle).
     static var sheetGradient: [Color] {
         [
-            Color(light: 0xF8F9FF, dark: 0x1C1C1E),
+            Color(light: 0xF2F5F8, dark: 0x1C1C1E),
             Color(light: 0xFFFFFF, dark: 0x0E0E10),
         ]
     }
 
     /// Fill for text fields and inline controls inside cards.
-    static let fieldBackground = Color(light: 0xEFF1F8, dark: 0x2C2C2E)
+    static let fieldBackground = Color(light: 0xE9EEF3, dark: 0x2C2C2E)
+
+    /// Opaque-enough surfaces for content that must remain readable over the themed
+    /// backdrop. Liquid Glass can still sit above these, but pale themes no longer
+    /// wash cards and adjacent sections into one continuous field.
+    static let surface = Color(light: 0xFFFFFF, dark: 0x202124)
+    static let surfaceSubtle = Color(light: 0xF5F7F9, dark: 0x18191C)
+    static let separator = Color(light: 0xC9D1D9, dark: 0x3C4046)
+    static let elevatedShadow = Color(light: 0x1F2937, dark: 0x000000).opacity(0.12)
 
     /// Accent used for primary actions and creator badges (follows the chosen theme).
     static var accent: Color { ThemeManager.shared.selection.accent }
@@ -455,9 +463,32 @@ enum Theme {
     /// Companion accent for two-hue gradients (follows the chosen theme).
     static var accentSecondary: Color { ThemeManager.shared.selection.accentSecondary }
 
+    /// Text and icons placed directly on the theme accent.
+    static let onAccent = Color(light: 0xFFFFFF, dark: 0x101216)
+
     /// Positive (you're owed / settled) and negative (you owe) semantic colors.
     static let positive = Color(hex: 0x10B981)
     static let negative = Color(hex: 0xEF4444)
     /// Caution (budget nearing its limit) semantic color.
     static let warning = Color(hex: 0xF59E0B)
+}
+
+// MARK: - Readable surfaces
+
+extension View {
+    /// A shared high-contrast card treatment for information-dense areas. It is
+    /// intentionally more opaque than decorative glass and keeps a visible edge in
+    /// light mode, where translucent cards otherwise disappear into the backdrop.
+    func readableSurface(cornerRadius: CGFloat = 20, elevated: Bool = false) -> some View {
+        background(Theme.surface.opacity(0.92), in: .rect(cornerRadius: cornerRadius))
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(Theme.separator.opacity(0.85), lineWidth: 1)
+            }
+            .shadow(
+                color: elevated ? Theme.elevatedShadow : .clear,
+                radius: elevated ? 10 : 0,
+                y: elevated ? 4 : 0
+            )
+    }
 }

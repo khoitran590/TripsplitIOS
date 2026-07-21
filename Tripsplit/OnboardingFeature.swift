@@ -59,7 +59,7 @@ struct WelcomeView: View {
                 } label: {
                     Text(page < pages.count - 1 ? "Continue" : "Get Started")
                         .font(.app(.headline))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Theme.onAccent)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 16)
                 }
@@ -292,7 +292,7 @@ struct ProfileSetupView: View {
                         if isSaving { ProgressView().tint(.white) }
                         Text("Save")
                             .font(.app(.headline))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(Theme.onAccent)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 15)

@@ -19,6 +19,9 @@ nonisolated struct FeedPost: Identifiable, Codable {
     var photoPaths: [String] = []
     /// Optional place tag the author attached when posting (display name only).
     var locationName: String?
+    /// Exact selected place when the author chose a MapKit result. Legacy posts retain
+    /// only `locationName` and are destination-biased geocoded by the Map tab.
+    var location: ExpenseLocation?
     var date: Date
     var comments: [ExpenseComment] = []
     /// Emoji reactions: emoji → the members who dropped it.
@@ -31,6 +34,7 @@ nonisolated struct FeedPost: Identifiable, Codable {
         text: String,
         photoPaths: [String] = [],
         locationName: String? = nil,
+        location: ExpenseLocation? = nil,
         date: Date = Date(),
         comments: [ExpenseComment] = [],
         reactions: [String: [Person.ID]] = [:]
@@ -41,6 +45,7 @@ nonisolated struct FeedPost: Identifiable, Codable {
         self.text = text
         self.photoPaths = photoPaths
         self.locationName = locationName
+        self.location = location
         self.date = date
         self.comments = comments
         self.reactions = reactions
@@ -68,6 +73,9 @@ actor FeedRepository {
         var body: String
         var photoPaths: [String]
         var locationName: String?
+        var locationLatitude: Double?
+        var locationLongitude: Double?
+        var locationAddress: String?
         var comments: [ExpenseComment]
         var reactions: [String: [UUID]]
         var createdAt: Date
@@ -80,6 +88,9 @@ actor FeedRepository {
             case body
             case photoPaths = "photo_paths"
             case locationName = "location_name"
+            case locationLatitude = "location_latitude"
+            case locationLongitude = "location_longitude"
+            case locationAddress = "location_address"
             case comments
             case reactions
             case createdAt = "created_at"
@@ -93,6 +104,9 @@ actor FeedRepository {
             body = post.text
             photoPaths = post.photoPaths
             locationName = post.locationName
+            locationLatitude = post.location?.latitude
+            locationLongitude = post.location?.longitude
+            locationAddress = post.location?.address
             comments = post.comments
             reactions = post.reactions
             createdAt = post.date
@@ -106,6 +120,16 @@ actor FeedRepository {
                 text: body,
                 photoPaths: photoPaths,
                 locationName: locationName,
+                location: locationLatitude.flatMap { latitude in
+                    locationLongitude.map { longitude in
+                        ExpenseLocation(
+                            name: locationName ?? "Place",
+                            address: locationAddress,
+                            latitude: latitude,
+                            longitude: longitude
+                        )
+                    }
+                },
                 date: createdAt,
                 comments: comments,
                 reactions: reactions
@@ -124,6 +148,9 @@ actor FeedRepository {
         let body: String
         let photoPaths: [String]
         let locationName: String?
+        let locationLatitude: Double?
+        let locationLongitude: Double?
+        let locationAddress: String?
 
         enum CodingKeys: String, CodingKey {
             case id
@@ -133,6 +160,9 @@ actor FeedRepository {
             case body
             case photoPaths = "photo_paths"
             case locationName = "location_name"
+            case locationLatitude = "location_latitude"
+            case locationLongitude = "location_longitude"
+            case locationAddress = "location_address"
         }
 
         init(post: FeedPost, tripID: UUID) {
@@ -143,6 +173,9 @@ actor FeedRepository {
             body = post.text
             photoPaths = post.photoPaths
             locationName = post.locationName
+            locationLatitude = post.location?.latitude
+            locationLongitude = post.location?.longitude
+            locationAddress = post.location?.address
         }
     }
 
@@ -225,23 +258,38 @@ actor FeedRepository {
     }
 
     /// Rewrites a post's text and location tag (the author editing their own post).
-    func updateBody(postID: UUID, text: String, locationName: String?, accessToken: String) async throws {
+    func updateBody(postID: UUID, text: String, locationName: String?, location: ExpenseLocation?, accessToken: String) async throws {
         struct Patch: Encodable {
             let body: String
             // Encode nil explicitly so clearing a location tag nulls the column
             // (encodeIfPresent would omit the key and leave the old tag in place).
             let locationName: String?
+            let locationLatitude: Double?
+            let locationLongitude: Double?
+            let locationAddress: String?
             enum CodingKeys: String, CodingKey {
                 case body
                 case locationName = "location_name"
+                case locationLatitude = "location_latitude"
+                case locationLongitude = "location_longitude"
+                case locationAddress = "location_address"
             }
             func encode(to encoder: Encoder) throws {
                 var c = encoder.container(keyedBy: CodingKeys.self)
                 try c.encode(body, forKey: .body)
                 try c.encode(locationName, forKey: .locationName)
+                try c.encode(locationLatitude, forKey: .locationLatitude)
+                try c.encode(locationLongitude, forKey: .locationLongitude)
+                try c.encode(locationAddress, forKey: .locationAddress)
             }
         }
-        let body = try encoder.encode(Patch(body: text, locationName: locationName))
+        let body = try encoder.encode(Patch(
+            body: text,
+            locationName: locationName,
+            locationLatitude: location?.latitude,
+            locationLongitude: location?.longitude,
+            locationAddress: location?.address
+        ))
         _ = try await send(
             "PATCH",
             "/rest/v1/trip_feed_posts?id=eq.\(postID.uuidString)",
@@ -344,20 +392,21 @@ extension TripStore {
 
     /// Rewrites the current user's own post (text + location tag) locally, then patches
     /// the row; a failed patch reloads the feed to resync (same pattern as interactions).
-    func editFeedPost(_ postID: FeedPost.ID, in tripID: Trip.ID, text: String, locationName: String?) {
+    func editFeedPost(_ postID: FeedPost.ID, in tripID: Trip.ID, text: String, locationName: String?, location: ExpenseLocation?) {
         guard var posts = feedPostsByTrip[tripID],
               let index = posts.firstIndex(where: { $0.id == postID }),
               posts[index].authorID == currentUser.id
         else { return }
         posts[index].text = text
         posts[index].locationName = locationName
+        posts[index].location = location
         feedPostsByTrip[tripID] = posts
         Task {
             guard let accessToken = try? await authorizedAccessToken() else { return }
             do {
                 try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
                     try await FeedRepository.shared.updateBody(
-                        postID: postID, text: text, locationName: locationName, accessToken: token
+                        postID: postID, text: text, locationName: locationName, location: location, accessToken: token
                     )
                 }
             } catch {
@@ -546,6 +595,7 @@ private struct FeedComposerCard: View {
     @State private var picks: [PhotosPickerItem] = []
     @State private var previews: [UIImage] = []
     @State private var locationName: String?
+    @State private var selectedLocation: ExpenseLocation?
     @State private var showLocationPicker = false
     @State private var isPosting = false
     @State private var postError: String?
@@ -646,7 +696,7 @@ private struct FeedComposerCard: View {
             Task { await loadPreviews(newPicks) }
         }
         .sheet(isPresented: $showLocationPicker) {
-            FeedLocationPicker(locationName: $locationName)
+            FeedLocationPicker(locationName: $locationName, location: $selectedLocation)
         }
     }
 
@@ -696,7 +746,8 @@ private struct FeedComposerCard: View {
             authorName: store.currentUser.name,
             text: text.trimmingCharacters(in: .whitespacesAndNewlines),
             photoPaths: paths,
-            locationName: locationName
+            locationName: locationName,
+            location: selectedLocation
         )
         do {
             try await store.addFeedPost(post, to: tripID)
@@ -708,6 +759,7 @@ private struct FeedComposerCard: View {
         picks = []
         previews = []
         locationName = nil
+        selectedLocation = nil
     }
 }
 
@@ -715,6 +767,7 @@ private struct FeedComposerCard: View {
 /// the raw text usable as-is (so places MapKit doesn't know can still be tagged).
 private struct FeedLocationPicker: View {
     @Binding var locationName: String?
+    @Binding var location: ExpenseLocation?
     @Environment(\.dismiss) private var dismiss
 
     @State private var query = ""
@@ -736,11 +789,7 @@ private struct FeedLocationPicker: View {
                 }
                 ForEach(completer.results, id: \.self) { completion in
                     Button {
-                        choose(
-                            completion.subtitle.isEmpty
-                                ? completion.title
-                                : "\(completion.title), \(completion.subtitle)"
-                        )
+                        Task { await choose(completion) }
                     } label: {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(verbatim: completion.title).font(.app(.subheadline, .semibold))
@@ -770,6 +819,27 @@ private struct FeedLocationPicker: View {
 
     private func choose(_ name: String) {
         locationName = name
+        location = nil
+        dismiss()
+    }
+
+    private func choose(_ completion: MKLocalSearchCompletion) async {
+        let fallbackName = completion.subtitle.isEmpty
+            ? completion.title
+            : "\(completion.title), \(completion.subtitle)"
+        let request = MKLocalSearch.Request(completion: completion)
+        guard let item = try? await MKLocalSearch(request: request).start().mapItems.first else {
+            choose(fallbackName)
+            return
+        }
+        let name = item.name ?? completion.title
+        locationName = name
+        location = ExpenseLocation(
+            name: name,
+            address: item.address?.fullAddress,
+            latitude: item.location.coordinate.latitude,
+            longitude: item.location.coordinate.longitude
+        )
         dismiss()
     }
 }
@@ -819,6 +889,7 @@ private struct FeedPostCard: View {
     @State private var isEditingPost = false
     @State private var editedPostText = ""
     @State private var editedLocation: String?
+    @State private var editedExactLocation: ExpenseLocation?
     @State private var showEditLocationPicker = false
 
     private static let quickEmojis = ["👍", "❤️", "😂", "😮", "🎉", "🔥"]
@@ -875,6 +946,7 @@ private struct FeedPostCard: View {
                         Button {
                             editedPostText = post.text
                             editedLocation = post.locationName
+                            editedExactLocation = post.location
                             isEditingPost = true
                         } label: {
                             Label("Edit Post", systemImage: "pencil")
@@ -923,6 +995,7 @@ private struct FeedPostCard: View {
                 if editedLocation != nil {
                     Button {
                         editedLocation = nil
+                        editedExactLocation = nil
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .font(.app(.caption))
@@ -950,15 +1023,21 @@ private struct FeedPostCard: View {
             }
         }
         .sheet(isPresented: $showEditLocationPicker) {
-            FeedLocationPicker(locationName: $editedLocation)
+            FeedLocationPicker(locationName: $editedLocation, location: $editedExactLocation)
         }
     }
 
     private func savePostEdit() {
         let trimmed = editedPostText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !post.photoPaths.isEmpty else { return }
-        if trimmed != post.text || editedLocation != post.locationName {
-            store.editFeedPost(post.id, in: tripID, text: trimmed, locationName: editedLocation)
+        if trimmed != post.text || editedLocation != post.locationName || editedExactLocation != post.location {
+            store.editFeedPost(
+                post.id,
+                in: tripID,
+                text: trimmed,
+                locationName: editedLocation,
+                location: editedExactLocation
+            )
         }
         isEditingPost = false
     }

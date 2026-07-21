@@ -125,25 +125,29 @@ struct RecScreen: View {
                         if !isFiltering {
                             ItineraryPlannerSection(onCreate: { showCreateItinerary = true })
 
-                            sectionHeader("Plan your next adventure")
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                LazyHStack(spacing: 14) {
-                                    ForEach(adventures) { destination in
-                                        NavigationLink(value: destination.id) {
-                                            AdventureCard(
-                                                destination: destination,
-                                                isSaved: savedIDs.contains(destination.id),
-                                                onToggleSave: { toggleSaved(destination.id) }
-                                            )
+                            VStack(alignment: .leading, spacing: 14) {
+                                sectionHeader("Plan your next adventure")
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    LazyHStack(spacing: 14) {
+                                        ForEach(adventures) { destination in
+                                            NavigationLink(value: destination.id) {
+                                                AdventureCard(
+                                                    destination: destination,
+                                                    isSaved: savedIDs.contains(destination.id),
+                                                    onToggleSave: { toggleSaved(destination.id) }
+                                                )
+                                            }
+                                            .buttonStyle(.plain)
                                         }
-                                        .buttonStyle(.plain)
                                     }
+                                    .scrollTargetLayout()
+                                    .padding(.horizontal)
                                 }
-                                .scrollTargetLayout()
-                                .padding(.horizontal)
+                                .scrollTargetBehavior(.viewAligned)
+                                .padding(.horizontal, -16)
                             }
-                            .scrollTargetBehavior(.viewAligned)
-                            .padding(.horizontal, -16)
+                            .padding(16)
+                            .readableSurface(cornerRadius: 24)
                         } else {
                             HStack {
                                 Text("\(filteredDestinations.count) trip\(filteredDestinations.count == 1 ? "" : "s") match")
@@ -311,7 +315,7 @@ struct RecScreen: View {
                         Text(activeFilterCount > 0 ? "Filters · \(activeFilterCount)" : "Filters")
                     }
                     .font(.app(.subheadline, .semibold))
-                    .foregroundStyle(activeFilterCount > 0 ? .white : .primary)
+                    .foregroundStyle(activeFilterCount > 0 ? Theme.onAccent : .primary)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 9)
                 }
@@ -328,7 +332,7 @@ struct RecScreen: View {
                     } label: {
                         Text(continent)
                             .font(.app(.subheadline, .medium))
-                            .foregroundStyle(isOn ? .white : .primary)
+                            .foregroundStyle(isOn ? Theme.onAccent : .primary)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 9)
                     }
@@ -362,7 +366,11 @@ struct RecScreen: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 13)
+        .background(Theme.surface.opacity(0.76), in: .capsule)
         .glassEffect(.regular.interactive(), in: .capsule)
+        .overlay {
+            Capsule().strokeBorder(Theme.separator.opacity(0.9), lineWidth: 1)
+        }
     }
 
     @ViewBuilder
@@ -876,7 +884,7 @@ struct DestinationDetailView: View {
         } label: {
             Label("Use as my starting plan", systemImage: "wand.and.stars")
                 .font(.app(.headline))
-                .foregroundStyle(.white)
+                .foregroundStyle(Theme.onAccent)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
         }

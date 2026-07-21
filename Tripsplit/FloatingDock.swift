@@ -43,9 +43,10 @@ struct FloatingDock: View {
             }
         }
         .padding(6)
+        .background(Theme.surface.opacity(0.82), in: .capsule)
         .background(.regularMaterial, in: .capsule)
         .overlay {
-            Capsule().strokeBorder(.primary.opacity(0.12), lineWidth: 1)
+            Capsule().strokeBorder(Theme.separator.opacity(0.95), lineWidth: 1)
         }
         .shadow(color: .black.opacity(0.14), radius: 14, y: 6)
         .frame(maxWidth: .infinity)

@@ -488,6 +488,9 @@ create table if not exists public.trip_feed_posts (
     photo_paths jsonb not null default '[]'::jsonb,
     -- Optional place tag shown on the post ("Blue Bottle Coffee, Oakland").
     location_name text,
+    location_latitude double precision,
+    location_longitude double precision,
+    location_address text,
     comments    jsonb not null default '[]'::jsonb,
     reactions   jsonb not null default '{}'::jsonb,
     created_at  timestamptz not null default now(),
@@ -496,6 +499,9 @@ create table if not exists public.trip_feed_posts (
 
 -- Upgrade path for databases created before location tags existed.
 alter table public.trip_feed_posts add column if not exists location_name text;
+alter table public.trip_feed_posts add column if not exists location_latitude double precision;
+alter table public.trip_feed_posts add column if not exists location_longitude double precision;
+alter table public.trip_feed_posts add column if not exists location_address text;
 
 create index if not exists trip_feed_posts_trip_created_idx
     on public.trip_feed_posts (trip_id, created_at desc);
@@ -538,7 +544,18 @@ create policy "Trip members create their own feed posts"
     );
 
 revoke insert on table public.trip_feed_posts from public, anon, authenticated;
-grant insert (id, trip_id, author_id, author_name, body, photo_paths, location_name)
+grant insert (
+    id,
+    trip_id,
+    author_id,
+    author_name,
+    body,
+    photo_paths,
+    location_name,
+    location_latitude,
+    location_longitude,
+    location_address
+)
     on table public.trip_feed_posts to authenticated;
 
 -- Direct row updates are author-only. Column grants below further limit those updates to
@@ -558,7 +575,7 @@ create policy "Authors can update their own feed posts"
     );
 
 revoke update on table public.trip_feed_posts from public, anon, authenticated;
-grant update (body, location_name) on table public.trip_feed_posts to authenticated;
+grant update (body, location_name, location_latitude, location_longitude, location_address) on table public.trip_feed_posts to authenticated;
 
 -- Authors may delete their own posts; the trip owner may moderate any post.
 drop policy if exists "Authors and trip owners can delete feed posts" on public.trip_feed_posts;

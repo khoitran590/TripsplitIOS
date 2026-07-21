@@ -198,7 +198,7 @@ struct AddTripView: View {
                         .font(.app(.headline))
                 }
             }
-            .foregroundStyle(.white)
+            .foregroundStyle(Theme.onAccent)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 15)
         }
@@ -256,7 +256,7 @@ struct AddTripView: View {
                 Button { addMember() } label: {
                     Image(systemName: "plus")
                         .font(.app(.subheadline, .bold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Theme.onAccent)
                         .frame(width: 40, height: 40)
                 }
                 .buttonStyle(.plain)

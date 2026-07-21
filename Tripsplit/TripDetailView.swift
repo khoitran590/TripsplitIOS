@@ -742,7 +742,7 @@ struct TripDetailView: View {
                         Button { addManualMember(trip) } label: {
                             Image(systemName: "plus")
                                 .font(.app(.subheadline, .bold))
-                                .foregroundStyle(.white)
+                                .foregroundStyle(Theme.onAccent)
                                 .frame(width: 40, height: 40)
                         }
                         .buttonStyle(.plain)
@@ -765,7 +765,7 @@ struct TripDetailView: View {
                             Label("Invite Member", systemImage: "person.badge.plus")
                         }
                         .font(.app(.subheadline, .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Theme.onAccent)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
                     }
@@ -907,7 +907,7 @@ struct TripDetailView: View {
                 } label: {
                     Label("Plan day-by-day itinerary", systemImage: "map.fill")
                         .font(.app(.subheadline, .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Theme.onAccent)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
                 }

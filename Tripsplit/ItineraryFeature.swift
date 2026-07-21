@@ -393,7 +393,7 @@ struct ItineraryPlannerSection: View {
                     Button(action: onCreate) {
                         Label("New", systemImage: "plus")
                             .font(.app(.subheadline, .semibold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(Theme.onAccent)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 8)
                     }
@@ -407,7 +407,7 @@ struct ItineraryPlannerSection: View {
                     HStack(spacing: 14) {
                         Image(systemName: "map.fill")
                             .font(.app(.title2))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(Theme.onAccent)
                             .frame(width: 52, height: 52)
                             .background(
                                 LinearGradient(
@@ -458,6 +458,8 @@ struct ItineraryPlannerSection: View {
                 .padding(.horizontal, -16)
             }
         }
+        .padding(16)
+        .readableSurface(cornerRadius: 24)
     }
 }
 
@@ -504,7 +506,12 @@ struct ItineraryTripCard: View {
         }
         .padding(8)
         .frame(width: 260)
+        .background(Theme.surface.opacity(0.82), in: .rect(cornerRadius: 22))
         .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 22))
+        .overlay {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .strokeBorder(Theme.separator.opacity(0.9), lineWidth: 1)
+        }
     }
 }
 
@@ -702,7 +709,7 @@ struct CreateItineraryView: View {
                 Button { addMember() } label: {
                     Image(systemName: "plus")
                         .font(.app(.subheadline, .bold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Theme.onAccent)
                         .frame(width: 40, height: 40)
                 }
                 .buttonStyle(.plain)
@@ -742,7 +749,7 @@ struct CreateItineraryView: View {
             Label("Create itinerary", systemImage: "arrow.right")
                 .labelStyle(.titleAndIcon)
                 .font(.app(.headline))
-                .foregroundStyle(.white)
+                .foregroundStyle(Theme.onAccent)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 15)
         }
@@ -1365,7 +1372,7 @@ struct ItineraryDetailView: View {
             } label: {
                 Label("Add to this day", systemImage: "plus")
                     .font(.app(.subheadline, .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Theme.onAccent)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
             }
@@ -1499,7 +1506,7 @@ struct ItineraryDetailView: View {
                         Text("Add to my plan")
                     }
                     .font(.app(.subheadline, .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Theme.onAccent)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
                 }
@@ -1553,7 +1560,7 @@ struct ItineraryDetailView: View {
                 } label: {
                     Label("Suggest a day-by-day plan", systemImage: "sparkles")
                         .font(.app(.subheadline, .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Theme.onAccent)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
                 }
@@ -1791,7 +1798,7 @@ struct ItineraryDetailView: View {
                     } label: {
                         Image(systemName: "plus")
                             .font(.app(.subheadline, .bold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(Theme.onAccent)
                             .frame(width: 40, height: 40)
                     }
                     .buttonStyle(.plain)
@@ -1814,7 +1821,7 @@ struct ItineraryDetailView: View {
                         Label("Invite Member", systemImage: "person.badge.plus")
                     }
                     .font(.app(.subheadline, .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Theme.onAccent)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
                 }

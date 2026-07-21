@@ -128,7 +128,7 @@ struct EditTripView: View {
             PhotosPicker(selection: $coverPick, matching: .images) {
                 Label("Change Photo", systemImage: "photo.on.rectangle.angled")
                     .font(.app(.subheadline, .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Theme.onAccent)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 11)
             }

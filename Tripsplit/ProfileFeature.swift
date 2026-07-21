@@ -222,7 +222,7 @@ struct ProfileScreen: View {
                         } label: {
                             Text("Sign In")
                                 .font(.app(.subheadline, .semibold))
-                                .foregroundStyle(.white)
+                                .foregroundStyle(Theme.onAccent)
                                 .padding(.horizontal, 24)
                                 .padding(.vertical, 12)
                         }
@@ -315,14 +315,7 @@ struct ProfileDetailView: View {
             .padding()
             .padding(.bottom, 80) // Clearance for the floating dock.
         }
-        .background {
-            LinearGradient(
-                colors: [Color(.systemIndigo).opacity(0.25), Color(.systemBackground)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
-        }
+        .background { AppBackground() }
         .navigationTitle("Profile")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
