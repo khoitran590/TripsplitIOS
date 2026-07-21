@@ -72,9 +72,23 @@ final class ExploreMapModel {
     /// Bumped once per "show on map" request so the Map tab recenters even when the
     /// same place is tapped twice, and so `ContentView` can switch to the Map tab.
     private(set) var navigateRequest = 0
+    /// A Map-tab shortcut can ask Explore to open one of the user's itineraries
+    /// directly, avoiding a return to the Explore root followed by another search.
+    private(set) var requestedItineraryID: Trip.ID?
+    private(set) var exploreRequest = 0
     /// The tab the user was on when they jumped to the map, so the map's Back button
     /// can return them exactly where they were.
     var originTab: DockTab = .rec
+
+    func openItineraryInExplore(_ tripID: Trip.ID) {
+        requestedItineraryID = tripID
+        exploreRequest += 1
+    }
+
+    func takeRequestedItinerary() -> Trip.ID? {
+        defer { requestedItineraryID = nil }
+        return requestedItineraryID
+    }
 
     /// Focus the Map tab on `item` within `destination`. Shows the city center
     /// immediately, then refines to the exact place + details via an on-device search.
@@ -650,11 +664,13 @@ struct MapScreen: View {
     }
 
     private var itineraryResolutionKey: String {
-        guard let selectedTripID, let itinerary = selectedItinerary else { return "none" }
+        guard let selectedTripID,
+              let trip = store.myTrips.first(where: { $0.id == selectedTripID }),
+              let itinerary = trip.itinerary else { return "none" }
         let stops = itinerary.days.flatMap(\.stops).map { stop in
             "\(stop.id.uuidString):\(stop.name)"
         }
-        return "\(selectedTripID.uuidString)|\(stops.joined(separator: "|"))"
+        return "\(selectedTripID.uuidString)|\(trip.startDate?.timeIntervalSince1970 ?? 0)|\(trip.endDate?.timeIntervalSince1970 ?? 0)|\(itinerary.days.count)|\(stops.joined(separator: "|"))"
     }
 
     /// A string that changes whenever the focus coordinate does, so `onChange` can
@@ -835,6 +851,25 @@ struct MapScreen: View {
                 }
                 .buttonStyle(.plain)
                 .glassEffect(.regular.interactive(), in: .capsule)
+
+                if let selectedTripID, selectedItinerary != nil {
+                    Button {
+                        mapModel.openItineraryInExplore(selectedTripID)
+                        var transaction = SwiftUI.Transaction()
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) {
+                            selectedTab = .rec
+                        }
+                    } label: {
+                        Label("Explore", systemImage: "arrow.up.forward.app")
+                            .font(.app(.caption, .semibold))
+                            .padding(.horizontal, 12)
+                            .frame(height: 38)
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.interactive(), in: .capsule)
+                    .accessibilityLabel(Text("Open \(selectedTripName) in Explore"))
+                }
             }
             .overlay {
                 if let focus = mapModel.focus {
@@ -1281,11 +1316,25 @@ struct MapScreen: View {
             return
         }
 
+        // Older trips and trips whose dates were edited can have fewer planner days
+        // than their inclusive date range. Preserve every existing day and append only
+        // the missing ones so the Map day picker always covers the full trip.
+        var changed = false
+        let requiredDayCount = itineraryDayCount(for: trip)
+        if itinerary.days.count < requiredDayCount {
+            itinerary.days.append(contentsOf: (itinerary.days.count..<requiredDayCount).map { _ in ItineraryDay() })
+            changed = true
+        }
+
         let searchableCount = itinerary.days.reduce(0) { count, day in
             count + day.stops.filter { !$0.name.trimmingCharacters(in: .whitespaces).isEmpty }.count
         }
         guard searchableCount > 0 else {
             isResolvingItineraryLocations = false
+            if changed {
+                store.updateItinerary(itinerary, in: tripID)
+                await Task.yield()
+            }
             if showsItineraryPath { fitCamera(to: itineraryMapStops.map(\.coordinate)) }
             return
         }
@@ -1294,7 +1343,6 @@ struct MapScreen: View {
         defer { isResolvingItineraryLocations = false }
 
         let destinationRegion = await itinerarySearchRegion(for: trip)
-        var changed = false
         for dayIndex in itinerary.days.indices {
             for stopIndex in itinerary.days[dayIndex].stops.indices {
                 guard !Task.isCancelled, selectedTripID == tripID else { return }
@@ -1327,6 +1375,19 @@ struct MapScreen: View {
         store.updateItinerary(itinerary, in: tripID)
         await Task.yield()
         fitCamera(to: itineraryMapStops.map(\.coordinate))
+    }
+
+    private func itineraryDayCount(for trip: Trip) -> Int {
+        guard let start = trip.startDate, let end = trip.endDate else {
+            return max(trip.itinerary?.days.count ?? 0, 1)
+        }
+        let calendar = Calendar.current
+        let span = calendar.dateComponents(
+            [.day],
+            from: calendar.startOfDay(for: start),
+            to: calendar.startOfDay(for: end)
+        ).day ?? 0
+        return min(max(span + 1, 1), 30)
     }
 
     /// Searches both globally and with the trip bias, then ranks every candidate by

@@ -13,6 +13,7 @@ struct RecScreen: View {
     @State private var navigationPath = NavigationPath()
     /// Saved destinations live on the cloud-backed profile so they survive reinstalls.
     @Environment(TripStore.self) private var store
+    @Environment(ExploreMapModel.self) private var mapModel
 
     /// Presents the build-your-own-itinerary flow (ItineraryFeature.swift).
     @State private var showCreateItinerary = false
@@ -286,6 +287,13 @@ struct RecScreen: View {
                 if !hasSeenExploreOnboarding {
                     showExploreOnboarding = true
                 }
+            }
+            .task(id: mapModel.exploreRequest) {
+                guard let tripID = mapModel.takeRequestedItinerary(),
+                      store.trip(tripID)?.itinerary != nil else { return }
+                showExploreOnboarding = false
+                navigationPath = NavigationPath()
+                navigationPath.append(tripID)
             }
         }
     }
