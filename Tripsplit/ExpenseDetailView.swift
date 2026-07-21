@@ -105,6 +105,12 @@ struct ExpenseDetailView: View {
                 .font(.app(.caption, .medium))
                 .foregroundStyle(.secondary)
             }
+
+            if let location = exp.location {
+                Label(location.address ?? location.name, systemImage: "mappin.and.ellipse")
+                    .font(.app(.caption, .medium))
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 

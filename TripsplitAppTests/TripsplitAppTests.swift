@@ -86,6 +86,71 @@ final class TripsplitAppTests: XCTestCase {
         XCTAssertFalse(decoded.allowMembersToPayForOthers)
     }
 
+    func testLegacyExpenseDecodesWithoutLocation() throws {
+        let expense = Expense(
+            title: "Dinner",
+            amount: 24,
+            payerID: alice.id,
+            participantIDs: [alice.id],
+            date: Date()
+        )
+        let encoded = try JSONEncoder().encode(expense)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        json.removeValue(forKey: "location")
+
+        let decoded = try JSONDecoder().decode(
+            Expense.self,
+            from: JSONSerialization.data(withJSONObject: json)
+        )
+        XCTAssertNil(decoded.location)
+        XCTAssertEqual(decoded.title, "Dinner")
+    }
+
+    func testLegacyItineraryStopDecodesWithoutCoordinates() throws {
+        let stop = ItineraryStop(name: "Museum", kind: .activity, cost: 15)
+        let encoded = try JSONEncoder().encode(stop)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        ["latitude", "longitude", "address"].forEach { json.removeValue(forKey: $0) }
+
+        let decoded = try JSONDecoder().decode(
+            ItineraryStop.self,
+            from: JSONSerialization.data(withJSONObject: json)
+        )
+        XCTAssertNil(decoded.coordinate)
+        XCTAssertNil(decoded.address)
+        XCTAssertEqual(decoded.name, "Museum")
+    }
+
+    func testExpenseAndItineraryCoordinatesRoundTrip() throws {
+        let location = ExpenseLocation(
+            name: "Night Market",
+            address: "1 Market Street",
+            latitude: 25.033,
+            longitude: 121.5654
+        )
+        let expense = Expense(
+            title: "Snacks",
+            amount: 12,
+            payerID: alice.id,
+            participantIDs: [alice.id],
+            date: Date(),
+            location: location
+        )
+        let decodedExpense = try JSONDecoder().decode(Expense.self, from: JSONEncoder().encode(expense))
+        XCTAssertEqual(decodedExpense.location, location)
+
+        let stop = ItineraryStop(
+            name: "Night Market",
+            latitude: location.latitude,
+            longitude: location.longitude,
+            address: location.address
+        )
+        let decodedStop = try JSONDecoder().decode(ItineraryStop.self, from: JSONEncoder().encode(stop))
+        XCTAssertEqual(decodedStop.coordinate?.latitude, location.latitude)
+        XCTAssertEqual(decodedStop.coordinate?.longitude, location.longitude)
+        XCTAssertEqual(decodedStop.address, location.address)
+    }
+
     func testStructuredAIRateLimitRetryDelay() throws {
         let url = try XCTUnwrap(URL(string: "https://example.com/functions/v1/test"))
         let structured = try XCTUnwrap(HTTPURLResponse(

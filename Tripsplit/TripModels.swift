@@ -2,6 +2,15 @@ import SwiftUI
 
 // MARK: - Trip Models
 
+/// Optional real-world location attached to an expense. Kept as one Codable value so
+/// older expense blobs continue decoding and Phase 2 map pins have everything they need.
+struct ExpenseLocation: Codable, Equatable {
+    var name: String
+    var address: String?
+    var latitude: Double
+    var longitude: Double
+}
+
 /// A single expense within a trip. The payer fronts the whole `amount`; everyone in
 /// `participantIDs` shares it equally, mirroring TripSplit's equal-split debts.
 struct Expense: Identifiable, Codable {
@@ -33,6 +42,8 @@ struct Expense: Identifiable, Codable {
     /// and settle-up math but retained in `Trip.deletedExpenses` so it still counts
     /// against the budget (deleting doesn't refund budget headroom) and can be restored.
     var deletedAt: Date? = nil
+    /// Where the purchase happened, when the user chooses a MapKit result.
+    var location: ExpenseLocation? = nil
 
     init(
         id: UUID = UUID(),
@@ -46,7 +57,8 @@ struct Expense: Identifiable, Codable {
         items: [ReceiptItem] = [],
         tax: Double = 0,
         tip: Double = 0,
-        deletedAt: Date? = nil
+        deletedAt: Date? = nil,
+        location: ExpenseLocation? = nil
     ) {
         self.id = id
         self.title = title
@@ -60,10 +72,11 @@ struct Expense: Identifiable, Codable {
         self.tax = tax
         self.tip = tip
         self.deletedAt = deletedAt
+        self.location = location
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, amount, payerID, participantIDs, date, shares, receiptURL, items, tax, tip, deletedAt
+        case id, title, amount, payerID, participantIDs, date, shares, receiptURL, items, tax, tip, deletedAt, location
     }
 
     // Custom decoder so expenses saved before `shares`/`receiptURL`/`items` existed still
@@ -82,6 +95,7 @@ struct Expense: Identifiable, Codable {
         tax = try c.decodeIfPresent(Double.self, forKey: .tax) ?? 0
         tip = try c.decodeIfPresent(Double.self, forKey: .tip) ?? 0
         deletedAt = try c.decodeIfPresent(Date.self, forKey: .deletedAt)
+        location = try c.decodeIfPresent(ExpenseLocation.self, forKey: .location)
     }
 }
 

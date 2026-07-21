@@ -19,10 +19,16 @@ struct AddExpenseView: View {
     var editing: Expense? = nil
     var prefillTitle: String? = nil
     var prefillAmount: Double? = nil
+    var prefillLocation: ExpenseLocation? = nil
 
     @State private var title = ""
     @State private var amountText = ""
     @State private var date = Date()
+    @State private var locationQuery = ""
+    @State private var expenseLocation: ExpenseLocation?
+    @State private var isSelectingLocation = false
+    @StateObject private var locationCompleter = StopPlaceCompleter()
+    @FocusState private var locationFocused: Bool
 
     // Split configuration (mirrors the capstone's per-method split: equal/all,
     // equal/selected, single-payer, percentage, by-amount).
@@ -110,6 +116,7 @@ struct AddExpenseView: View {
                                 )
                             }
                             amountCard(trip)
+                            locationCard
                             payerCard(trip)
                             receiptCard(trip)
                             if items.isEmpty {
@@ -534,6 +541,79 @@ struct AddExpenseView: View {
         }
     }
 
+    private var locationCard: some View {
+        TripCard(title: "Location (optional)", icon: "mappin.and.ellipse") {
+            HStack(spacing: 10) {
+                TextField("Merchant or place", text: $locationQuery)
+                    .font(.app(.subheadline, .medium))
+                    .focused($locationFocused)
+                    .autocorrectionDisabled()
+                if !locationQuery.isEmpty {
+                    Button {
+                        locationQuery = ""
+                        expenseLocation = nil
+                        locationCompleter.clear()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 12)
+            .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+
+            if locationFocused && !locationCompleter.suggestions.isEmpty {
+                VStack(spacing: 0) {
+                    ForEach(Array(locationCompleter.suggestions.prefix(5).enumerated()), id: \.offset) { index, suggestion in
+                        Button { selectExpenseLocation(suggestion) } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(suggestion.title).font(.app(.subheadline, .semibold))
+                                if !suggestion.subtitle.isEmpty {
+                                    Text(suggestion.subtitle)
+                                        .font(.app(.caption)).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12).padding(.vertical, 10)
+                        }
+                        .buttonStyle(.plain)
+                        if index < min(locationCompleter.suggestions.count, 5) - 1 { Divider() }
+                    }
+                }
+                .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+            } else if let expenseLocation, let address = expenseLocation.address {
+                Label(address, systemImage: "checkmark.circle.fill")
+                    .font(.app(.caption)).foregroundStyle(.secondary)
+            }
+        }
+        .onChange(of: locationQuery) { _, newValue in
+            if isSelectingLocation {
+                isSelectingLocation = false
+                return
+            }
+            expenseLocation = nil
+            locationCompleter.update(query: newValue)
+        }
+    }
+
+    private func selectExpenseLocation(_ suggestion: MKLocalSearchCompletion) {
+        isSelectingLocation = true
+        locationQuery = suggestion.title
+        locationCompleter.clear()
+        locationFocused = false
+        Task {
+            let request = MKLocalSearch.Request(completion: suggestion)
+            guard let item = try? await MKLocalSearch(request: request).start().mapItems.first,
+                  locationQuery == suggestion.title else { return }
+            expenseLocation = ExpenseLocation(
+                name: item.name ?? suggestion.title,
+                address: item.address?.fullAddress,
+                latitude: item.location.coordinate.latitude,
+                longitude: item.location.coordinate.longitude
+            )
+        }
+    }
+
     // MARK: Split
 
     private func splitCard(_ trip: Trip) -> some View {
@@ -888,6 +968,11 @@ struct AddExpenseView: View {
             date = editing.date
             items = editing.items
             receiptURL = editing.receiptURL
+            if let location = editing.location {
+                expenseLocation = location
+                isSelectingLocation = true
+                locationQuery = location.name
+            }
             selected = editing.participantIDs
             if editing.tax > 0 { taxText = formatted(editing.tax) }
             if editing.tip > 0 { tipText = formatted(editing.tip) }
@@ -910,6 +995,11 @@ struct AddExpenseView: View {
         if selected.isEmpty { selected = Set(trip.members.map(\.id)) }
         if let prefillTitle { title = prefillTitle }
         if let prefillAmount, prefillAmount > 0 { amountText = formatted(prefillAmount) }
+        if let prefillLocation {
+            expenseLocation = prefillLocation
+            isSelectingLocation = true
+            locationQuery = prefillLocation.name
+        }
     }
 
     @MainActor
@@ -959,6 +1049,7 @@ struct AddExpenseView: View {
             updated.receiptURL = receiptURL ?? editing.receiptURL
             updated.tax = savedTax
             updated.tip = savedTip
+            updated.location = expenseLocation
             store.updateExpense(updated, in: trip.id)
         } else {
             let expense = Expense(
@@ -972,7 +1063,8 @@ struct AddExpenseView: View {
                 receiptURL: receiptURL,
                 items: items,
                 tax: savedTax,
-                tip: savedTip
+                tip: savedTip,
+                location: expenseLocation
             )
             store.addExpense(expense, to: trip.id)
         }

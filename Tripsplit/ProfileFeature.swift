@@ -4,6 +4,54 @@ import UIKit
 
 // MARK: - Profile model
 
+/// A durable MapKit place snapshot. MapKit search results themselves are not Codable,
+/// so bookmarks retain the small set of fields needed to render a useful offline map
+/// layer and reconstruct an `MKMapItem` for directions.
+struct SavedMapPlace: Codable, Equatable, Identifiable {
+    var key: String
+    var name: String
+    var latitude: Double
+    var longitude: Double
+    var address: String?
+    var category: String
+
+    var id: String { key }
+
+    /// Recovers the name/coordinate embedded in pre-Phase-1 bookmark keys so old
+    /// bookmarks immediately participate in the new map layer and list.
+    init?(legacyKey key: String) {
+        guard let separator = key.lastIndex(of: "@") else { return nil }
+        let name = String(key[..<separator])
+        let coordinateParts = key[key.index(after: separator)...].split(separator: ",")
+        guard !name.isEmpty,
+              coordinateParts.count == 2,
+              let latitude = Double(coordinateParts[0]),
+              let longitude = Double(coordinateParts[1]) else { return nil }
+        self.key = key
+        self.name = name
+        self.latitude = latitude
+        self.longitude = longitude
+        address = nil
+        category = "search"
+    }
+
+    init(
+        key: String,
+        name: String,
+        latitude: Double,
+        longitude: Double,
+        address: String?,
+        category: String
+    ) {
+        self.key = key
+        self.name = name
+        self.latitude = latitude
+        self.longitude = longitude
+        self.address = address
+        self.category = category
+    }
+}
+
 /// The signed-in user's personal information, persisted in the `public.profiles`
 /// table so it follows the account across devices and reinstalls. The display name
 /// and avatar path are mirrored onto `TripStore.currentUser` (the `Person` that
@@ -19,6 +67,9 @@ struct UserProfile: Codable, Equatable {
     var visitedPlaces: [String] = []
     /// `MapPlace.saveKey`s bookmarked on the map screen.
     var savedPlaceKeys: [String] = []
+    /// Rich snapshots backing the Saved map layer. Kept alongside `savedPlaceKeys`
+    /// so profiles created by older app versions remain compatible.
+    var savedMapPlaces: [SavedMapPlace] = []
     /// `Destination.id`s saved on the Explore screen.
     var savedDestinationIDs: [String] = []
 
@@ -29,6 +80,7 @@ struct UserProfile: Codable, Equatable {
         case avatarPath = "avatar_path"
         case visitedPlaces = "visited_places"
         case savedPlaceKeys = "saved_place_keys"
+        case savedMapPlaces = "saved_map_places"
         case savedDestinationIDs = "saved_destination_ids"
     }
 
@@ -53,6 +105,7 @@ struct UserProfile: Codable, Equatable {
         avatarPath = try c.decodeIfPresent(String.self, forKey: .avatarPath)
         visitedPlaces = try c.decodeIfPresent([String].self, forKey: .visitedPlaces) ?? []
         savedPlaceKeys = try c.decodeIfPresent([String].self, forKey: .savedPlaceKeys) ?? []
+        savedMapPlaces = try c.decodeIfPresent([SavedMapPlace].self, forKey: .savedMapPlaces) ?? []
         savedDestinationIDs = try c.decodeIfPresent([String].self, forKey: .savedDestinationIDs) ?? []
     }
 
@@ -64,6 +117,7 @@ struct UserProfile: Codable, Equatable {
         try c.encode(avatarPath, forKey: .avatarPath)
         try c.encode(visitedPlaces, forKey: .visitedPlaces)
         try c.encode(savedPlaceKeys, forKey: .savedPlaceKeys)
+        try c.encode(savedMapPlaces, forKey: .savedMapPlaces)
         try c.encode(savedDestinationIDs, forKey: .savedDestinationIDs)
     }
 }
@@ -77,7 +131,7 @@ actor ProfilesRepository {
     static let shared = ProfilesRepository()
     private let session = BackendSecurity.secureSession
 
-    private static let columns = "display_name,date_of_birth,bio,avatar_path,visited_places,saved_place_keys,saved_destination_ids"
+    private static let columns = "display_name,date_of_birth,bio,avatar_path,visited_places,saved_place_keys,saved_map_places,saved_destination_ids"
 
     func fetch(userID: UUID, accessToken: String) async throws -> UserProfile? {
         let path = "/rest/v1/profiles?user_id=eq.\(userID.uuidString.lowercased())&select=\(Self.columns)"

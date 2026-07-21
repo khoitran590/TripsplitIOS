@@ -155,6 +155,7 @@ final class TripStore {
         var bio: String?
         var visitedPlaces: [String]?
         var savedPlaceKeys: [String]?
+        var savedMapPlaces: [SavedMapPlace]?
         var savedDestinationIDs: [String]?
     }
 
@@ -290,6 +291,7 @@ final class TripStore {
             bio: userProfile.bio,
             visitedPlaces: userProfile.visitedPlaces,
             savedPlaceKeys: userProfile.savedPlaceKeys,
+            savedMapPlaces: userProfile.savedMapPlaces,
             savedDestinationIDs: userProfile.savedDestinationIDs
         )
         if let data = try? JSONEncoder().encode(stored) {
@@ -322,8 +324,13 @@ final class TripStore {
 
     /// Updates the cloud-backed bookmark lists (map places and/or Explore destinations),
     /// persisting locally and upserting `public.profiles` so they survive reinstalls.
-    func updateSavedPlaces(mapKeys: [String]? = nil, destinationIDs: [String]? = nil) {
+    func updateSavedPlaces(
+        mapKeys: [String]? = nil,
+        mapPlaces: [SavedMapPlace]? = nil,
+        destinationIDs: [String]? = nil
+    ) {
         if let mapKeys { userProfile.savedPlaceKeys = mapKeys }
+        if let mapPlaces { userProfile.savedMapPlaces = mapPlaces }
         if let destinationIDs { userProfile.savedDestinationIDs = destinationIDs }
         persistLocalProfile()
         Task { await pushProfileToCloud() }
@@ -347,10 +354,15 @@ final class TripStore {
         // Bookmarks saved on this device before the cloud fetch (e.g. while offline, or
         // made before bookmarks became cloud-backed) are merged in rather than clobbered.
         let localPlaceKeys = userProfile.savedPlaceKeys
+        let localMapPlaces = userProfile.savedMapPlaces
         let localDestinationIDs = userProfile.savedDestinationIDs
         userProfile = fetched
         userProfile.savedPlaceKeys = fetched.savedPlaceKeys
             + localPlaceKeys.filter { !fetched.savedPlaceKeys.contains($0) }
+        userProfile.savedMapPlaces = fetched.savedMapPlaces
+            + localMapPlaces.filter { local in
+                !fetched.savedMapPlaces.contains { $0.key == local.key }
+            }
         userProfile.savedDestinationIDs = fetched.savedDestinationIDs
             + localDestinationIDs.filter { !fetched.savedDestinationIDs.contains($0) }
         currentUser.name = fetched.displayName
@@ -359,6 +371,7 @@ final class TripStore {
         }
         persistLocalProfile()
         if userProfile.savedPlaceKeys != fetched.savedPlaceKeys
+            || userProfile.savedMapPlaces != fetched.savedMapPlaces
             || userProfile.savedDestinationIDs != fetched.savedDestinationIDs {
             await pushProfileToCloud()
         }
@@ -796,6 +809,7 @@ final class TripStore {
         userProfile.bio = stored?.bio ?? ""
         userProfile.visitedPlaces = stored?.visitedPlaces ?? []
         userProfile.savedPlaceKeys = stored?.savedPlaceKeys ?? Self.legacySavedList("mapSavedPlaceKeys")
+        userProfile.savedMapPlaces = stored?.savedMapPlaces ?? []
         userProfile.savedDestinationIDs = stored?.savedDestinationIDs ?? Self.legacySavedList("exploreSavedDestinationIDs")
         // Paint this user's locally cached trips right away; loadFromCloud replaces them
         // with the authoritative copy as soon as the network round-trip finishes.

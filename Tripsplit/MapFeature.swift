@@ -415,7 +415,9 @@ extension TravelPlanItem {
 /// A searchable place category shown as a chip above the map. Each category maps
 /// to an `MKLocalSearch` query so tapping a chip fills the visible region with pins.
 enum MapCategory: String, CaseIterable, Identifiable {
-    case restaurants, cafes, attractions, hotels, shopping
+    case restaurants, cafes, attractions, hotels, shopping, search
+
+    static let discoveryCases: [MapCategory] = [.restaurants, .cafes, .attractions, .hotels, .shopping]
 
     var id: String { rawValue }
 
@@ -426,6 +428,7 @@ enum MapCategory: String, CaseIterable, Identifiable {
         case .attractions: "Attractions"
         case .hotels: "Hotels"
         case .shopping: "Shopping"
+        case .search: "Search result"
         }
     }
 
@@ -436,6 +439,7 @@ enum MapCategory: String, CaseIterable, Identifiable {
         case .attractions: "camera.fill"
         case .hotels: "bed.double.fill"
         case .shopping: "handbag.fill"
+        case .search: "mappin.and.ellipse"
         }
     }
 
@@ -446,24 +450,94 @@ enum MapCategory: String, CaseIterable, Identifiable {
         case .attractions: "tourist attractions"
         case .hotels: "hotels"
         case .shopping: "shopping"
+        case .search: ""
+        }
+    }
+
+    var itineraryKind: ItineraryStopKind {
+        switch self {
+        case .restaurants, .cafes: .restaurant
+        case .attractions: .activity
+        case .hotels, .shopping, .search: .location
         }
     }
 }
 
 /// A search result pinned on the map for the active category.
 struct MapPlace: Identifiable {
-    let id = UUID()
     let mapItem: MKMapItem
     let category: MapCategory
+    /// Retained for saved snapshots, whose reconstructed MapKit item may not carry
+    /// the original formatted address.
+    var savedAddress: String? = nil
 
+    var id: String { saveKey }
     var coordinate: CLLocationCoordinate2D { mapItem.location.coordinate }
     var name: String { mapItem.name ?? "Place" }
+    var addressText: String? { mapItem.address?.fullAddress ?? savedAddress }
 
     /// Stable key used to persist "saved" places across launches.
     var saveKey: String {
         let c = coordinate
         return "\(name)@\(String(format: "%.4f,%.4f", c.latitude, c.longitude))"
     }
+
+    var snapshot: SavedMapPlace {
+        SavedMapPlace(
+            key: saveKey,
+            name: name,
+            latitude: coordinate.latitude,
+            longitude: coordinate.longitude,
+            address: addressText,
+            category: category.rawValue
+        )
+    }
+
+    init(mapItem: MKMapItem, category: MapCategory, savedAddress: String? = nil) {
+        self.mapItem = mapItem
+        self.category = category
+        self.savedAddress = savedAddress
+    }
+
+    init(saved: SavedMapPlace) {
+        let item = MKMapItem(
+            location: CLLocation(latitude: saved.latitude, longitude: saved.longitude),
+            address: nil
+        )
+        item.name = saved.name
+        mapItem = item
+        category = MapCategory(rawValue: saved.category) ?? .search
+        savedAddress = saved.address
+    }
+}
+
+/// A geocoded destination belonging to one of the user's trips.
+struct TripDestinationPin: Identifiable {
+    let tripID: Trip.ID
+    let tripName: String
+    let location: String
+    let coordinate: CLLocationCoordinate2D
+
+    var id: Trip.ID { tripID }
+}
+
+struct ExpenseMapPin: Identifiable {
+    let trip: Trip
+    let expense: Expense
+    let location: ExpenseLocation
+
+    var id: String { "expense:\(expense.id.uuidString)" }
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: location.latitude, longitude: location.longitude)
+    }
+}
+
+struct ItineraryDayMapStop: Identifiable {
+    let stop: ItineraryStop
+    let number: Int
+    let coordinate: CLLocationCoordinate2D
+
+    var id: UUID { stop.id }
 }
 
 /// The map screen, Wanderlog-style: a full-bleed map with floating category chips,
@@ -487,7 +561,7 @@ struct MapScreen: View {
 
     @State private var activeCategory: MapCategory?
     @State private var places: [MapPlace] = []
-    @State private var selectedPlaceID: UUID?
+    @State private var selectedPlaceID: String?
     @State private var isSearching = false
     /// Shown after the camera moves away from the last searched region.
     @State private var showsSearchThisArea = false
@@ -495,13 +569,92 @@ struct MapScreen: View {
     /// Presents the full-detail sheet for the curated focus place.
     @State private var showsFocusDetail = false
     @State private var lastCenteredCoordinateKey: String?
+    @State private var searchQuery = ""
+    @State private var showsSavedPlaces = false
+    @State private var showsSavedList = false
+    @State private var itineraryPlace: MapPlace?
+    /// `nil` represents All trips.
+    @State private var selectedTripID: Trip.ID?
+    @State private var tripDestinations: [TripDestinationPin] = []
+    @State private var showsSpending = false
+    @State private var spendingPayerID: Person.ID?
+    @State private var selectedItineraryDay = 0
+    @State private var showsItineraryPath = true
+    @State private var expenseDetail: ExpenseMapPin?
+    @State private var hasInitializedTripSelection = false
+    @State private var isResolvingItineraryLocations = false
 
     /// `MapPlace.saveKey`s the user bookmarked from the place card, cloud-backed on
     /// the profile so they survive reinstalls.
     @Environment(TripStore.self) private var store
 
     private var selectedPlace: MapPlace? {
-        places.first { $0.id == selectedPlaceID }
+        visiblePlaces.first { $0.id == selectedPlaceID }
+    }
+
+    private var savedLayerPlaces: [MapPlace] {
+        var snapshots = store.userProfile.savedMapPlaces
+        let richKeys = Set(snapshots.map(\.key))
+        snapshots += store.userProfile.savedPlaceKeys.compactMap { key in
+            richKeys.contains(key) ? nil : SavedMapPlace(legacyKey: key)
+        }
+        return snapshots.map { saved in
+            MapPlace(saved: saved)
+        }
+    }
+
+    private var visiblePlaces: [MapPlace] {
+        guard showsSavedPlaces else { return places }
+        let saved = savedLayerPlaces
+        let savedKeys = Set(saved.map(\.saveKey))
+        return saved + places.filter { !savedKeys.contains($0.saveKey) }
+    }
+
+    private var scopedTrips: [Trip] {
+        selectedTripID.map { id in store.myTrips.filter { $0.id == id } } ?? store.myTrips
+    }
+
+    private var scopedMembers: [Person] {
+        var seen: Set<Person.ID> = []
+        return scopedTrips.flatMap(\.members).filter { seen.insert($0.id).inserted }
+    }
+
+    private var expensePins: [ExpenseMapPin] {
+        guard showsSpending else { return [] }
+        return scopedTrips.flatMap { trip in
+            trip.expenses.compactMap { expense in
+                guard let location = expense.location,
+                      spendingPayerID == nil || expense.payerID == spendingPayerID else { return nil }
+                return ExpenseMapPin(trip: trip, expense: expense, location: location)
+            }
+        }
+    }
+
+    private var selectedExpensePin: ExpenseMapPin? {
+        expensePins.first { $0.id == selectedPlaceID }
+    }
+
+    private var selectedItinerary: Itinerary? {
+        guard let selectedTripID else { return nil }
+        return store.myTrips.first { $0.id == selectedTripID }?.itinerary
+    }
+
+    private var itineraryMapStops: [ItineraryDayMapStop] {
+        guard showsItineraryPath,
+              let itinerary = selectedItinerary,
+              itinerary.days.indices.contains(selectedItineraryDay) else { return [] }
+        return itinerary.days[selectedItineraryDay].sortedStops.enumerated().compactMap { index, stop in
+            guard let coordinate = stop.coordinate else { return nil }
+            return ItineraryDayMapStop(stop: stop, number: index + 1, coordinate: coordinate)
+        }
+    }
+
+    private var itineraryResolutionKey: String {
+        guard let selectedTripID, let itinerary = selectedItinerary else { return "none" }
+        let stops = itinerary.days.flatMap(\.stops).map { stop in
+            "\(stop.id.uuidString):\(stop.name)"
+        }
+        return "\(selectedTripID.uuidString)|\(stops.joined(separator: "|"))"
     }
 
     /// A string that changes whenever the focus coordinate does, so `onChange` can
@@ -521,9 +674,32 @@ struct MapScreen: View {
             }
         }
         .sheet(item: $detailPlace) { place in
-            PlaceDetailSheet(place: place, isSaved: savedBinding(for: place))
+            PlaceDetailSheet(
+                place: place,
+                isSaved: savedBinding(for: place),
+                onAddToItinerary: { itineraryPlace = place }
+            )
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showsSavedList) {
+            SavedPlacesSheet(
+                places: savedLayerPlaces,
+                onSelect: showSavedPlace,
+                onRemove: removeSavedPlace
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
+        .sheet(item: $itineraryPlace) { place in
+            AddPlaceToItinerarySheet(place: place)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(item: $expenseDetail) { pin in
+            NavigationStack {
+                ExpenseDetailView(tripID: pin.trip.id, expense: pin.expense)
+            }
         }
         .sheet(isPresented: $showsFocusDetail) {
             FocusDetailSheet { item, destination in
@@ -542,11 +718,18 @@ struct MapScreen: View {
             await Task.yield()
             recenterOnFocus(force: true)
         }
+        .task(id: store.myTrips.map(\.id)) {
+            initializeTripSelectionIfNeeded()
+            await refreshTripDestinations()
+        }
+        .task(id: itineraryResolutionKey) {
+            await resolveMissingItineraryCoordinates()
+        }
     }
 
     private var mapSurface: some View {
         Map(position: $position, selection: $selectedPlaceID) {
-            ForEach(places) { place in
+            ForEach(visiblePlaces) { place in
                 Annotation(place.name, coordinate: place.coordinate) {
                     CategoryPin(
                         icon: place.category.icon,
@@ -554,6 +737,29 @@ struct MapScreen: View {
                     )
                 }
                 .tag(place.id)
+            }
+            ForEach(tripDestinations) { destination in
+                Marker(destination.tripName, systemImage: "suitcase.rolling.fill", coordinate: destination.coordinate)
+                    .tint(.indigo)
+            }
+            ForEach(expensePins) { pin in
+                Annotation(pin.expense.title, coordinate: pin.coordinate) {
+                    ExpenseMapMarker(
+                        amount: pin.expense.amount,
+                        currencyCode: pin.trip.currencyCode,
+                        isSelected: pin.id == selectedPlaceID
+                    )
+                }
+                .tag(pin.id)
+            }
+            if itineraryMapStops.count > 1 {
+                MapPolyline(coordinates: itineraryMapStops.map(\.coordinate))
+                    .stroke(.indigo, style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
+            }
+            ForEach(itineraryMapStops) { item in
+                Annotation(item.stop.name, coordinate: item.coordinate) {
+                    NumberedItineraryPin(number: item.number, kind: item.stop.kind)
+                }
             }
             if let focus = mapModel.focus {
                 Marker(focus.title, coordinate: focus.coordinate)
@@ -605,6 +811,30 @@ struct MapScreen: View {
                     .glassEffect(.regular.interactive(), in: .circle)
                 }
                 Spacer()
+
+                Menu {
+                    Button {
+                        selectTrip(nil)
+                    } label: {
+                        if selectedTripID == nil { Label("All trips", systemImage: "checkmark") }
+                        else { Text("All trips") }
+                    }
+                    ForEach(store.myTrips) { trip in
+                        Button {
+                            selectTrip(trip.id)
+                        } label: {
+                            if selectedTripID == trip.id { Label(trip.name, systemImage: "checkmark") }
+                            else { Text(trip.name) }
+                        }
+                    }
+                } label: {
+                    Label(selectedTripName, systemImage: "suitcase.rolling")
+                        .font(.app(.subheadline, .semibold))
+                        .padding(.horizontal, 13)
+                        .frame(height: 38)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: .capsule)
             }
             .overlay {
                 if let focus = mapModel.focus {
@@ -616,10 +846,20 @@ struct MapScreen: View {
                 }
             }
 
+            searchBar
+
             if let category = activeCategory {
                 exploringPill(category)
             } else {
                 categoryChips
+            }
+
+            if selectedItinerary != nil {
+                itineraryControls
+            }
+
+            if showsSpending {
+                spendingControls
             }
 
             if showsSearchThisArea, activeCategory != nil {
@@ -680,7 +920,41 @@ struct MapScreen: View {
     private var categoryChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(MapCategory.allCases) { category in
+                Button {
+                    showsSpending.toggle()
+                    selectedPlaceID = nil
+                    if showsSpending { fitCamera(to: expensePins.map(\.coordinate)) }
+                } label: {
+                    Label("Spending", systemImage: showsSpending ? "dollarsign.circle.fill" : "dollarsign.circle")
+                        .font(.app(.subheadline, .medium))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(
+                    showsSpending ? .regular.tint(.orange).interactive() : .regular.interactive(),
+                    in: .capsule
+                )
+
+                Button {
+                    showsSavedPlaces.toggle()
+                    if showsSavedPlaces { fitSavedPlaces() }
+                } label: {
+                    Label("Saved", systemImage: showsSavedPlaces ? "bookmark.fill" : "bookmark")
+                        .font(.app(.subheadline, .medium))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(
+                    showsSavedPlaces ? .regular.tint(.accentColor).interactive() : .regular.interactive(),
+                    in: .capsule
+                )
+                .contextMenu {
+                    Button("View saved list", systemImage: "list.bullet") { showsSavedList = true }
+                }
+
+                ForEach(MapCategory.discoveryCases) { category in
                     Button {
                         activeCategory = category
                         Task { await runCategorySearch() }
@@ -699,14 +973,134 @@ struct MapScreen: View {
         .padding(.horizontal, -16)
     }
 
+    private var itineraryControls: some View {
+        HStack(spacing: 8) {
+            Button {
+                showsItineraryPath.toggle()
+                if showsItineraryPath { fitCamera(to: itineraryMapStops.map(\.coordinate)) }
+            } label: {
+                Label("Route", systemImage: showsItineraryPath ? "point.topleft.down.to.point.bottomright.curvepath.fill" : "point.topleft.down.to.point.bottomright.curvepath")
+                    .font(.app(.caption, .semibold))
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+            }
+            .buttonStyle(.plain)
+            .glassEffect(
+                showsItineraryPath ? .regular.tint(.indigo).interactive() : .regular.interactive(),
+                in: .capsule
+            )
+
+            if let itinerary = selectedItinerary, !itinerary.days.isEmpty {
+                Menu {
+                    ForEach(itinerary.days.indices, id: \.self) { index in
+                        Button("Day \(index + 1)") {
+                            selectedItineraryDay = index
+                            selectedPlaceID = nil
+                            Task { @MainActor in
+                                await Task.yield()
+                                fitCamera(to: itineraryMapStops.map(\.coordinate))
+                            }
+                        }
+                    }
+                } label: {
+                    Label("Day \(selectedItineraryDay + 1)", systemImage: "calendar")
+                        .font(.app(.caption, .semibold))
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: .capsule)
+            }
+
+            if isResolvingItineraryLocations {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Locating stops…").font(.app(.caption, .medium))
+                }
+                .padding(.horizontal, 10).padding(.vertical, 8)
+                .glassEffect(.regular, in: .capsule)
+            }
+        }
+    }
+
+    private var spendingControls: some View {
+        Menu {
+            Button("Everyone") {
+                spendingPayerID = nil
+                selectedPlaceID = nil
+            }
+            ForEach(scopedMembers) { member in
+                Button(member.id == store.currentUser.id ? "You" : member.name) {
+                    spendingPayerID = member.id
+                    selectedPlaceID = nil
+                }
+            }
+        } label: {
+            Label(spendingPayerName, systemImage: "person.crop.circle")
+                .font(.app(.caption, .semibold))
+                .padding(.horizontal, 12).padding(.vertical, 8)
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: .capsule)
+    }
+
+    private var spendingPayerName: String {
+        guard let spendingPayerID else { return "Everyone" }
+        if spendingPayerID == store.currentUser.id { return "You" }
+        return scopedTrips.flatMap(\.members).first { $0.id == spendingPayerID }?.name ?? "Payer"
+    }
+
+    private var searchBar: some View {
+        HStack(spacing: 9) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("Search places or addresses", text: $searchQuery)
+                .font(.app(.subheadline))
+                .submitLabel(.search)
+                .onSubmit { Task { await runTextSearch() } }
+            if !searchQuery.isEmpty {
+                Button {
+                    searchQuery = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
+            if !store.userProfile.savedMapPlaces.isEmpty {
+                Button {
+                    showsSavedList = true
+                } label: {
+                    Image(systemName: "list.bullet")
+                        .foregroundStyle(.primary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("View saved places list")
+            }
+        }
+        .padding(.horizontal, 13)
+        .frame(height: 42)
+        .glassEffect(.regular, in: .capsule)
+    }
+
     // MARK: Bottom card
 
     @ViewBuilder
     private var bottomCard: some View {
-        if let place = selectedPlace {
+        if let pin = selectedExpensePin {
+            ExpenseMapCard(
+                pin: pin,
+                payerName: pin.trip.members.first { $0.id == pin.expense.payerID }?.name ?? "Unknown",
+                onDetails: { expenseDetail = pin },
+                onClose: { selectedPlaceID = nil }
+            )
+            .padding(.horizontal)
+            .padding(.bottom, 4)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        } else if let place = selectedPlace {
             PlaceCard(
                 place: place,
                 isSaved: savedBinding(for: place),
+                onAddToItinerary: { itineraryPlace = place },
                 onDirections: { place.mapItem.openInMaps() },
                 onDetails: { detailPlace = place },
                 onClose: { selectedPlaceID = nil }
@@ -717,6 +1111,9 @@ struct MapScreen: View {
         } else if let focus = mapModel.focus {
             FocusPlaceCard(
                 focus: focus,
+                onAddToItinerary: {
+                    itineraryPlace = mapPlace(for: focus)
+                },
                 onDirections: { focus.routableMapItem.openInMaps() },
                 onDetails: { showsFocusDetail = true },
                 onClose: {
@@ -732,6 +1129,40 @@ struct MapScreen: View {
     }
 
     // MARK: Search + saved state
+
+    private var selectedTripName: String {
+        guard let selectedTripID,
+              let trip = store.myTrips.first(where: { $0.id == selectedTripID }) else {
+            return "All trips"
+        }
+        return trip.name
+    }
+
+    /// Free-text MapKit search biased to the visible map (or selected trip). Unlike
+    /// category search this accepts venues, cities, and full addresses.
+    private func runTextSearch() async {
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return }
+        isSearching = true
+        selectedPlaceID = nil
+        activeCategory = nil
+        showsSearchThisArea = false
+
+        let request = MKLocalSearch.Request()
+        request.naturalLanguageQuery = query
+        if let visibleRegion { request.region = visibleRegion }
+        let items = (try? await MKLocalSearch(request: request).start())?.mapItems ?? []
+        guard query == searchQuery.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+        places = items.prefix(30).map { MapPlace(mapItem: $0, category: .search) }
+        isSearching = false
+        if let first = places.first {
+            selectedPlaceID = first.id
+            position = .region(MKCoordinateRegion(
+                center: first.coordinate,
+                span: MKCoordinateSpan(latitudeDelta: 0.035, longitudeDelta: 0.035)
+            ))
+        }
+    }
 
     /// Search the visible region for the active category and pin the results.
     private func runCategorySearch() async {
@@ -764,13 +1195,296 @@ struct MapScreen: View {
 
     private func savedBinding(for place: MapPlace) -> Binding<Bool> {
         Binding(
-            get: { store.userProfile.savedPlaceKeys.contains(place.saveKey) },
+            get: {
+                store.userProfile.savedPlaceKeys.contains(place.saveKey)
+                    || store.userProfile.savedMapPlaces.contains { $0.key == place.saveKey }
+            },
             set: { isSaved in
                 var keys = Set(store.userProfile.savedPlaceKeys)
-                if isSaved { keys.insert(place.saveKey) } else { keys.remove(place.saveKey) }
-                store.updateSavedPlaces(mapKeys: keys.sorted())
+                var snapshots = store.userProfile.savedMapPlaces
+                if isSaved {
+                    keys.insert(place.saveKey)
+                    if let index = snapshots.firstIndex(where: { $0.key == place.saveKey }) {
+                        snapshots[index] = place.snapshot
+                    } else {
+                        snapshots.append(place.snapshot)
+                    }
+                } else {
+                    keys.remove(place.saveKey)
+                    snapshots.removeAll { $0.key == place.saveKey }
+                    if selectedPlaceID == place.id, showsSavedPlaces { selectedPlaceID = nil }
+                }
+                store.updateSavedPlaces(mapKeys: keys.sorted(), mapPlaces: snapshots)
             }
         )
+    }
+
+    private func removeSavedPlace(_ place: MapPlace) {
+        var keys = Set(store.userProfile.savedPlaceKeys)
+        keys.remove(place.saveKey)
+        let snapshots = store.userProfile.savedMapPlaces.filter { $0.key != place.saveKey }
+        store.updateSavedPlaces(mapKeys: keys.sorted(), mapPlaces: snapshots)
+        if selectedPlaceID == place.id { selectedPlaceID = nil }
+    }
+
+    private func showSavedPlace(_ place: MapPlace) {
+        showsSavedList = false
+        showsSavedPlaces = true
+        selectedPlaceID = place.id
+        position = .region(MKCoordinateRegion(
+            center: place.coordinate,
+            span: MKCoordinateSpan(latitudeDelta: 0.025, longitudeDelta: 0.025)
+        ))
+    }
+
+    private func mapPlace(for focus: MapFocus) -> MapPlace {
+        MapPlace(mapItem: focus.routableMapItem, category: .search, savedAddress: focus.addressText)
+    }
+
+    private func fitSavedPlaces() {
+        fitCamera(to: savedLayerPlaces.map(\.coordinate))
+    }
+
+    private func selectTrip(_ tripID: Trip.ID?) {
+        selectedTripID = tripID
+        selectedItineraryDay = 0
+        spendingPayerID = nil
+        selectedPlaceID = nil
+        Task { await refreshTripDestinations() }
+    }
+
+    /// Treat the first itinerary-bearing trip as the initial "current trip" so the
+    /// map opens with a day route instead of requiring a hidden extra selection. Once
+    /// the user chooses All trips, their choice is left alone for the rest of the view.
+    private func initializeTripSelectionIfNeeded() {
+        guard !hasInitializedTripSelection, !store.myTrips.isEmpty else { return }
+        hasInitializedTripSelection = true
+        guard selectedTripID == nil else { return }
+
+        let now = Date()
+        let itineraryTrips = store.myTrips.filter { $0.itinerary?.days.isEmpty == false }
+        let current = itineraryTrips.first { trip in
+            guard let start = trip.startDate, let end = trip.endDate else { return false }
+            return start <= now && now <= end
+        }
+        selectedTripID = (current ?? itineraryTrips.first)?.id
+    }
+
+    /// Backfills and revalidates planner coordinates. Ranking is deliberately stricter
+    /// than taking MapKit's first result: a weak same-region match is worse than no pin.
+    /// Revalidation also repairs coordinates persisted by the original loose resolver.
+    private func resolveMissingItineraryCoordinates() async {
+        guard let tripID = selectedTripID,
+              let trip = store.myTrips.first(where: { $0.id == tripID }),
+              var itinerary = trip.itinerary else {
+            isResolvingItineraryLocations = false
+            return
+        }
+
+        let searchableCount = itinerary.days.reduce(0) { count, day in
+            count + day.stops.filter { !$0.name.trimmingCharacters(in: .whitespaces).isEmpty }.count
+        }
+        guard searchableCount > 0 else {
+            isResolvingItineraryLocations = false
+            if showsItineraryPath { fitCamera(to: itineraryMapStops.map(\.coordinate)) }
+            return
+        }
+
+        isResolvingItineraryLocations = true
+        defer { isResolvingItineraryLocations = false }
+
+        let destinationRegion = await itinerarySearchRegion(for: trip)
+        var changed = false
+        for dayIndex in itinerary.days.indices {
+            for stopIndex in itinerary.days[dayIndex].stops.indices {
+                guard !Task.isCancelled, selectedTripID == tripID else { return }
+                let stop = itinerary.days[dayIndex].stops[stopIndex]
+                let name = stop.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty else { continue }
+                guard let item = await bestItineraryMapItem(
+                    for: name,
+                    trip: trip,
+                    destinationRegion: destinationRegion
+                ) else { continue }
+
+                let newCoordinate = item.location.coordinate
+                let oldCoordinate = stop.coordinate
+                let moved = oldCoordinate.map {
+                    CLLocation(latitude: $0.latitude, longitude: $0.longitude).distance(
+                        from: CLLocation(latitude: newCoordinate.latitude, longitude: newCoordinate.longitude)
+                    ) > 25
+                } ?? true
+                let newAddress = item.address?.fullAddress
+                guard moved || stop.address != newAddress else { continue }
+                itinerary.days[dayIndex].stops[stopIndex].latitude = newCoordinate.latitude
+                itinerary.days[dayIndex].stops[stopIndex].longitude = newCoordinate.longitude
+                itinerary.days[dayIndex].stops[stopIndex].address = newAddress
+                changed = true
+            }
+        }
+
+        guard changed, !Task.isCancelled, selectedTripID == tripID else { return }
+        store.updateItinerary(itinerary, in: tripID)
+        await Task.yield()
+        fitCamera(to: itineraryMapStops.map(\.coordinate))
+    }
+
+    /// Searches both globally and with the trip bias, then ranks every candidate by
+    /// venue-name fidelity, destination/address context, and distance. Collapsed-name
+    /// comparison makes small spacing mistakes ("skybuilding") match "Sky Building".
+    private func bestItineraryMapItem(
+        for stopName: String,
+        trip: Trip,
+        destinationRegion: MKCoordinateRegion?
+    ) async -> MKMapItem? {
+        let location = trip.location?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        var searches: [(query: String, biased: Bool)] = [(stopName, false)]
+        if destinationRegion != nil { searches.append((stopName, true)) }
+        if !location.isEmpty { searches.append(("\(stopName), \(location)", true)) }
+
+        var candidates: [(score: Double, nameScore: Double, item: MKMapItem)] = []
+        var seen: Set<String> = []
+        for search in searches {
+            let request = MKLocalSearch.Request()
+            request.naturalLanguageQuery = search.query
+            if search.biased, let destinationRegion { request.region = destinationRegion }
+            request.resultTypes = [.pointOfInterest, .address]
+            let items = (try? await MKLocalSearch(request: request).start())?.mapItems ?? []
+            for item in items.prefix(15) {
+                let coordinate = item.location.coordinate
+                let key = "\((item.name ?? "").normalizedForSearch)|\(String(format: "%.5f,%.5f", coordinate.latitude, coordinate.longitude))"
+                guard seen.insert(key).inserted else { continue }
+                let nameScore = itineraryNameScore(item.name ?? "", expected: stopName)
+                let score = nameScore + itineraryContextScore(
+                    item,
+                    tripLocation: location,
+                    destinationRegion: destinationRegion
+                )
+                candidates.append((score, nameScore, item))
+            }
+        }
+
+        guard let best = candidates.max(by: { $0.score < $1.score }),
+              best.nameScore >= 60,
+              best.score >= 70 else { return nil }
+        return best.item
+    }
+
+    private func itineraryNameScore(_ candidateName: String, expected: String) -> Double {
+        let candidate = candidateName.normalizedForSearch
+        let expected = expected.normalizedForSearch
+        guard !candidate.isEmpty, !expected.isEmpty else { return 0 }
+        if candidate == expected { return 100 }
+
+        let candidateCompact = candidate.replacingOccurrences(of: " ", with: "")
+        let expectedCompact = expected.replacingOccurrences(of: " ", with: "")
+        if candidateCompact == expectedCompact { return 96 }
+        if min(candidateCompact.count, expectedCompact.count) >= 5,
+           candidateCompact.contains(expectedCompact) || expectedCompact.contains(candidateCompact) {
+            return 82
+        }
+
+        let candidateTokens = Set(candidate.searchTokens)
+        let expectedTokens = Set(expected.searchTokens)
+        guard !expectedTokens.isEmpty else { return 0 }
+        let overlap = candidateTokens.intersection(expectedTokens).count
+        return (Double(overlap) / Double(expectedTokens.count)) * 65
+    }
+
+    private func itineraryContextScore(
+        _ item: MKMapItem,
+        tripLocation: String,
+        destinationRegion: MKCoordinateRegion?
+    ) -> Double {
+        var score = 0.0
+        let address = (item.address?.fullAddress ?? "").normalizedForSearch
+        let locationTokens = Set(tripLocation.searchTokens)
+        if !locationTokens.isEmpty {
+            let addressTokens = Set(address.searchTokens)
+            score += Double(addressTokens.intersection(locationTokens).count) * 7
+        }
+
+        if let center = destinationRegion?.center {
+            let distance = CLLocation(latitude: center.latitude, longitude: center.longitude).distance(
+                from: item.location
+            )
+            switch distance {
+            case 0..<5_000: score += 28
+            case 5_000..<25_000: score += 20
+            case 25_000..<90_000: score += 7
+            case 90_000..<250_000: break
+            default: score -= 25
+            }
+        }
+        return score
+    }
+
+    private func itinerarySearchRegion(for trip: Trip) async -> MKCoordinateRegion? {
+        guard let location = trip.location?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !location.isEmpty else { return nil }
+        let request = MKLocalSearch.Request()
+        request.naturalLanguageQuery = location
+        guard let item = try? await MKLocalSearch(request: request).start().mapItems.first else { return nil }
+        return MKCoordinateRegion(
+            center: item.location.coordinate,
+            latitudinalMeters: 180_000,
+            longitudinalMeters: 180_000
+        )
+    }
+
+    /// Resolves each selected trip's string destination with MapKit and fits all
+    /// resulting pins. A missing/ambiguous destination simply omits that trip.
+    private func refreshTripDestinations() async {
+        let requestedTripID = selectedTripID
+        let trips = requestedTripID.map { id in store.myTrips.filter { $0.id == id } } ?? store.myTrips
+        let inputs = trips.compactMap { trip -> (Trip, String)? in
+            guard let location = trip.location?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !location.isEmpty else { return nil }
+            return (trip, location)
+        }
+
+        var resolved: [TripDestinationPin] = []
+        for (trip, location) in inputs {
+            guard !Task.isCancelled else { return }
+            let request = MKLocalSearch.Request()
+            request.naturalLanguageQuery = location
+            if let item = try? await MKLocalSearch(request: request).start().mapItems.first {
+                resolved.append(TripDestinationPin(
+                    tripID: trip.id,
+                    tripName: trip.name,
+                    location: location,
+                    coordinate: item.location.coordinate
+                ))
+            }
+        }
+        guard !Task.isCancelled, requestedTripID == selectedTripID else { return }
+        tripDestinations = resolved
+        fitCamera(to: resolved.map(\.coordinate))
+    }
+
+    private func fitCamera(to coordinates: [CLLocationCoordinate2D]) {
+        guard let first = coordinates.first else { return }
+        var minLatitude = first.latitude
+        var maxLatitude = first.latitude
+        var minLongitude = first.longitude
+        var maxLongitude = first.longitude
+        for coordinate in coordinates.dropFirst() {
+            minLatitude = min(minLatitude, coordinate.latitude)
+            maxLatitude = max(maxLatitude, coordinate.latitude)
+            minLongitude = min(minLongitude, coordinate.longitude)
+            maxLongitude = max(maxLongitude, coordinate.longitude)
+        }
+        let region = MKCoordinateRegion(
+            center: CLLocationCoordinate2D(
+                latitude: (minLatitude + maxLatitude) / 2,
+                longitude: (minLongitude + maxLongitude) / 2
+            ),
+            span: MKCoordinateSpan(
+                latitudeDelta: max((maxLatitude - minLatitude) * 1.45, 0.08),
+                longitudeDelta: max((maxLongitude - minLongitude) * 1.45, 0.08)
+            )
+        )
+        withAnimation(.easeInOut) { position = .region(region) }
     }
 
     /// Move the camera to the current curated focus, zoomed to a neighborhood span.
@@ -822,6 +1536,95 @@ struct CategoryPin: View {
     }
 }
 
+/// Spending-map bubble. Area grows logarithmically so a large hotel bill stands out
+/// without making smaller meals impossible to tap.
+struct ExpenseMapMarker: View {
+    let amount: Double
+    let currencyCode: String
+    let isSelected: Bool
+
+    private var diameter: CGFloat {
+        let scaled = CGFloat(log10(max(amount, 1)) * 7 + 24)
+        return min(max(scaled, 28), 52) + (isSelected ? 6 : 0)
+    }
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(isSelected ? Color.orange : Color.orange.opacity(0.88))
+            Text(amount.formatted(.number.notation(.compactName).precision(.fractionLength(0...1))))
+                .font(.app(size: diameter > 40 ? 11 : 9, weight: .bold))
+                .foregroundStyle(.white)
+                .minimumScaleFactor(0.7)
+                .padding(3)
+        }
+        .frame(width: diameter, height: diameter)
+        .overlay(Circle().strokeBorder(.white, lineWidth: 2.5))
+        .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
+        .accessibilityLabel("Expense \(money(amount, currencyCode))")
+        .animation(.spring(response: 0.3, dampingFraction: 0.75), value: isSelected)
+    }
+}
+
+struct NumberedItineraryPin: View {
+    let number: Int
+    let kind: ItineraryStopKind
+
+    var body: some View {
+        ZStack {
+            Circle().fill(kind.tint)
+            Text("\(number)")
+                .font(.app(.caption, .bold))
+                .foregroundStyle(.white)
+        }
+        .frame(width: 32, height: 32)
+        .overlay(Circle().strokeBorder(.white, lineWidth: 2.5))
+        .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
+    }
+}
+
+struct ExpenseMapCard: View {
+    let pin: ExpenseMapPin
+    let payerName: String
+    let onDetails: () -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label(pin.expense.title, systemImage: "dollarsign.circle.fill")
+                        .font(.app(.headline, .semibold))
+                        .foregroundStyle(.primary)
+                    Text(money(pin.expense.amount, pin.trip.currencyCode))
+                        .font(.app(.title3, .bold))
+                    Text("\(pin.trip.name) · Paid by \(payerName)")
+                        .font(.app(.caption)).foregroundStyle(.secondary)
+                    Text(pin.location.address ?? pin.location.name)
+                        .font(.app(.caption)).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.app(.title3)).foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+
+            Button(action: onDetails) {
+                Label("Expense details", systemImage: "list.bullet.rectangle")
+                    .font(.app(.subheadline, .semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 9)
+            }
+            .buttonStyle(.plain)
+            .glassEffect(.regular.tint(.orange).interactive(), in: .capsule)
+        }
+        .padding(14)
+        .glassEffect(.regular, in: .rect(cornerRadius: 24))
+    }
+}
+
 /// The downward-pointing triangle under a `CategoryPin`.
 struct PinTail: Shape {
     func path(in rect: CGRect) -> Path {
@@ -834,12 +1637,178 @@ struct PinTail: Shape {
     }
 }
 
+/// First-class list companion to the Saved map layer. It works entirely from durable
+/// snapshots, so bookmarks remain browseable before a new MapKit search has run.
+struct SavedPlacesSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let places: [MapPlace]
+    let onSelect: (MapPlace) -> Void
+    let onRemove: (MapPlace) -> Void
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if places.isEmpty {
+                    ContentUnavailableView(
+                        "No saved places",
+                        systemImage: "bookmark",
+                        description: Text("Save a map result and it will appear here.")
+                    )
+                } else {
+                    List {
+                        ForEach(places) { place in
+                            Button {
+                                dismiss()
+                                onSelect(place)
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: place.category.icon)
+                                        .foregroundStyle(.tint)
+                                        .frame(width: 28, height: 28)
+                                        .background(.tint.opacity(0.12), in: .circle)
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(place.name)
+                                            .font(.app(.body, .semibold))
+                                            .foregroundStyle(.primary)
+                                        if let address = place.addressText {
+                                            Text(address)
+                                                .font(.app(.caption))
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(1)
+                                        }
+                                    }
+                                }
+                            }
+                            .swipeActions {
+                                Button(role: .destructive) { onRemove(place) } label: {
+                                    Label("Remove", systemImage: "trash")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Saved places")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
+/// Trip/day/type picker used by every map place card. Adding a place creates a basic
+/// itinerary when needed, then persists through the same shared-trip path as planner edits.
+struct AddPlaceToItinerarySheet: View {
+    @Environment(TripStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+
+    let place: MapPlace
+
+    @State private var tripID: Trip.ID?
+    @State private var dayIndex = 0
+    @State private var kind: ItineraryStopKind = .location
+
+    private var selectedTrip: Trip? {
+        guard let tripID else { return nil }
+        return store.myTrips.first { $0.id == tripID }
+    }
+
+    private var dayCount: Int {
+        guard let trip = selectedTrip else { return 1 }
+        if let count = trip.itinerary?.days.count, count > 0 { return count }
+        guard let start = trip.startDate, let end = trip.endDate else { return 1 }
+        return max((Calendar.current.dateComponents([.day], from: start, to: end).day ?? 0) + 1, 1)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Place") {
+                    Label(place.name, systemImage: place.category.icon)
+                    if let address = place.addressText {
+                        Text(address)
+                            .font(.app(.caption))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if store.myTrips.isEmpty {
+                    ContentUnavailableView(
+                        "Create a trip first",
+                        systemImage: "suitcase",
+                        description: Text("A trip is needed before this place can be added to an itinerary.")
+                    )
+                } else {
+                    Section("Plan") {
+                        Picker("Trip", selection: $tripID) {
+                            ForEach(store.myTrips) { trip in
+                                Text(trip.name).tag(Optional(trip.id))
+                            }
+                        }
+                        Picker("Day", selection: $dayIndex) {
+                            ForEach(0..<dayCount, id: \.self) { index in
+                                Text("Day \(index + 1)").tag(index)
+                            }
+                        }
+                        Picker("Type", selection: $kind) {
+                            ForEach(ItineraryStopKind.allCases) { kind in
+                                Label(kind.label, systemImage: kind.icon).tag(kind)
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Add to itinerary")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Add") { addPlace() }
+                        .disabled(selectedTrip == nil)
+                }
+            }
+            .onAppear {
+                tripID = tripID ?? store.myTrips.first?.id
+                kind = place.category.itineraryKind
+            }
+            .onChange(of: tripID) {
+                dayIndex = min(dayIndex, dayCount - 1)
+            }
+        }
+    }
+
+    private func addPlace() {
+        guard let trip = selectedTrip else { return }
+        var itinerary = trip.itinerary ?? Itinerary()
+        if itinerary.days.isEmpty {
+            itinerary.days = (0..<dayCount).map { _ in ItineraryDay() }
+        }
+        let safeDay = min(max(dayIndex, 0), itinerary.days.count - 1)
+        itinerary.days[safeDay].stops.append(ItineraryStop(
+            name: place.name,
+            kind: kind,
+            latitude: place.coordinate.latitude,
+            longitude: place.coordinate.longitude,
+            address: place.addressText
+        ))
+        store.updateItinerary(itinerary, in: trip.id)
+        dismiss()
+    }
+}
+
 /// The compact bottom card for a selected search-result pin: name + category on the
 /// left, a Look Around thumbnail on the right, address below, and Save / Directions
 /// / Details actions — mirroring Wanderlog's place card.
 struct PlaceCard: View {
     let place: MapPlace
     @Binding var isSaved: Bool
+    let onAddToItinerary: () -> Void
     let onDirections: () -> Void
     let onDetails: () -> Void
     let onClose: () -> Void
@@ -861,7 +1830,7 @@ struct PlaceCard: View {
                     Text(place.category.title)
                         .font(.app(.caption))
                         .foregroundStyle(.secondary)
-                    if let address = place.mapItem.address?.fullAddress {
+                    if let address = place.addressText {
                         Text(address)
                             .font(.app(.caption))
                             .foregroundStyle(.secondary)
@@ -903,6 +1872,15 @@ struct PlaceCard: View {
                 }
                 .buttonStyle(.plain)
                 .glassEffect(.regular.interactive(), in: .capsule)
+
+                Button(action: onAddToItinerary) {
+                    Image(systemName: "calendar.badge.plus")
+                        .font(.app(size: 16, weight: .semibold))
+                        .frame(width: 36, height: 36)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: .circle)
+                .accessibilityLabel("Add to itinerary")
 
                 Spacer(minLength: 0)
             }
@@ -952,6 +1930,7 @@ struct PlaceDetailSheet: View {
 
     let place: MapPlace
     @Binding var isSaved: Bool
+    let onAddToItinerary: () -> Void
 
     @State private var lookAroundScene: MKLookAroundScene?
 
@@ -980,7 +1959,7 @@ struct PlaceDetailSheet: View {
                 }
 
                 VStack(alignment: .leading, spacing: 12) {
-                    if let address = place.mapItem.address?.fullAddress {
+                    if let address = place.addressText {
                         Label(address, systemImage: "mappin.and.ellipse")
                     }
                     if let phone = place.mapItem.phoneNumber {
@@ -1032,6 +2011,18 @@ struct PlaceDetailSheet: View {
                         .glassEffect(.regular.interactive(), in: .circle)
                     }
                 }
+
+                Button {
+                    dismiss()
+                    onAddToItinerary()
+                } label: {
+                    Label("Add to itinerary", systemImage: "calendar.badge.plus")
+                        .font(.app(.headline))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: .capsule)
             }
             .padding(20)
         }
@@ -1047,6 +2038,7 @@ struct FocusPlaceCard: View {
     @Environment(\.openURL) private var openURL
 
     let focus: MapFocus
+    let onAddToItinerary: () -> Void
     let onDirections: () -> Void
     let onDetails: () -> Void
     let onClose: () -> Void
@@ -1169,6 +2161,15 @@ struct FocusPlaceCard: View {
             }
             .buttonStyle(.plain)
             .glassEffect(.regular.interactive(), in: .capsule)
+
+            Button(action: onAddToItinerary) {
+                Image(systemName: "calendar.badge.plus")
+                    .font(.app(size: 17, weight: .semibold))
+                    .frame(width: 46, height: 46)
+            }
+            .buttonStyle(.plain)
+            .glassEffect(.regular.interactive(), in: .circle)
+            .accessibilityLabel("Add to itinerary")
 
             if let phoneURL = focus.phoneURL {
                 actionCircle(icon: "phone.fill", label: "Call") {

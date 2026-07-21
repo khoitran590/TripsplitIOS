@@ -49,6 +49,11 @@ struct ItineraryStop: Identifiable, Codable {
     var time: Date? = nil
     var notes: String = ""
     var cost: Double = 0
+    /// Optional MapKit coordinate. Stops saved before Phase 2 intentionally decode
+    /// these as nil and remain fully usable in the planner.
+    var latitude: Double? = nil
+    var longitude: Double? = nil
+    var address: String? = nil
 
     init(
         id: UUID = UUID(),
@@ -56,7 +61,10 @@ struct ItineraryStop: Identifiable, Codable {
         kind: ItineraryStopKind = .activity,
         time: Date? = nil,
         notes: String = "",
-        cost: Double = 0
+        cost: Double = 0,
+        latitude: Double? = nil,
+        longitude: Double? = nil,
+        address: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -64,9 +72,12 @@ struct ItineraryStop: Identifiable, Codable {
         self.time = time
         self.notes = notes
         self.cost = cost
+        self.latitude = latitude
+        self.longitude = longitude
+        self.address = address
     }
 
-    private enum CodingKeys: String, CodingKey { case id, name, kind, time, notes, cost }
+    private enum CodingKeys: String, CodingKey { case id, name, kind, time, notes, cost, latitude, longitude, address }
 
     // Every field decodes with a default so trips stored before a field existed keep loading.
     init(from decoder: Decoder) throws {
@@ -77,6 +88,14 @@ struct ItineraryStop: Identifiable, Codable {
         time = try c.decodeIfPresent(Date.self, forKey: .time)
         notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
         cost = try c.decodeIfPresent(Double.self, forKey: .cost) ?? 0
+        latitude = try c.decodeIfPresent(Double.self, forKey: .latitude)
+        longitude = try c.decodeIfPresent(Double.self, forKey: .longitude)
+        address = try c.decodeIfPresent(String.self, forKey: .address)
+    }
+
+    var coordinate: CLLocationCoordinate2D? {
+        guard let latitude, let longitude else { return nil }
+        return CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
     }
 
     /// Minutes past midnight for timeline ordering; compares only the time-of-day
@@ -951,7 +970,19 @@ struct ItineraryDetailView: View {
             .presentationDragIndicator(.visible)
         }
         .sheet(item: $expenseStop) { stop in
-            AddExpenseView(tripID: tripID, prefillTitle: stop.name, prefillAmount: stop.cost)
+            AddExpenseView(
+                tripID: tripID,
+                prefillTitle: stop.name,
+                prefillAmount: stop.cost,
+                prefillLocation: stop.coordinate.map {
+                    ExpenseLocation(
+                        name: stop.name,
+                        address: stop.address,
+                        latitude: $0.latitude,
+                        longitude: $0.longitude
+                    )
+                }
+            )
         }
         .alert("Total budget", isPresented: $isEditingBudget) {
             TextField("Amount", text: $budgetText)
@@ -2003,6 +2034,9 @@ struct ItineraryStopEditorView: View {
     @State private var time = Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: Date()) ?? Date()
     @State private var costText = ""
     @State private var notes = ""
+    @State private var latitude: Double?
+    @State private var longitude: Double?
+    @State private var resolvedAddress: String?
 
     @StateObject private var placeCompleter = StopPlaceCompleter()
     @FocusState private var nameFocused: Bool
@@ -2163,6 +2197,9 @@ struct ItineraryStopEditorView: View {
                 }
                 costText = stop.cost > 0 ? String(format: "%.2f", stop.cost) : ""
                 notes = stop.notes
+                latitude = stop.latitude
+                longitude = stop.longitude
+                resolvedAddress = stop.address
             }
             .task {
                 placeCompleter.setKind(kind)
@@ -2177,6 +2214,9 @@ struct ItineraryStopEditorView: View {
                     isSelectingPlace = false
                     return
                 }
+                latitude = nil
+                longitude = nil
+                resolvedAddress = nil
                 placeCompleter.update(query: name)
             }
         }
@@ -2187,6 +2227,16 @@ struct ItineraryStopEditorView: View {
         names[kind] = suggestion.title
         placeCompleter.clear()
         nameFocused = false
+        Task { await resolve(suggestion) }
+    }
+
+    private func resolve(_ suggestion: MKLocalSearchCompletion) async {
+        let request = MKLocalSearch.Request(completion: suggestion)
+        guard let item = try? await MKLocalSearch(request: request).start().mapItems.first,
+              names[kind] == suggestion.title else { return }
+        latitude = item.location.coordinate.latitude
+        longitude = item.location.coordinate.longitude
+        resolvedAddress = item.address?.fullAddress
     }
 
     /// Geocodes the trip's destination once so suggestions rank places there rather
@@ -2209,7 +2259,10 @@ struct ItineraryStopEditorView: View {
             kind: kind,
             time: hasTime ? time : nil,
             notes: notes.trimmingCharacters(in: .whitespacesAndNewlines),
-            cost: SplitEngine.roundToTwo(max(Double(costText) ?? 0, 0))
+            cost: SplitEngine.roundToTwo(max(Double(costText) ?? 0, 0)),
+            latitude: latitude,
+            longitude: longitude,
+            address: resolvedAddress
         )
         onSave(saved)
         dismiss()
