@@ -1,6 +1,7 @@
 import SwiftUI
 import PhotosUI
 import UIKit
+import MapKit
 
 // MARK: - Profile model
 
@@ -441,44 +442,435 @@ struct ProfileDetailView: View {
     }
 }
 
-/// A passport-stamp style card for a visited place: a location glyph on a tinted
-/// panel, with the place name and (when known) the month/year shown beneath it.
-/// Modeled on the reference "Where … has been" cards, styled to the app theme.
+/// Reads the region suffix of a place name ("Osaka, Japan" → JP). Used both for the
+/// sticker's country chip and to decide which languages `PlaceTheme` should read the
+/// name in.
+enum PlaceRegion {
+    /// Languages spoken in a region, for regions whose place names commonly use them.
+    /// English is always active, so an English name works anywhere.
+    private static let languagesByRegion: [String: [String]] = [
+        "ES": ["es"], "MX": ["es"], "AR": ["es"], "CL": ["es"], "CO": ["es"], "PE": ["es"],
+        "CR": ["es"], "CU": ["es"], "DO": ["es"], "EC": ["es"], "GT": ["es"], "HN": ["es"],
+        "NI": ["es"], "PA": ["es"], "PY": ["es"], "SV": ["es"], "UY": ["es"], "VE": ["es"],
+        "BO": ["es"], "PR": ["es"],
+        "PT": ["pt"], "BR": ["pt"],
+        "FR": ["fr"], "MC": ["fr"], "SN": ["fr"], "MA": ["fr"], "PF": ["fr"], "NC": ["fr"],
+        "IT": ["it"], "SM": ["it"], "VA": ["it"],
+        "DE": ["de"], "AT": ["de"], "LI": ["de"], "CH": ["de", "fr", "it"], "BE": ["fr", "nl"],
+        "NL": ["nl"], "SE": ["sv"], "NO": ["no"], "DK": ["da"], "IS": ["no"],
+        "JP": ["ja"], "CN": ["zh"], "TW": ["zh"], "HK": ["zh"], "MO": ["zh"], "SG": ["zh"],
+        "VN": ["vi"],
+    ]
+
+    /// US state abbreviations, which MapKit uses for home-country places ("Yucca Valley,
+    /// CA"). Several collide with country codes — MT is Montana far more often than it is
+    /// Malta — so they resolve to US instead of being read as ISO country codes.
+    private static let usStateCodes: Set<String> = [
+        "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN",
+        "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV",
+        "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN",
+        "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "DC",
+    ]
+
+    /// The ISO code for the last comma-separated component, or nil when it is not a
+    /// country ("California" is a state, so the sticker falls back to initials).
+    static func isoCode(forRegionIn name: String) -> String? {
+        guard let region = name.split(separator: ",").last.map({ $0.trimmingCharacters(in: .whitespaces) }),
+              !region.isEmpty, name.contains(",") else { return nil }
+        if region.count == 2, region.allSatisfy(\.isLetter) {
+            let code = region.uppercased()
+            return usStateCodes.contains(code) ? "US" : code
+        }
+        return Locale.Region.isoRegions.first {
+            Locale.current.localizedString(forRegionCode: $0.identifier)?.caseInsensitiveCompare(region) == .orderedSame
+        }?.identifier
+    }
+
+    /// Languages to read a place name in: the region's, plus English, plus whatever the
+    /// name's own script implies (a name in kana/hanzi is Japanese/Chinese regardless of
+    /// how the region was written).
+    static func languages(forRegionIn name: String) -> Set<String> {
+        var languages: Set<String> = ["en"]
+        if let code = isoCode(forRegionIn: name), let regional = languagesByRegion[code] {
+            languages.formUnion(regional)
+        }
+        if name.unicodeScalars.contains(where: { (0x3040...0x9FFF).contains($0.value) }) {
+            languages.formUnion(["ja", "zh"])
+        }
+        return languages
+    }
+
+    /// A short code for the sticker: the ISO country code when the suffix is a country,
+    /// otherwise initials ("California" → CA, "New South Wales" → NS).
+    static func displayCode(for name: String) -> String? {
+        let parts = name.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard parts.count > 1, let region = parts.last, !region.isEmpty else { return nil }
+        // A state abbreviation stays as written — the chip shows CA, not US.
+        if region.count == 2, region.allSatisfy(\.isLetter) { return region.uppercased() }
+        if let iso = isoCode(forRegionIn: name) { return iso }
+        let words = region.split(separator: " ")
+        if words.count > 1 {
+            return words.prefix(2).compactMap(\.first).map(String.init).joined().uppercased()
+        }
+        return String(region.prefix(2)).uppercased()
+    }
+}
+
+/// The kind of place a visited location is, inferred from its name. Each kind
+/// picks the sticker's silhouette, glyph, and color, so "Lake Tahoe" and "Lake
+/// Arrowhead" share one lake sticker instead of needing per-city artwork.
+enum PlaceTheme {
+    case city, mountain, lake, coast, island, desert, forest, snow, historic
+
+    /// One term that hints at a theme.
+    ///
+    /// Terms are matched per *word*, not as raw substrings, so "Portland" is not a port
+    /// and "Islamabad" is not an island. `languages` restricts a term to places whose
+    /// region speaks it (French "port"/"mont" only apply in France, never to "Portland,
+    /// Oregon"); `nil` means the term is checked everywhere.
+    private struct Term {
+        let word: String
+        let theme: PlaceTheme
+        let weight: Int
+        var languages: [String]? = nil
+        /// Also match as the tail of a longer word, for languages that compound
+        /// ("Bodensee" → see, "Schwarzwald" → wald).
+        var compounds = false
+    }
+
+    /// Scored terms. Strong nouns (lake, island, desert) outweigh soft ones (valley,
+    /// park), so "Death Valley Desert" lands on desert and "Salt Lake City" on city
+    /// once the head-noun bonus in `score(_:)` is applied.
+    private static let terms: [Term] = [
+        // English — the head noun usually comes last ("Yucca Valley", "Long Beach").
+        Term(word: "lake", theme: .lake, weight: 4), Term(word: "lakes", theme: .lake, weight: 4),
+        Term(word: "loch", theme: .lake, weight: 4), Term(word: "reservoir", theme: .lake, weight: 3),
+        Term(word: "pond", theme: .lake, weight: 2),
+        Term(word: "island", theme: .island, weight: 4), Term(word: "islands", theme: .island, weight: 4),
+        Term(word: "isle", theme: .island, weight: 4), Term(word: "isles", theme: .island, weight: 4),
+        Term(word: "atoll", theme: .island, weight: 4), Term(word: "cay", theme: .island, weight: 3),
+        Term(word: "keys", theme: .island, weight: 3),
+        Term(word: "beach", theme: .coast, weight: 4), Term(word: "shores", theme: .coast, weight: 3),
+        Term(word: "shore", theme: .coast, weight: 3), Term(word: "coast", theme: .coast, weight: 4),
+        Term(word: "bay", theme: .coast, weight: 3), Term(word: "cove", theme: .coast, weight: 3),
+        Term(word: "harbor", theme: .coast, weight: 3), Term(word: "harbour", theme: .coast, weight: 3),
+        Term(word: "gulf", theme: .coast, weight: 3), Term(word: "seaside", theme: .coast, weight: 4),
+        Term(word: "riviera", theme: .coast, weight: 4), Term(word: "pier", theme: .coast, weight: 2),
+        Term(word: "ski", theme: .snow, weight: 4), Term(word: "snow", theme: .snow, weight: 3),
+        Term(word: "alps", theme: .snow, weight: 4), Term(word: "alpine", theme: .snow, weight: 3),
+        Term(word: "glacier", theme: .snow, weight: 4), Term(word: "fjord", theme: .snow, weight: 3),
+        Term(word: "desert", theme: .desert, weight: 4), Term(word: "canyon", theme: .desert, weight: 4),
+        Term(word: "mesa", theme: .desert, weight: 3), Term(word: "dunes", theme: .desert, weight: 4),
+        Term(word: "oasis", theme: .desert, weight: 4), Term(word: "badlands", theme: .desert, weight: 3),
+        // Desert flora and the named deserts themselves — the only way "Yucca Valley"
+        // and "Joshua Tree" read as desert rather than as a valley in the mountains.
+        Term(word: "yucca", theme: .desert, weight: 4), Term(word: "joshua", theme: .desert, weight: 4),
+        Term(word: "mojave", theme: .desert, weight: 4), Term(word: "sahara", theme: .desert, weight: 4),
+        Term(word: "sonoran", theme: .desert, weight: 4), Term(word: "gobi", theme: .desert, weight: 4),
+        Term(word: "forest", theme: .forest, weight: 4), Term(word: "woods", theme: .forest, weight: 3),
+        Term(word: "grove", theme: .forest, weight: 2), Term(word: "pines", theme: .forest, weight: 3),
+        Term(word: "redwood", theme: .forest, weight: 3), Term(word: "redwoods", theme: .forest, weight: 3),
+        Term(word: "jungle", theme: .forest, weight: 4), Term(word: "park", theme: .forest, weight: 2),
+        Term(word: "mount", theme: .mountain, weight: 4), Term(word: "mountain", theme: .mountain, weight: 4),
+        Term(word: "mountains", theme: .mountain, weight: 4), Term(word: "peak", theme: .mountain, weight: 3),
+        Term(word: "summit", theme: .mountain, weight: 3), Term(word: "sierra", theme: .mountain, weight: 3),
+        Term(word: "ridge", theme: .mountain, weight: 2), Term(word: "valley", theme: .mountain, weight: 2),
+        Term(word: "highlands", theme: .mountain, weight: 3), Term(word: "andes", theme: .mountain, weight: 4),
+        Term(word: "castle", theme: .historic, weight: 3), Term(word: "abbey", theme: .historic, weight: 3),
+        Term(word: "cathedral", theme: .historic, weight: 3), Term(word: "temple", theme: .historic, weight: 3),
+        Term(word: "ruins", theme: .historic, weight: 4), Term(word: "historic", theme: .historic, weight: 3),
+        Term(word: "city", theme: .city, weight: 4), Term(word: "town", theme: .city, weight: 3),
+
+        // Spanish / Portuguese — head noun comes first ("Playa del Carmen", "Isla Mujeres").
+        Term(word: "lago", theme: .lake, weight: 4, languages: ["es", "pt", "it"]),
+        Term(word: "laguna", theme: .lake, weight: 3, languages: ["es", "pt", "it"]),
+        Term(word: "isla", theme: .island, weight: 4, languages: ["es"]),
+        Term(word: "ilha", theme: .island, weight: 4, languages: ["pt"]),
+        Term(word: "playa", theme: .coast, weight: 4, languages: ["es"]),
+        Term(word: "praia", theme: .coast, weight: 4, languages: ["pt"]),
+        Term(word: "costa", theme: .coast, weight: 3, languages: ["es", "pt", "it"]),
+        Term(word: "puerto", theme: .coast, weight: 3, languages: ["es"]),
+        Term(word: "mar", theme: .coast, weight: 3, languages: ["es", "pt"]),
+        Term(word: "monte", theme: .mountain, weight: 3, languages: ["es", "pt", "it"]),
+        Term(word: "montana", theme: .mountain, weight: 3, languages: ["es"]),
+        Term(word: "valle", theme: .mountain, weight: 2, languages: ["es", "it"]),
+        Term(word: "bosque", theme: .forest, weight: 4, languages: ["es"]),
+        Term(word: "desierto", theme: .desert, weight: 4, languages: ["es"]),
+        Term(word: "ciudad", theme: .city, weight: 4, languages: ["es"]),
+
+        // French / Italian.
+        Term(word: "lac", theme: .lake, weight: 4, languages: ["fr"]),
+        Term(word: "ile", theme: .island, weight: 4, languages: ["fr"]),
+        Term(word: "isola", theme: .island, weight: 4, languages: ["it"]),
+        Term(word: "plage", theme: .coast, weight: 4, languages: ["fr"]),
+        Term(word: "spiaggia", theme: .coast, weight: 4, languages: ["it"]),
+        Term(word: "port", theme: .coast, weight: 3, languages: ["fr"]),
+        Term(word: "mont", theme: .mountain, weight: 3, languages: ["fr"]),
+        Term(word: "foret", theme: .forest, weight: 4, languages: ["fr"]),
+        Term(word: "foresta", theme: .forest, weight: 4, languages: ["it"]),
+
+        // German / Dutch / Nordic — compounding, so these also match word endings.
+        Term(word: "see", theme: .lake, weight: 4, languages: ["de", "nl"], compounds: true),
+        Term(word: "insel", theme: .island, weight: 4, languages: ["de"], compounds: true),
+        Term(word: "strand", theme: .coast, weight: 4, languages: ["de", "nl", "sv", "da", "no"], compounds: true),
+        Term(word: "hafen", theme: .coast, weight: 3, languages: ["de"], compounds: true),
+        Term(word: "alm", theme: .snow, weight: 3, languages: ["de"], compounds: true),
+        Term(word: "wald", theme: .forest, weight: 4, languages: ["de"], compounds: true),
+        Term(word: "stadt", theme: .city, weight: 4, languages: ["de"], compounds: true),
+        // "-berg" and "-burg" are deliberately absent: Hamburg, Nürnberg and Heidelberg
+        // are cities, so those endings misfire far more often than they help.
+        Term(word: "fjell", theme: .mountain, weight: 3, languages: ["no", "sv"], compounds: true),
+
+        // CJK / Vietnamese — single characters, matched as substrings (no word breaks).
+        Term(word: "湖", theme: .lake, weight: 4, languages: ["ja", "zh"]),
+        Term(word: "島", theme: .island, weight: 4, languages: ["ja", "zh"]),
+        Term(word: "岛", theme: .island, weight: 4, languages: ["zh"]),
+        Term(word: "海", theme: .coast, weight: 3, languages: ["ja", "zh"]),
+        Term(word: "浜", theme: .coast, weight: 3, languages: ["ja"]),
+        Term(word: "山", theme: .mountain, weight: 3, languages: ["ja", "zh"]),
+        Term(word: "森", theme: .forest, weight: 4, languages: ["ja", "zh"]),
+        Term(word: "寺", theme: .historic, weight: 4, languages: ["ja", "zh"]),
+        Term(word: "市", theme: .city, weight: 4, languages: ["ja", "zh"]),
+        Term(word: "京", theme: .city, weight: 3, languages: ["ja", "zh"]),
+        Term(word: "hồ", theme: .lake, weight: 4, languages: ["vi"]),
+        Term(word: "đảo", theme: .island, weight: 4, languages: ["vi"]),
+        Term(word: "biển", theme: .coast, weight: 4, languages: ["vi"]),
+        Term(word: "núi", theme: .mountain, weight: 4, languages: ["vi"]),
+    ]
+
+    /// Regions that are islands end to end, so a place there is an island holiday even
+    /// when its name says nothing ("Malé, Maldives"). Weaker than an explicit term.
+    private static let islandRegions: Set<String> = [
+        "MV", "FJ", "BS", "SC", "MU", "BB", "AG", "LC", "GD", "VC", "KN", "DM", "JM",
+        "TC", "VG", "VI", "KY", "BM", "AW", "CW", "PF", "NC", "WS", "TO", "VU", "CK",
+        "PW", "FM", "MH", "KI", "TV", "NR", "MT", "CY", "GU", "MP", "AS", "BL", "MF",
+    ]
+
+    /// Generalizes a place name to a theme by scoring every term that matches, weighted
+    /// by where it appears: the place itself counts double the region suffix, and a term
+    /// in the head-noun position for its language (last word in English/German, first in
+    /// Romance languages) gets a bonus. Unrecognized names read as a city, which is what
+    /// most typed destinations ("Los Angeles", "Osaka") actually are.
+    static func inferred(from name: String) -> PlaceTheme {
+        let components = name.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        let head = components.first ?? name
+        let tail = components.dropFirst().joined(separator: " ")
+        let languages = PlaceRegion.languages(forRegionIn: name)
+
+        var scores: [PlaceTheme: Int] = [:]
+        score(head, languages: languages, multiplier: 2, positional: true, into: &scores)
+        score(tail, languages: languages, multiplier: 1, positional: false, into: &scores)
+
+        if let region = PlaceRegion.isoCode(forRegionIn: name), islandRegions.contains(region) {
+            scores[.island, default: 0] += 3
+        }
+
+        // Ties resolve by this order so the same name always yields the same sticker.
+        let ranked: [PlaceTheme] = [.lake, .island, .coast, .snow, .desert, .forest, .mountain, .historic, .city]
+        var best = PlaceTheme.city
+        var bestScore = 0
+        for theme in ranked where (scores[theme] ?? 0) > bestScore {
+            bestScore = scores[theme] ?? 0
+            best = theme
+        }
+        return bestScore > 0 ? best : .city
+    }
+
+    /// Adds every matching term's score for one part of the name.
+    private static func score(_ part: String, languages: Set<String>, multiplier: Int,
+                              positional: Bool, into scores: inout [PlaceTheme: Int]) {
+        guard !part.isEmpty else { return }
+        let text = part.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil)
+        let words = text.split { !$0.isLetter }.map(String.init)
+        guard !words.isEmpty else { return }
+        // CJK terms are matched against the unfolded text, which keeps their characters.
+        let raw = part.lowercased()
+
+        for term in terms {
+            if let required = term.languages, required.allSatisfy({ !languages.contains($0) }) { continue }
+
+            var matchedIndex: Int?
+            if term.word.unicodeScalars.allSatisfy({ $0.isASCII }) {
+                // Plain ASCII terms match a folded word, so "Málaga" and "Malaga" behave alike.
+                let needle = term.word
+                matchedIndex = words.firstIndex { $0 == needle || (term.compounds && $0.count > needle.count && $0.hasSuffix(needle)) }
+            } else if term.word.contains(where: { $0.isASCII }) {
+                // Accented Latin terms (Vietnamese) must keep their marks — folded, "hồ"
+                // would collide with the "Ho" in "Ho Chi Minh City".
+                matchedIndex = part.lowercased().split { !$0.isLetter }.firstIndex { String($0) == term.word }
+            } else if raw.contains(term.word) {
+                // CJK has no word breaks, so these match as substrings.
+                matchedIndex = raw.hasPrefix(term.word) ? 0 : words.count - 1
+            }
+            guard let matchedIndex else { continue }
+
+            var points = term.weight
+            if positional {
+                let headFinal = term.languages.map { $0.contains(where: { ["de", "nl", "sv", "da", "no", "ja", "zh", "vi"].contains($0) }) } ?? true
+                let inHeadPosition = headFinal ? matchedIndex == words.count - 1 : matchedIndex == 0
+                if inHeadPosition { points += 2 }
+            }
+            scores[term.theme, default: 0] += points * multiplier
+        }
+    }
+
+    var glyph: String {
+        switch self {
+        case .city: "building.2"
+        case .mountain: "mountain.2"
+        case .lake: "water.waves"
+        case .coast: "beach.umbrella"
+        case .island: "sailboat"
+        case .desert: "sun.max"
+        case .forest: "tree"
+        case .snow: "snowflake"
+        case .historic: "building.columns"
+        }
+    }
+
+    /// A second, smaller glyph tucked behind the main one so each sticker reads as
+    /// a little scene rather than a lone icon.
+    var accentGlyph: String {
+        switch self {
+        case .city: "car"
+        case .mountain: "figure.hiking"
+        case .lake: "tree"
+        case .coast: "sun.max"
+        case .island: "airplane"
+        case .desert: "tent"
+        case .forest: "bird"
+        case .snow: "cablecar"
+        case .historic: "camera"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .city: Color(light: 0x4F46E5, dark: 0x9BA3FF)
+        case .mountain: Color(light: 0x2F7D5C, dark: 0x74D3A8)
+        case .lake: Color(light: 0x1D4ED8, dark: 0x8AB4FF)
+        case .coast: Color(light: 0x0E7490, dark: 0x67D8E8)
+        case .island: Color(light: 0xB45309, dark: 0xF2B366)
+        case .desert: Color(light: 0xA65215, dark: 0xEFA96B)
+        case .forest: Color(light: 0x3F6212, dark: 0xA6CE6A)
+        case .snow: Color(light: 0x475B8A, dark: 0xA7BAEA)
+        case .historic: Color(light: 0x8A2E62, dark: 0xE2A0C6)
+        }
+    }
+
+    var outline: PlaceStickerShape.Kind {
+        switch self {
+        case .city: .roundedRect
+        case .mountain: .hexagon
+        case .lake: .capsule
+        case .coast: .capsule
+        case .island: .circle
+        case .desert: .hexagon
+        case .forest: .arch
+        case .snow: .hexagon
+        case .historic: .arch
+        }
+    }
+}
+
+/// The die-cut silhouettes the stickers are cut from.
+struct PlaceStickerShape: Shape, InsettableShape {
+    enum Kind { case roundedRect, capsule, circle, hexagon, arch }
+
+    var kind: Kind
+    var insetAmount: CGFloat = 0
+
+    func inset(by amount: CGFloat) -> Self {
+        var copy = self
+        copy.insetAmount += amount
+        return copy
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let r = rect.insetBy(dx: insetAmount, dy: insetAmount)
+        switch kind {
+        case .roundedRect:
+            return Path(roundedRect: r, cornerRadius: min(r.width, r.height) * 0.22)
+        case .capsule:
+            return Path(roundedRect: r, cornerRadius: min(r.width, r.height) / 2)
+        case .circle:
+            return Path(ellipseIn: r)
+        case .hexagon:
+            var path = Path()
+            for corner in 0..<6 {
+                let angle = Double(corner) * .pi / 3
+                let point = CGPoint(x: r.midX + r.width / 2 * cos(angle),
+                                    y: r.midY + r.height / 2 * sin(angle))
+                if corner == 0 { path.move(to: point) } else { path.addLine(to: point) }
+            }
+            path.closeSubpath()
+            return path
+        case .arch:
+            // A domed top with softly rounded bottom corners — a stamp/plaque outline.
+            let foot = r.width * 0.16
+            var path = Path()
+            path.move(to: CGPoint(x: r.minX, y: r.midY))
+            path.addLine(to: CGPoint(x: r.minX, y: r.maxY - foot))
+            path.addQuadCurve(to: CGPoint(x: r.minX + foot, y: r.maxY),
+                              control: CGPoint(x: r.minX, y: r.maxY))
+            path.addLine(to: CGPoint(x: r.maxX - foot, y: r.maxY))
+            path.addQuadCurve(to: CGPoint(x: r.maxX, y: r.maxY - foot),
+                              control: CGPoint(x: r.maxX, y: r.maxY))
+            path.addLine(to: CGPoint(x: r.maxX, y: r.midY))
+            path.addArc(center: CGPoint(x: r.midX, y: r.midY), radius: r.width / 2,
+                        startAngle: .degrees(0), endAngle: .degrees(180), clockwise: true)
+            path.closeSubpath()
+            return path
+        }
+    }
+}
+
+/// A die-cut travel sticker for a visited place: the place name, a themed glyph,
+/// and a region code inside a themed silhouette, tilted like it was stuck onto a
+/// suitcase. The theme generalizes the location (city / lake / mountain / …) so
+/// every place gets artwork without needing per-destination illustrations.
 struct VisitedPlaceCard: View {
     let place: VisitedPlace
 
-    /// Deterministic accent per place so the rail reads as a varied set of stamps
-    /// rather than one repeated color.
-    private static let tints: [UInt32] = [0x6366F1, 0x0EA5E9, 0x10B981, 0xF59E0B, 0xEC4899, 0x14B8A6]
-    private var tint: Color {
-        Color(hex: Self.tints[abs(place.id.hashValue) % Self.tints.count])
+    private var theme: PlaceTheme { PlaceTheme.inferred(from: place.name) }
+
+    /// The place name without its region suffix — what goes on the sticker itself.
+    private var shortName: String {
+        place.name.split(separator: ",").first.map { $0.trimmingCharacters(in: .whitespaces) } ?? place.name
     }
+
+    /// The region suffix reduced to a short code: an ISO country code when the name
+    /// is a country ("Japan" → JP), otherwise initials ("California" → CA).
+    private var regionCode: String? { PlaceRegion.displayCode(for: place.name) }
 
     private var monthYear: String? {
         place.date?.formatted(.dateTime.month(.wide).year())
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ZStack(alignment: .topLeading) {
-                RoundedRectangle(cornerRadius: 20)
-                    .fill(tint.opacity(0.14))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 20)
-                            .strokeBorder(tint.opacity(0.35), lineWidth: 1.5)
-                    }
-                Image(systemName: "airplane")
-                    .font(.app(size: 15, weight: .semibold))
-                    .foregroundStyle(tint)
-                    .padding(14)
-                Image(systemName: "globe.americas.fill")
-                    .font(.app(size: 46, weight: .regular))
-                    .foregroundStyle(tint.opacity(0.9))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-            }
-            .frame(width: 150, height: 132)
+    /// A stable per-place tilt (±5°) so the rail looks hand-stuck. Uses a seeded
+    /// hash rather than `hashValue`, which is randomized on every launch.
+    private var tilt: Double {
+        var seed: UInt64 = 5381
+        for scalar in place.id.unicodeScalars { seed = seed &* 33 &+ UInt64(scalar.value) }
+        return Double(seed % 11) - 5
+    }
 
-            Text(place.name)
+    /// Circles and hexagons lose their corners, so their contents need more inset.
+    private var contentInset: CGFloat {
+        switch theme.outline {
+        case .circle, .hexagon: 24
+        case .arch: 18
+        case .roundedRect, .capsule: 16
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sticker
+                .rotationEffect(.degrees(tilt))
+                .frame(width: 158, height: 158)
+
+            Text(verbatim: place.name)
                 .font(.app(.subheadline, .semibold))
                 .lineLimit(1)
             Text(verbatim: monthYear ?? " ")
@@ -486,7 +878,50 @@ struct VisitedPlaceCard: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
-        .frame(width: 150, alignment: .leading)
+        .frame(width: 158, alignment: .leading)
+    }
+
+    private var sticker: some View {
+        let shape = PlaceStickerShape(kind: theme.outline)
+        return ZStack {
+            shape
+                .fill(Theme.surface)
+                .overlay { shape.fill(theme.tint.opacity(0.07)) }
+                .overlay { shape.strokeBorder(theme.tint, lineWidth: 2.5) }
+                .overlay { shape.inset(by: 7).strokeBorder(theme.tint.opacity(0.3), lineWidth: 1) }
+                .shadow(color: Theme.elevatedShadow, radius: 8, x: 0, y: 4)
+
+            VStack(spacing: 4) {
+                Text(verbatim: shortName)
+                    .font(.app(size: 16, weight: .heavy))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.65)
+
+                ZStack(alignment: .bottomTrailing) {
+                    Image(systemName: theme.glyph)
+                        .font(.app(size: 30, weight: .light))
+                    Image(systemName: theme.accentGlyph)
+                        .font(.app(size: 13, weight: .light))
+                        .offset(x: 14, y: 4)
+                }
+                .padding(.top, 2)
+
+                if let regionCode {
+                    Text(verbatim: regionCode)
+                        .font(.app(size: 10, weight: .bold))
+                        .tracking(1.5)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background {
+                            Capsule().fill(theme.tint.opacity(0.14))
+                        }
+                }
+            }
+            .foregroundStyle(theme.tint)
+            .padding(contentInset)
+        }
+        .frame(width: 140, height: 140)
     }
 }
 
@@ -586,6 +1021,9 @@ struct EditProfileView: View {
     /// avatar. `imageData == nil` alone just means no local copy (e.g. after reinstall).
     @State private var photoRemoved = false
     @State private var isSaving = false
+    /// Apple Maps autocomplete for the "Where I've been" field.
+    @StateObject private var placeCompleter = PlaceSearchCompleter()
+    @State private var isResolvingPlace = false
 
     /// Whether the account has an avatar this sheet can show/remove: a locally picked
     /// photo, or the cloud avatar (still present after reinstalls).
@@ -687,18 +1125,77 @@ struct EditProfileView: View {
             .onDelete { places.remove(atOffsets: $0) }
 
             HStack {
-                TextField("Add a place (e.g. Tokyo, Japan)", text: $newPlace)
+                TextField("Search a place (e.g. Tokyo)", text: $newPlace)
+                    .autocorrectionDisabled()
                     .onSubmit(addPlace)
-                Button(action: addPlace) {
-                    Image(systemName: "plus.circle.fill")
+                if isResolvingPlace {
+                    ProgressView()
+                } else {
+                    Button(action: addPlace) {
+                        Image(systemName: "plus.circle.fill")
+                    }
+                    .disabled(newPlace.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
-                .disabled(newPlace.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            .onChange(of: newPlace) { _, value in
+                placeCompleter.update(query: value)
+            }
+
+            ForEach(Array(placeCompleter.suggestions.prefix(5).enumerated()), id: \.offset) { _, suggestion in
+                Button {
+                    Task { await select(suggestion) }
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "mappin.circle.fill")
+                            .foregroundStyle(Theme.accent)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(verbatim: suggestion.title)
+                                .font(.app(.subheadline))
+                                .foregroundStyle(.primary)
+                            if !suggestion.subtitle.isEmpty {
+                                Text(verbatim: suggestion.subtitle)
+                                    .font(.app(.caption))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
             }
         } header: {
             Text("Where I've been")
         } footer: {
             Text("Locations from your trips are added to your profile automatically.")
         }
+    }
+
+    /// Turns a tapped suggestion into a "Place, Region" name. Resolving the completion
+    /// gives the placemark, so the region is the state for home-country places and the
+    /// country for foreign ones ("Yucca Valley, California" / "Osaka, Japan") — which is
+    /// also what `PlaceTheme` reads to pick the right language for its keywords.
+    private func select(_ suggestion: MKLocalSearchCompletion) async {
+        isResolvingPlace = true
+        defer { isResolvingPlace = false }
+
+        var name = suggestion.subtitle.isEmpty ? suggestion.title : "\(suggestion.title), \(suggestion.subtitle)"
+        let request = MKLocalSearch.Request(completion: suggestion)
+        if let context = try? await MKLocalSearch(request: request).start()
+            .mapItems.first?.addressRepresentations?.cityWithContext {
+            if context.localizedCaseInsensitiveContains(suggestion.title) {
+                name = context
+            } else if let region = context.split(separator: ",").last {
+                // A landmark ("Joshua Tree National Park") keeps its own name; only the
+                // region is taken from the city context.
+                name = "\(suggestion.title),\(region)"
+            }
+        }
+
+        newPlace = name
+        placeCompleter.clear()
+        addPlace()
     }
 
     private func addPlace() {
