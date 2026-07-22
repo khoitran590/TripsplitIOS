@@ -162,60 +162,79 @@ struct ExploreOnboardingView: View {
 
                 Button {
                     if page == pages.count - 1 {
-                        onBuildItinerary()
+                        onDismiss()
                     } else {
                         withAnimation(.snappy) { page += 1 }
                     }
                 } label: {
-                    Label(page == pages.count - 1 ? "Build my itinerary" : "Continue",
-                          systemImage: page == pages.count - 1 ? "arrow.right" : "chevron.right")
+                    Label(page == pages.count - 1 ? "Start exploring" : "Continue",
+                          systemImage: page == pages.count - 1 ? "sparkles" : "chevron.right")
                         .font(.app(.headline))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Theme.onAccent)
                         .frame(maxWidth: .infinity, minHeight: 54)
                 }
                 .buttonStyle(.plain)
                 .background(Theme.accent, in: .capsule)
                 .padding(.horizontal, 24)
-                .padding(.bottom, 22)
+
+                if page == pages.count - 1 {
+                    Button(action: onBuildItinerary) {
+                        Label("Or build from scratch", systemImage: "plus")
+                            .font(.app(.subheadline, .semibold))
+                            .foregroundStyle(.primary)
+                            .frame(maxWidth: .infinity, minHeight: 48)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Opens a new blank itinerary")
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
+
+                Spacer().frame(height: 18)
             }
         }
         .interactiveDismissDisabled()
     }
 
     private func explorePage(_ item: Page, index: Int) -> some View {
-        VStack(spacing: 28) {
-            ZStack {
-                Circle()
-                    .fill(Theme.accent.opacity(0.12))
-                    .frame(width: 180, height: 180)
-                Circle()
-                    .stroke(Theme.accent.opacity(0.18), lineWidth: 1)
-                    .frame(width: 220, height: 220)
-                Image(systemName: item.icon)
-                    .font(.app(size: 70, weight: .medium))
-                    .foregroundStyle(
-                        LinearGradient(colors: [Theme.accent, Theme.accentSecondary],
-                                       startPoint: .topLeading, endPoint: .bottomTrailing)
-                    )
-                    .symbolEffect(.bounce, value: page == index)
-            }
+        ScrollView {
+            VStack(spacing: 28) {
+                ZStack {
+                    Circle()
+                        .fill(Theme.accent.opacity(0.12))
+                        .frame(width: 160, height: 160)
+                    Circle()
+                        .stroke(Theme.accent.opacity(0.18), lineWidth: 1)
+                        .frame(width: 196, height: 196)
+                    Image(systemName: item.icon)
+                        .font(.app(size: 64, weight: .medium))
+                        .foregroundStyle(
+                            LinearGradient(colors: [Theme.accent, Theme.accentSecondary],
+                                           startPoint: .topLeading, endPoint: .bottomTrailing)
+                        )
+                        .symbolEffect(.bounce, value: page == index)
+                        .accessibilityHidden(true)
+                }
 
-            VStack(spacing: 12) {
-                Text(item.eyebrow)
-                    .font(.app(.caption, .bold))
-                    .tracking(1.8)
-                    .foregroundStyle(Theme.accent)
-                Text(item.title)
-                    .font(.app(.largeTitle, .bold))
-                    .multilineTextAlignment(.center)
-                Text(item.message)
-                    .font(.app(.body))
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .lineSpacing(3)
+                VStack(spacing: 12) {
+                    Text(item.eyebrow)
+                        .font(.app(.caption, .bold))
+                        .tracking(1.8)
+                        .foregroundStyle(Theme.accent)
+                    Text(item.title)
+                        .font(.app(.largeTitle, .bold))
+                        .multilineTextAlignment(.center)
+                    Text(item.message)
+                        .font(.app(.body))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .lineSpacing(3)
+                }
+                .padding(.horizontal, 30)
+                .accessibilityElement(children: .combine)
             }
-            .padding(.horizontal, 30)
+            .padding(.vertical, 20)
         }
+        .scrollBounceBehavior(.basedOnSize)
     }
 }
 

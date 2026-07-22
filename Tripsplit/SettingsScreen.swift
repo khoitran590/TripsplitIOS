@@ -17,6 +17,7 @@ struct SettingsScreen: View {
     @State private var showNotificationSettings = false
     @AppStorage("appearancePreference") private var appearance: AppearancePreference = .system
     @AppStorage("displayCurrency") private var displayCurrency = "USD"
+    @AppStorage("navbarTransparency") private var navbarTransparency = 0.0
     @State private var showFontPicker = false
     @State private var themeManager = ThemeManager.shared
     @State private var fontManager = FontManager.shared
@@ -113,6 +114,7 @@ struct SettingsScreen: View {
                                          iconColor: Color(hex: 0xEC4899))
                     }
                     .buttonStyle(.plain)
+                    navbarTransparencyPicker
                     PlainSettingsRow(icon: "globe", title: "Language",
                                      value: localization.language.endonym,
                                      iconColor: Color(hex: 0x3B82F6)) {
@@ -159,6 +161,44 @@ struct SettingsScreen: View {
         .sheet(isPresented: $showNotificationSettings) {
             NotificationPreferencesView()
         }
+    }
+
+    /// Live, device-local control for the custom floating navigation dock. A small
+    /// amount of glass is retained at the upper end so labels remain readable over
+    /// busy maps and photos.
+    private var navbarTransparencyPicker: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 16) {
+                SettingsIconBadge(icon: "rectangle.bottomthird.inset.filled",
+                                  color: Color(hex: 0x06B6D4))
+
+                Text("Navbar transparency")
+                    .font(.app(.body))
+
+                Spacer()
+
+                Text("\(Int((navbarTransparency * 100).rounded()))%")
+                    .font(.app(.subheadline))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+
+            Slider(value: $navbarTransparency, in: 0...0.9, step: 0.05)
+                .tint(Theme.accent)
+                .accessibilityLabel("Navbar transparency")
+                .accessibilityValue("\(Int((navbarTransparency * 100).rounded())) percent")
+
+            HStack {
+                Text("Solid")
+                Spacer()
+                Text("Clear")
+            }
+            .font(.app(.caption))
+            .foregroundStyle(.secondary)
+
+            Divider()
+        }
+        .padding(.top, 12)
     }
 
     /// Inline theme chooser: one swatch per `AppTheme`, applied app-wide immediately.

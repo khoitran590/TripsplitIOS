@@ -18,9 +18,10 @@ struct RecScreen: View {
     /// Presents the build-your-own-itinerary flow (ItineraryFeature.swift).
     @State private var showCreateItinerary = false
     /// A short, Explore-specific walkthrough shown the first time a member opens
-    /// this tab. It ends at the itinerary builder so discovery turns into action.
+    /// this tab. Users can start browsing or choose the blank itinerary builder.
     @AppStorage("hasSeenExploreOnboarding") private var hasSeenExploreOnboarding = false
     @State private var showExploreOnboarding = false
+    @FocusState private var isSearchFocused: Bool
 
     // Filters
     @State private var showFilterSheet = false
@@ -115,6 +116,7 @@ struct RecScreen: View {
         NavigationStack(path: $navigationPath) {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 24) {
+                    exploreIntroduction
                     searchBar
 
                     if !searchText.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -123,10 +125,13 @@ struct RecScreen: View {
                         filterBar
 
                         if !isFiltering {
-                            ItineraryPlannerSection(onCreate: { showCreateItinerary = true })
+                            savedSection
 
                             VStack(alignment: .leading, spacing: 14) {
-                                sectionHeader("Plan your next adventure")
+                                sectionTitle(
+                                    "Popular starting points",
+                                    subtitle: "Open a guide to see stops, food picks, and practical advice."
+                                )
                                 ScrollView(.horizontal, showsIndicators: false) {
                                     LazyHStack(spacing: 14) {
                                         ForEach(adventures) { destination in
@@ -148,6 +153,8 @@ struct RecScreen: View {
                             }
                             .padding(16)
                             .readableSurface(cornerRadius: 24)
+
+                            ItineraryPlannerSection(onCreate: { showCreateItinerary = true })
                         } else {
                             HStack {
                                 Text("\(filteredDestinations.count) trip\(filteredDestinations.count == 1 ? "" : "s") match")
@@ -159,6 +166,15 @@ struct RecScreen: View {
                                     .foregroundStyle(Theme.accent)
                                     .buttonStyle(.plain)
                             }
+                        }
+
+                        if !filteredDestinations.isEmpty {
+                            sectionTitle(
+                                isFiltering ? "Matching trips" : "Browse by destination",
+                                subtitle: isFiltering
+                                    ? "Open any result to preview the complete guide."
+                                    : "Curated plans grouped by country for faster scanning."
+                            )
                         }
 
                         if filteredDestinations.isEmpty {
@@ -214,28 +230,6 @@ struct RecScreen: View {
                             }
                         }
 
-                        if saved.isEmpty {
-                            HStack(spacing: 10) {
-                                Image(systemName: "heart")
-                                    .foregroundStyle(.secondary)
-                                Text("Tap the heart on any trip to save it here for later.")
-                                    .foregroundStyle(.secondary)
-                            }
-                            .font(.app(.footnote))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(14)
-                            .glassEffect(.regular, in: .rect(cornerRadius: 18))
-                        } else {
-                            sectionHeader("Saved")
-                            LazyVStack(spacing: 12) {
-                                ForEach(saved) { destination in
-                                    NavigationLink(value: destination.id) {
-                                        DestinationRow(destination: destination)
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                        }
                     }
                 }
                 .padding()
@@ -243,6 +237,17 @@ struct RecScreen: View {
             }
             .background { AppBackground() }
             .navigationTitle("Explore")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        isSearchFocused = false
+                        showExploreOnboarding = true
+                    } label: {
+                        Image(systemName: "questionmark.circle")
+                    }
+                    .accessibilityLabel("How Explore works")
+                }
+            }
             .navigationDestination(for: String.self) { id in
                 if let destination = Destination.all.first(where: { $0.id == id }) {
                     DestinationDetailView(
@@ -302,6 +307,57 @@ struct RecScreen: View {
         }
     }
 
+    /// A plain-language orientation above the controls. This remains useful after
+    /// onboarding and gives VoiceOver users the purpose of the tab before its many
+    /// destination rails.
+    private var exploreIntroduction: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Where do you want to go next?")
+                .font(.app(.title2, .bold))
+            Text("Find a ready-made guide, save your favorites, then make any plan your own.")
+                .font(.app(.subheadline))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+
+    /// Saved ideas belong near the top of Explore: returning users most often want
+    /// to resume evaluating a place, not scroll past the full destination directory.
+    @ViewBuilder
+    private var savedSection: some View {
+        if saved.isEmpty {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "heart")
+                    .font(.app(.headline))
+                    .foregroundStyle(Theme.accent)
+                    .frame(width: 34, height: 34)
+                    .background(Theme.accent.opacity(0.12), in: .circle)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Keep promising trips close")
+                        .font(.app(.subheadline, .semibold))
+                    Text("Tap a heart to save a guide. Your saved ideas will appear here.")
+                        .font(.app(.caption))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .readableSurface(cornerRadius: 18)
+        } else {
+            VStack(alignment: .leading, spacing: 12) {
+                sectionTitle("Saved for later", subtitle: "Pick up where you left off.")
+                ForEach(saved) { destination in
+                    NavigationLink(value: destination.id) {
+                        DestinationRow(destination: destination)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
     /// Horizontal chip row: the Filters button (with active count), then one chip
     /// per continent for the most common narrowing in a single tap.
     private var filterBar: some View {
@@ -354,6 +410,9 @@ struct RecScreen: View {
                 .foregroundStyle(.secondary)
             TextField("Places to go, things to do…", text: $searchText)
                 .autocorrectionDisabled()
+                .textInputAutocapitalization(.words)
+                .submitLabel(.search)
+                .focused($isSearchFocused)
             if !searchText.isEmpty {
                 Button {
                     searchText = ""
@@ -371,6 +430,7 @@ struct RecScreen: View {
         .overlay {
             Capsule().strokeBorder(Theme.separator.opacity(0.9), lineWidth: 1)
         }
+        .accessibilityElement(children: .contain)
     }
 
     @ViewBuilder
@@ -382,7 +442,10 @@ struct RecScreen: View {
                 .glassEffect(.regular, in: .rect(cornerRadius: 24))
         } else {
             let query = searchText.trimmingCharacters(in: .whitespaces)
-            VStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("\(searchResults.count) result\(searchResults.count == 1 ? "" : "s")")
+                    .font(.app(.subheadline, .semibold))
+                    .foregroundStyle(.secondary)
                 ForEach(searchResults) { destination in
                     NavigationLink(value: destination.id) {
                         DestinationRow(
@@ -410,6 +473,17 @@ struct RecScreen: View {
     private func sectionHeader(_ title: LocalizedStringKey) -> some View {
         Text(title)
             .font(.app(.title2, .bold))
+    }
+
+    private func sectionTitle(_ title: LocalizedStringKey, subtitle: LocalizedStringKey) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            sectionHeader(title)
+            Text(subtitle)
+                .font(.app(.subheadline))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .combine)
     }
 
     private func toggleSaved(_ id: String) {
@@ -711,7 +785,10 @@ struct DestinationRow: View {
                 .foregroundStyle(.tertiary)
         }
         .padding(12)
-        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
+        .contentShape(.rect(cornerRadius: 18))
+        .readableSurface(cornerRadius: 18, elevated: true)
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("Opens the curated guide")
     }
 }
 

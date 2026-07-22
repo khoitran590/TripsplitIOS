@@ -7,6 +7,13 @@ import UIKit
 /// inactive tabs stay icon-only and the active tab springs open to reveal its name.
 struct FloatingDock: View {
     @Binding var selectedTab: DockTab
+    @AppStorage("navbarTransparency") private var navbarTransparency = 0.0
+
+    /// Keep the stored preference defensive in case an older/newer build writes a
+    /// value outside the range exposed by Settings.
+    private var backgroundVisibility: Double {
+        1 - min(max(navbarTransparency, 0), 0.9)
+    }
 
     var body: some View {
         HStack(spacing: 4) {
@@ -43,14 +50,23 @@ struct FloatingDock: View {
             }
         }
         .padding(6)
-        .background(Theme.surface.opacity(0.82), in: .capsule)
-        .background(.regularMaterial, in: .capsule)
-        .overlay {
-            Capsule().strokeBorder(Theme.separator.opacity(0.95), lineWidth: 1)
+        .background {
+            Capsule()
+                .fill(Theme.surface.opacity(0.82 * backgroundVisibility))
         }
-        .shadow(color: .black.opacity(0.14), radius: 14, y: 6)
+        .background {
+            Capsule()
+                .fill(.regularMaterial)
+                .opacity(backgroundVisibility)
+        }
+        .overlay {
+            Capsule()
+                .strokeBorder(Theme.separator.opacity(0.95 * backgroundVisibility), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.14 * backgroundVisibility), radius: 14, y: 6)
         .frame(maxWidth: .infinity)
         .animation(.spring(response: 0.38, dampingFraction: 0.82), value: selectedTab)
+        .animation(.snappy, value: navbarTransparency)
         // Make the whole bottom strip swipeable, not just the capsule itself, so a
         // thumb swipe anywhere along the dock changes tabs — while staying confined
         // to the dock area (a screen-wide gesture would steal map pans and Explore's
