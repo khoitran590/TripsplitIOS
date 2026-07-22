@@ -622,156 +622,290 @@ struct BalanceCard: View {
     @AppStorage("displayCurrency") private var displayCurrency = "USD"
     @State private var showConverter = false
     @State private var showBudgetInfo = false
+    @State private var showBudgetBreakdown = false
+    @State private var showTripPicker = false
+    @State private var pickerPurpose: PickerPurpose?
+    @State private var pendingTrip: Trip?
+    @State private var breakdownTrip: Trip?
+    @State private var selectedTrip: Trip?
+    @State private var editTrip: Trip?
+    @State private var isRefreshingRates = false
+
+    private enum PickerPurpose {
+        case budget, settle
+    }
 
     var body: some View {
-        budgetFace
-        .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+        Group {
+            if !store.myTrips.isEmpty {
+                budgetFace
+                    .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+            }
+        }
         .sheet(isPresented: $showConverter) {
             CurrencyConverterCard()
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
                 .presentationBackground(.regularMaterial)
         }
+        .sheet(isPresented: $showBudgetBreakdown, onDismiss: openBreakdownTrip) {
+            BudgetByTripSheet(
+                trips: store.homeTotals(in: displayCurrency).budgetTrips,
+                totalTripCount: store.myTrips.count
+            ) { tripID in
+                breakdownTrip = store.trip(tripID)
+                showBudgetBreakdown = false
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(.regularMaterial)
+        }
+        .sheet(isPresented: $showTripPicker, onDismiss: routePickedTrip) {
+            TripPickerSheet(
+                trips: pickerTrips,
+                prompt: pickerPurpose == .budget
+                    ? "Which trip needs a personal budget?"
+                    : "Which trip would you like to settle?"
+            ) { trip in
+                pendingTrip = trip
+                showTripPicker = false
+            }
+            .presentationDetents([.medium, .large])
+            .presentationBackground(.regularMaterial)
+        }
+        .sheet(item: $selectedTrip) { trip in
+            TripDetailView(tripID: trip.id)
+        }
+        .sheet(item: $editTrip) { trip in
+            EditTripView(tripID: trip.id)
+        }
     }
 
     private var budgetFace: some View {
         // One pass over the trips for all four figures (see `TripStore.homeTotals`).
         let totals = store.homeTotals(in: displayCurrency)
-        let hasBudget = totals.budget > 0
-        let fraction = hasBudget ? totals.spent / totals.budget : 0
-        let isOver = hasBudget && totals.spent > totals.budget
-        let isNear = hasBudget && !isOver && fraction >= 0.8
-        // Accents mirror the trip cards: indigo healthy, amber near, red over.
+        let hasBudget = totals.budgetedTripCount > 0
+        let hasConvertedBudget = totals.budget > 0
+        let fraction = hasConvertedBudget ? totals.spent / totals.budget : 0
+        let isOver = hasConvertedBudget && totals.spent > totals.budget
+        let isNear = hasConvertedBudget && !isOver && fraction >= 0.8
+        // Budget health uses one semantic palette across the home summary and trip rows.
         let statusColor = isOver ? Color(hex: 0xDC2626)
             : isNear ? Color(hex: 0xD97706)
-            : Theme.accent
-        let heroValue = hasBudget
+            : Color(hex: 0x16A34A)
+        let heroValue = hasBudget && !hasConvertedBudget
+            ? "—"
+            : hasBudget
             ? (isOver
                 ? summaryMoney(totals.spent - totals.budget, displayCurrency, compact: true)
                 : summaryMoney(totals.available, displayCurrency, compact: true))
             : summaryMoney(totals.spent, displayCurrency, compact: true)
-        // Without a budget the hero figure is a spending total, not headroom — say so
-        // plainly, and title the card "Spending" so it doesn't promise a budget it
-        // doesn't have.
         let heroLabel = !hasBudget ? "Total spent" : (isOver ? "Over budget" : "Remaining")
-        let statusText = isOver ? "Over budget" : isNear ? "Near limit" : "On track"
+        let statusText = isOver ? "Over budget" : isNear ? "Running low" : "On track"
+        let unbudgetedCount = totals.totalTripCount - totals.budgetedTripCount
 
         return VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 4) {
-                Text("Overview")
-                    .font(.app(.subheadline, .semibold))
-                Button {
-                    showBudgetInfo = true
+            HStack(spacing: 10) {
+                Group {
+                    if hasBudget {
+                        Text("Your budget")
+                    } else {
+                        Text("Spending")
+                    }
+                }
+                .font(.app(.subheadline, .semibold))
+                Spacer()
+
+                Menu {
+                    Picker("Home currency", selection: $displayCurrency) {
+                        ForEach(supportedCurrencies, id: \.self) { code in
+                            Text(verbatim: code).tag(code)
+                        }
+                    }
                 } label: {
-                    Image(systemName: "info.circle")
-                        .font(.app(.footnote, .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 40, height: 44)
-                        .contentShape(.rect)
+                    HStack(spacing: 5) {
+                        Text(verbatim: displayCurrency)
+                        Image(systemName: "chevron.down")
+                            .font(.app(.caption2, .bold))
+                    }
+                    .font(.app(.caption, .semibold))
+                    .padding(.horizontal, 11)
+                    .frame(minHeight: 36)
+                    .background(Color.primary.opacity(0.07), in: .capsule)
+                    .contentShape(.capsule)
+                }
+                .accessibilityLabel("Home currency")
+
+                Menu {
+                    Button {
+                        showConverter = true
+                    } label: {
+                        Label("Convert currencies", systemImage: "arrow.left.arrow.right")
+                    }
+                    Button {
+                        showBudgetInfo = true
+                    } label: {
+                        Label("How totals work", systemImage: "info.circle")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.app(.subheadline, .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 40, height: 40)
+                        .contentShape(.circle)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("How your budget is calculated")
+                .accessibilityLabel("More budget options")
                 .popover(isPresented: $showBudgetInfo) {
                     budgetInfoPopover
                         .presentationCompactAdaptation(.popover)
                 }
-                Spacer()
-                Button {
-                    showConverter = true
-                } label: {
-                    Label("Convert", systemImage: "arrow.left.arrow.right")
-                        .font(.app(.subheadline, .semibold))
-                        .foregroundStyle(Theme.accent)
-                        .padding(.horizontal, 4)
-                        .frame(minHeight: 44)
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Currency converter")
             }
 
-            // VoiceOver receives the financial summary as one coherent element while the
-            // info and converter controls above remain independently actionable.
             VStack(alignment: .leading, spacing: 14) {
-                // Hero band: the headline figure on the left, the two facts that qualify
-                // it (health, share of budget used) right-aligned opposite it, so the row
-                // carries weight across the full card width instead of trailing off.
-                HStack(alignment: .bottom, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(verbatim: heroValue)
-                            .font(.app(.largeTitle, .bold))
-                            .foregroundStyle(isOver ? statusColor : .primary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.78)
-                        HStack(spacing: 5) {
-                            Text(LocalizedStringKey(heroLabel))
-                            Text(verbatim: "·")
-                            Text(verbatim: displayCurrency)
-                            Text(verbatim: "·")
-                            Text("\(store.myTrips.count) trips")
+                Button {
+                    if hasBudget { showBudgetBreakdown = true }
+                } label: {
+                    HStack(alignment: .bottom, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(verbatim: heroValue)
+                                .font(.app(.largeTitle, .bold))
+                                .foregroundStyle(isOver ? statusColor : .primary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.72)
+                            HStack(spacing: 5) {
+                                Text(LocalizedStringKey(heroLabel))
+                                Text(verbatim: "·")
+                                if totals.budgetedTripCount == totals.totalTripCount {
+                                    Text("\(totals.totalTripCount) trips budgeted")
+                                } else {
+                                    Text("\(totals.budgetedTripCount) of \(totals.totalTripCount) trips budgeted")
+                                }
+                            }
+                            .font(.app(.subheadline))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.leading)
                         }
-                        .font(.app(.subheadline))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                    }
 
-                    if hasBudget {
-                        Spacer(minLength: 8)
-                        VStack(alignment: .trailing, spacing: 5) {
+                        if hasConvertedBudget {
+                            Spacer(minLength: 8)
                             Text(LocalizedStringKey(statusText))
                                 .font(.app(.caption, .semibold))
                                 .foregroundStyle(statusColor)
                                 .padding(.horizontal, 9)
                                 .padding(.vertical, 4)
                                 .background(statusColor.opacity(0.12), in: .capsule)
-                            Text("\(Int((fraction * 100).rounded()))% of budget")
-                                .font(.app(.caption))
-                                .foregroundStyle(.secondary)
                         }
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
                     }
                 }
+                .buttonStyle(.plain)
+                .disabled(!hasBudget)
+                .accessibilityHint(hasBudget ? "Shows budget details by trip" : "")
 
-                if hasBudget {
-                    GeometryReader { geo in
-                        ZStack(alignment: .leading) {
-                            Capsule().fill(Color.primary.opacity(0.08))
-                            Capsule()
-                                .fill(statusColor)
-                                .frame(width: geo.size.width * min(1, max(0, fraction)))
-                                .animation(.easeInOut(duration: 0.4), value: fraction)
+                if hasConvertedBudget {
+                    Button { showBudgetBreakdown = true } label: {
+                        VStack(spacing: 7) {
+                            HStack {
+                                Text("Budget used")
+                                    .font(.app(.caption))
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                if isOver {
+                                    Text("+\(summaryMoney(totals.spent - totals.budget, displayCurrency)) over")
+                                        .font(.app(.caption, .semibold))
+                                        .foregroundStyle(statusColor)
+                                }
+                                Text(verbatim: "\(Int((fraction * 100).rounded()))%")
+                                    .font(.app(.caption, .semibold))
+                                    .foregroundStyle(statusColor)
+                            }
+                            GeometryReader { geo in
+                                ZStack(alignment: .leading) {
+                                    Capsule().fill(Color.primary.opacity(0.08))
+                                    Capsule()
+                                        .fill(
+                                            LinearGradient(
+                                                colors: progressColors(isOver: isOver, isNear: isNear),
+                                                startPoint: .leading,
+                                                endPoint: .trailing
+                                            )
+                                        )
+                                        .frame(width: geo.size.width * min(1, max(0, fraction)))
+                                        .animation(.easeInOut(duration: 0.4), value: fraction)
+                                }
+                            }
+                            .frame(height: 9)
+                            HStack {
+                                Text(verbatim: summaryMoney(totals.spent, displayCurrency))
+                                Text("of")
+                                Text(verbatim: summaryMoney(totals.budget, displayCurrency))
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.app(.caption2, .bold))
+                            }
+                            .font(.app(.caption))
+                            .foregroundStyle(.secondary)
                         }
+                        .contentShape(.rect)
                     }
-                    .frame(height: 8)
+                    .buttonStyle(.plain)
+                } else if hasBudget {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Updating rates…")
+                            .font(.app(.caption))
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(minHeight: 44)
                 } else {
-                    Text("No budget set · Set one inside a trip")
-                        .font(.app(.caption))
-                        .foregroundStyle(.secondary)
+                    noBudgetCallout
                 }
 
-                statGrid(totals, hasBudget: hasBudget)
+                statGrid(totals, hasBudget: hasBudget, hasConvertedBudget: hasConvertedBudget)
+
+                if totals.youOwe > 0 || totals.owedToYou > 0 {
+                    settlementBand(totals)
+                }
+
+                if unbudgetedCount > 0 && hasBudget {
+                    missingBudgetBand(count: unbudgetedCount)
+                }
 
                 if !totals.unavailableCurrencies.isEmpty {
-                    Text("Some trips need an exchange-rate refresh")
-                        .font(.app(.caption2))
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .foregroundStyle(.secondary)
+                        Text("Some trips need an exchange-rate refresh")
+                            .font(.app(.caption2))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button {
+                            refreshRates()
+                        } label: {
+                            if isRefreshingRates {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Text("Refresh rates")
+                                    .font(.app(.caption, .semibold))
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Theme.accent)
+                        .disabled(isRefreshingRates)
+                    }
                 }
             }
-            .accessibilityElement(children: .combine)
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassEffect(.regular, in: .rect(cornerRadius: 34))
     }
 
-    /// The four supporting figures as equal tiles: budget health on the top row,
-    /// settlement on the bottom. Giving them one shared shape and size stops the
-    /// settlement pair from reading as an afterthought below the budget line, and
-    /// fills the card's width evenly. Columns collapse to a single stack at
-    /// accessibility text sizes, where two tiles per row would truncate.
-    private func statGrid(_ totals: TripStore.HomeTotals, hasBudget: Bool) -> some View {
+    private func statGrid(
+        _ totals: TripStore.HomeTotals,
+        hasBudget: Bool,
+        hasConvertedBudget: Bool
+    ) -> some View {
         let boxes = [
             statBox(
                 label: "SPENT",
@@ -781,34 +915,19 @@ struct BalanceCard: View {
             ),
             statBox(
                 label: "BUDGET",
-                value: hasBudget ? summaryMoney(totals.budget, displayCurrency) : String(localized: "Not set"),
-                valueColor: hasBudget ? .primary : .secondary,
+                value: hasConvertedBudget
+                    ? summaryMoney(totals.budget, displayCurrency)
+                    : hasBudget ? "—" : String(localized: "Not set"),
+                valueColor: hasConvertedBudget ? .primary : .secondary,
                 background: Color.primary.opacity(0.05)
-            ),
-            // A zero balance is neutral news, so it stays grey — red and green are
-            // reserved for amounts that actually need settling.
-            statBox(
-                label: "YOU OWE",
-                value: summaryMoney(totals.youOwe, displayCurrency),
-                valueColor: totals.youOwe > 0 ? Color(hex: 0xDC2626) : .secondary,
-                background: totals.youOwe > 0 ? Color(hex: 0xDC2626).opacity(0.10) : Color.primary.opacity(0.05)
-            ),
-            statBox(
-                label: "OWED TO YOU",
-                value: summaryMoney(totals.owedToYou, displayCurrency),
-                valueColor: totals.owedToYou > 0 ? Color(hex: 0x16A34A) : .secondary,
-                background: totals.owedToYou > 0 ? Color(hex: 0x16A34A).opacity(0.10) : Color.primary.opacity(0.05)
             )
         ]
 
         return Group {
             if dynamicTypeSize.isAccessibilitySize {
-                VStack(spacing: 8) { ForEach(0..<4, id: \.self) { boxes[$0] } }
+                VStack(spacing: 8) { ForEach(0..<2, id: \.self) { boxes[$0] } }
             } else {
-                Grid(horizontalSpacing: 8, verticalSpacing: 8) {
-                    GridRow { boxes[0]; boxes[1] }
-                    GridRow { boxes[2]; boxes[3] }
-                }
+                HStack(spacing: 8) { boxes[0]; boxes[1] }
             }
         }
     }
@@ -829,6 +948,136 @@ struct BalanceCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 10).padding(.horizontal, 12)
         .background(background, in: .rect(cornerRadius: 12))
+    }
+
+    private var noBudgetCallout: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Plan spending before the trip")
+                    .font(.app(.subheadline, .semibold))
+                Text("Budgets are personal and set per trip.")
+                    .font(.app(.caption))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Button("Set a budget", action: startBudgetFlow)
+                .font(.app(.caption, .semibold))
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.accent)
+        }
+        .padding(12)
+        .background(Theme.accent.opacity(0.08), in: .rect(cornerRadius: 14))
+    }
+
+    private func settlementBand(_ totals: TripStore.HomeTotals) -> some View {
+        HStack(spacing: 6) {
+            if totals.youOwe > 0 {
+                Text("You owe").foregroundStyle(.secondary)
+                Text(verbatim: summaryMoney(totals.youOwe, displayCurrency))
+                    .foregroundStyle(Color(hex: 0xDC2626))
+            }
+            if totals.youOwe > 0 && totals.owedToYou > 0 {
+                Text(verbatim: "·").foregroundStyle(.tertiary)
+            }
+            if totals.owedToYou > 0 {
+                Text("Owed to you").foregroundStyle(.secondary)
+                Text(verbatim: summaryMoney(totals.owedToYou, displayCurrency))
+                    .foregroundStyle(Color(hex: 0x16A34A))
+            }
+            Spacer(minLength: 6)
+            Button("Settle", action: startSettleFlow)
+                .font(.app(.caption, .semibold))
+                .buttonStyle(.bordered)
+                .tint(Theme.accent)
+        }
+        .font(.app(.caption, .semibold))
+        .lineLimit(1)
+        .minimumScaleFactor(0.72)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(Color.primary.opacity(0.045), in: .rect(cornerRadius: 14))
+    }
+
+    private func missingBudgetBand(count: Int) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.circle")
+                .foregroundStyle(.secondary)
+            if count == 1 {
+                Text("1 trip has no budget")
+            } else {
+                Text("\(count) trips have no budget")
+            }
+            Spacer()
+            Button("Set one", action: startBudgetFlow)
+                .font(.app(.caption, .semibold))
+                .foregroundStyle(Theme.accent)
+        }
+        .font(.app(.caption))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Color.primary.opacity(0.035), in: .rect(cornerRadius: 14))
+    }
+
+    private func progressColors(isOver: Bool, isNear: Bool) -> [Color] {
+        isOver ? [Color(hex: 0xF87171), Color(hex: 0xDC2626)]
+            : isNear ? [Color(hex: 0xFBBF24), Color(hex: 0xD97706)]
+            : [Color(hex: 0x4ADE80), Color(hex: 0x16A34A)]
+    }
+
+    private var pickerTrips: [Trip] {
+        switch pickerPurpose {
+        case .budget:
+            return store.myTrips.filter { $0.budget(for: store.currentUser.id) <= 0 }
+        case .settle:
+            let ids = Set(store.homeTotals(in: displayCurrency).settlementTripIDs)
+            return store.myTrips.filter { ids.contains($0.id) }
+        case nil:
+            return []
+        }
+    }
+
+    private func startBudgetFlow() {
+        let trips = store.myTrips.filter { $0.budget(for: store.currentUser.id) <= 0 }
+        if let trip = trips.first, trips.count == 1 {
+            editTrip = trip
+        } else if !trips.isEmpty {
+            pickerPurpose = .budget
+            showTripPicker = true
+        }
+    }
+
+    private func startSettleFlow() {
+        let ids = Set(store.homeTotals(in: displayCurrency).settlementTripIDs)
+        let trips = store.myTrips.filter { ids.contains($0.id) }
+        if let trip = trips.first, trips.count == 1 {
+            selectedTrip = trip
+        } else if !trips.isEmpty {
+            pickerPurpose = .settle
+            showTripPicker = true
+        }
+    }
+
+    private func routePickedTrip() {
+        defer { pendingTrip = nil; pickerPurpose = nil }
+        guard let trip = pendingTrip else { return }
+        switch pickerPurpose {
+        case .budget: editTrip = trip
+        case .settle: selectedTrip = trip
+        case nil: break
+        }
+    }
+
+    private func openBreakdownTrip() {
+        defer { breakdownTrip = nil }
+        if let breakdownTrip { selectedTrip = breakdownTrip }
+    }
+
+    private func refreshRates() {
+        Task {
+            isRefreshingRates = true
+            await store.refreshRates()
+            isRefreshingRates = false
+        }
     }
 
     /// Explains where the headline budget figure comes from: only budgets the user has
@@ -865,6 +1114,115 @@ struct BalanceCard: View {
             number = value.formatted(.number.precision(.fractionLength(0...2)))
         }
         return "\(currencySymbol(code))\(number)"
+    }
+}
+
+private struct BudgetByTripSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let trips: [TripStore.HomeBudgetTrip]
+    let totalTripCount: Int
+    let onSelect: (Trip.ID) -> Void
+
+    private var sortedTrips: [TripStore.HomeBudgetTrip] {
+        trips.sorted { left, right in
+            left.spent / left.budget > right.spent / right.budget
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 12) {
+                    ForEach(sortedTrips) { trip in
+                        Button { onSelect(trip.id) } label: {
+                            budgetRow(trip)
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    let missingCount = totalTripCount - trips.count
+                    if missingCount > 0 {
+                        HStack(spacing: 9) {
+                            Image(systemName: "info.circle")
+                            if missingCount == 1 {
+                                Text("1 trip has no personal budget")
+                            } else {
+                                Text("\(missingCount) trips have no personal budget")
+                            }
+                        }
+                        .font(.app(.caption))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 4)
+                        .padding(.top, 4)
+                    }
+                }
+                .padding()
+            }
+            .background { AppBackground() }
+            .navigationTitle("Budget by trip")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func budgetRow(_ trip: TripStore.HomeBudgetTrip) -> some View {
+        let fraction = trip.spent / trip.budget
+        let isOver = trip.spent > trip.budget
+        let isNear = !isOver && fraction >= 0.8
+        let color = isOver ? Color(hex: 0xDC2626)
+            : isNear ? Color(hex: 0xD97706)
+            : Color(hex: 0x16A34A)
+        let colors = isOver ? [Color(hex: 0xF87171), Color(hex: 0xDC2626)]
+            : isNear ? [Color(hex: 0xFBBF24), Color(hex: 0xD97706)]
+            : [Color(hex: 0x4ADE80), Color(hex: 0x16A34A)]
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(verbatim: trip.name)
+                    .font(.app(.subheadline, .semibold))
+                    .lineLimit(1)
+                Spacer()
+                if isOver {
+                    Text("Over by")
+                    Text(verbatim: money(trip.spent - trip.budget, trip.currencyCode))
+                } else {
+                    Text("Remaining")
+                    Text(verbatim: money(trip.budget - trip.spent, trip.currencyCode))
+                }
+                Image(systemName: "chevron.right")
+                    .font(.app(.caption2, .bold))
+            }
+            .font(.app(.caption, .semibold))
+            .foregroundStyle(color)
+
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.primary.opacity(0.08))
+                    Capsule()
+                        .fill(LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing))
+                        .frame(width: geo.size.width * min(1, max(0, fraction)))
+                }
+            }
+            .frame(height: 8)
+
+            HStack(spacing: 4) {
+                Text(verbatim: money(trip.spent, trip.currencyCode))
+                Text("of")
+                Text(verbatim: money(trip.budget, trip.currencyCode))
+                Spacer()
+                Text(verbatim: "\(Int((fraction * 100).rounded()))%")
+            }
+            .font(.app(.caption))
+            .foregroundStyle(.secondary)
+        }
+        .padding(14)
+        .readableSurface(cornerRadius: 16)
+        .contentShape(.rect(cornerRadius: 16))
     }
 }
 
@@ -1282,7 +1640,7 @@ struct QuickActionButton: View {
 struct TripPickerSheet: View {
     @Environment(\.dismiss) private var dismiss
     let trips: [Trip]
-    let prompt: String
+    let prompt: LocalizedStringKey
     let onSelect: (Trip) -> Void
 
     var body: some View {
@@ -1320,7 +1678,7 @@ struct TripPickerSheet: View {
                 .clipShape(.rect(cornerRadius: 14))
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(trip.name)
+                Text(verbatim: trip.name)
                     .font(.app(.subheadline, .semibold))
                     .lineLimit(1)
                 Text(trip.dateRangeText ?? "\(trip.expenses.count) expense\(trip.expenses.count == 1 ? "" : "s")")

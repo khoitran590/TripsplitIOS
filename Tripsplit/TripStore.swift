@@ -528,9 +528,21 @@ final class TripStore {
     /// All four home-card figures, aggregated in USD. Computed in a single pass over the
     /// trips so `settlements()` (the expensive part, O(members² × expenses)) runs once per
     /// trip per render instead of once per figure.
+    struct HomeBudgetTrip: Identifiable {
+        let id: Trip.ID
+        let name: String
+        let currencyCode: String
+        let budget: Double
+        let spent: Double
+    }
+
     struct HomeTotals {
         var budget = 0.0, spent = 0.0, youOwe = 0.0, owedToYou = 0.0
         var unavailableCurrencies: Set<String> = []
+        var budgetedTripCount = 0
+        var totalTripCount = 0
+        var budgetTrips: [HomeBudgetTrip] = []
+        var settlementTripIDs: [Trip.ID] = []
         var available: Double { SplitEngine.roundToTwo(budget - spent) }
     }
 
@@ -541,26 +553,49 @@ final class TripStore {
         let me = currentUser.id
         for trip in myTrips {
             let code = trip.currencyCode
-            guard let budget = cachedConversion(trip.budget(for: me), from: code, to: displayCurrency),
-                  let spent = cachedConversion(trip.spent(for: me), from: code, to: displayCurrency)
-            else {
-                totals.unavailableCurrencies.insert(code)
-                continue
+            let nativeBudget = trip.budget(for: me)
+            let nativeSpent = trip.spent(for: me)
+            totals.totalTripCount += 1
+            if nativeBudget > 0 {
+                totals.budgetedTripCount += 1
+                totals.budgetTrips.append(
+                    HomeBudgetTrip(
+                        id: trip.id,
+                        name: trip.name,
+                        currencyCode: code,
+                        budget: nativeBudget,
+                        spent: nativeSpent
+                    )
+                )
             }
-            totals.budget += budget
-            totals.spent += spent
+
+            if let budget = cachedConversion(nativeBudget, from: code, to: displayCurrency),
+               let spent = cachedConversion(nativeSpent, from: code, to: displayCurrency) {
+                totals.budget += budget
+                totals.spent += spent
+            } else {
+                totals.unavailableCurrencies.insert(code)
+            }
+
+            var hasOpenSettlement = false
             for s in trip.settlements() {
                 let key = "\(s.from.id.uuidString)->\(s.to.id.uuidString)"
                 let confirmed = (trip.settlementRecords[key] ?? [])
                     .filter { $0.status == .confirmed }
                     .reduce(0.0) { $0 + $1.amount }
                 let remaining = max(0, SplitEngine.roundToTwo(s.amount - confirmed))
+                if remaining > 0.005 && (s.from.id == me || s.to.id == me) {
+                    hasOpenSettlement = true
+                }
                 guard let converted = cachedConversion(remaining, from: code, to: displayCurrency) else {
                     totals.unavailableCurrencies.insert(code)
                     continue
                 }
                 if s.from.id == me { totals.youOwe += converted }
                 if s.to.id == me { totals.owedToYou += converted }
+            }
+            if hasOpenSettlement {
+                totals.settlementTripIDs.append(trip.id)
             }
         }
         totals.budget = SplitEngine.roundToTwo(totals.budget)
