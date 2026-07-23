@@ -1,6 +1,278 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "DIAMOND HEAD" : {
+      "comment" : "Name of a landmark stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DIAMOND HEAD"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "钻石山"
+          }
+        }
+      }
+    },
+    "GOLDEN GATE" : {
+      "comment" : "Name of a landmark stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GOLDEN GATE"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "金门大桥"
+          }
+        }
+      }
+    },
+    "LIBERTY" : {
+      "comment" : "Name of a landmark stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LA LIBERTAD"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自由女神"
+          }
+        }
+      }
+    },
+    "SOUTH BEACH" : {
+      "comment" : "Name of a landmark stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SOUTH BEACH"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "南海滩"
+          }
+        }
+      }
+    },
+    "SPACE NEEDLE" : {
+      "comment" : "Name of a landmark stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SPACE NEEDLE"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "太空针塔"
+          }
+        }
+      }
+    },
+    "TOKYO TOWER" : {
+      "comment" : "Name of a landmark stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TORRE DE TOKIO"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "东京塔"
+          }
+        }
+      }
+    },
+    "WILLIS TOWER" : {
+      "comment" : "Name of a landmark stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TORRE WILLIS"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "威利斯大厦"
+          }
+        }
+      }
+    },
+    "ALPINE" : {
+      "comment" : "Label stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ALPINO"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "高山"
+          }
+        }
+      }
+    },
+    "CITY" : {
+      "comment" : "Label stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CIUDAD"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "城市"
+          }
+        }
+      }
+    },
+    "COASTLINE" : {
+      "comment" : "Label stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "COSTA"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "海岸"
+          }
+        }
+      }
+    },
+    "DESERT" : {
+      "comment" : "Label stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DESIERTO"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沙漠"
+          }
+        }
+      }
+    },
+    "FOREST" : {
+      "comment" : "Label stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "BOSQUE"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "森林"
+          }
+        }
+      }
+    },
+    "ISLAND" : {
+      "comment" : "Label stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ISLA"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "岛屿"
+          }
+        }
+      }
+    },
+    "LAKESIDE" : {
+      "comment" : "Label stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LAGO"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "湖畔"
+          }
+        }
+      }
+    },
+    "MOUNTAINS" : {
+      "comment" : "Label stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "MONTAÑAS"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "山脉"
+          }
+        }
+      }
+    },
+    "OLD TOWN" : {
+      "comment" : "Label stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CASCO ANTIGUO"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "古城"
+          }
+        }
+      }
+    },
     "" : {
 
     },
