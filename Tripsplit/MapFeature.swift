@@ -79,7 +79,7 @@ final class ExploreMapModel {
     private(set) var exploreRequest = 0
     /// The tab the user was on when they jumped to the map, so the map's Back button
     /// can return them exactly where they were.
-    var originTab: DockTab = .rec
+    var originTab: DockTab = .explore
 
     func openItineraryInExplore(_ tripID: Trip.ID) {
         requestedItineraryID = tripID
@@ -1064,7 +1064,7 @@ struct MapScreen: View {
                         var transaction = SwiftUI.Transaction()
                         transaction.disablesAnimations = true
                         withTransaction(transaction) {
-                            selectedTab = .rec
+                            selectedTab = .explore
                         }
                     } label: {
                         Label("Explore", systemImage: "arrow.up.forward.app")

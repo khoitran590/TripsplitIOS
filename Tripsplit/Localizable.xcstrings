@@ -1,278 +1,6 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "DIAMOND HEAD" : {
-      "comment" : "Name of a landmark stamped on the ribbon of a visited-place badge.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "DIAMOND HEAD"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "钻石山"
-          }
-        }
-      }
-    },
-    "GOLDEN GATE" : {
-      "comment" : "Name of a landmark stamped on the ribbon of a visited-place badge.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "GOLDEN GATE"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "金门大桥"
-          }
-        }
-      }
-    },
-    "LIBERTY" : {
-      "comment" : "Name of a landmark stamped on the ribbon of a visited-place badge.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "LA LIBERTAD"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "自由女神"
-          }
-        }
-      }
-    },
-    "SOUTH BEACH" : {
-      "comment" : "Name of a landmark stamped on the ribbon of a visited-place badge.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "SOUTH BEACH"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "南海滩"
-          }
-        }
-      }
-    },
-    "SPACE NEEDLE" : {
-      "comment" : "Name of a landmark stamped on the ribbon of a visited-place badge.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "SPACE NEEDLE"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "太空针塔"
-          }
-        }
-      }
-    },
-    "TOKYO TOWER" : {
-      "comment" : "Name of a landmark stamped on the ribbon of a visited-place badge.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "TORRE DE TOKIO"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "东京塔"
-          }
-        }
-      }
-    },
-    "WILLIS TOWER" : {
-      "comment" : "Name of a landmark stamped on the ribbon of a visited-place badge.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "TORRE WILLIS"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "威利斯大厦"
-          }
-        }
-      }
-    },
-    "ALPINE" : {
-      "comment" : "Label stamped on the ribbon of a visited-place badge.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ALPINO"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "高山"
-          }
-        }
-      }
-    },
-    "CITY" : {
-      "comment" : "Label stamped on the ribbon of a visited-place badge.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "CIUDAD"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "城市"
-          }
-        }
-      }
-    },
-    "COASTLINE" : {
-      "comment" : "Label stamped on the ribbon of a visited-place badge.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "COSTA"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "海岸"
-          }
-        }
-      }
-    },
-    "DESERT" : {
-      "comment" : "Label stamped on the ribbon of a visited-place badge.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "DESIERTO"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "沙漠"
-          }
-        }
-      }
-    },
-    "FOREST" : {
-      "comment" : "Label stamped on the ribbon of a visited-place badge.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "BOSQUE"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "森林"
-          }
-        }
-      }
-    },
-    "ISLAND" : {
-      "comment" : "Label stamped on the ribbon of a visited-place badge.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ISLA"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "岛屿"
-          }
-        }
-      }
-    },
-    "LAKESIDE" : {
-      "comment" : "Label stamped on the ribbon of a visited-place badge.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "LAGO"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "湖畔"
-          }
-        }
-      }
-    },
-    "MOUNTAINS" : {
-      "comment" : "Label stamped on the ribbon of a visited-place badge.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "MONTAÑAS"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "山脉"
-          }
-        }
-      }
-    },
-    "OLD TOWN" : {
-      "comment" : "Label stamped on the ribbon of a visited-place badge.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "CASCO ANTIGUO"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "古城"
-          }
-        }
-      }
-    },
     "" : {
 
     },
@@ -484,6 +212,18 @@
     "%lld days" : {
 
     },
+    "%lld days · %@" : {
+      "comment" : "A subheading that displays the number of days and price for a destination.",
+      "isCommentAutoGenerated" : true,
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld days · %2$@"
+          }
+        }
+      }
+    },
     "%lld expense%@ • %@" : {
       "comment" : "A sub-label that shows the number of transactions and the most recent date. The first argument is the number of transactions. The second argument is the most recent transaction date.",
       "isCommentAutoGenerated" : true,
@@ -588,28 +328,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%1$lld 位旅行者"
-          }
-        }
-      }
-    },
-    "%lld trip%@" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$lld trip%2$@"
-          }
-        }
-      }
-    },
-    "%lld trip%@ match" : {
-      "comment" : "Pluralization key. The argument is the count of destinations.",
-      "isCommentAutoGenerated" : true,
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$lld trip%2$@ match"
           }
         }
       }
@@ -753,6 +471,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "1 个行程未设个人预算"
+          }
+        }
+      }
+    },
+    "5–7 days" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "5–7 días"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "5–7 天"
           }
         }
       }
@@ -1157,6 +891,23 @@
         }
       }
     },
+    "ALPINE" : {
+      "comment" : "Label stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ALPINO"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "高山"
+          }
+        }
+      }
+    },
     "Already have an account?" : {
       "comment" : "A button that links to the login screen.",
       "isCommentAutoGenerated" : true
@@ -1352,6 +1103,38 @@
       "comment" : "The description of the balance calculation in the Settle Math info view.",
       "isCommentAutoGenerated" : true
     },
+    "Beach" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Playa"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "海滩"
+          }
+        }
+      }
+    },
+    "Beach escapes" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escapadas a la playa"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "海滩度假"
+          }
+        }
+      }
+    },
     "Belongs to" : {
       "localizations" : {
         "es" : {
@@ -1379,9 +1162,37 @@
       "comment" : "Text describing the benefits of using the Explore feature.",
       "isCommentAutoGenerated" : true
     },
-    "Browse curated trips and split costs with friends." : {
-      "comment" : "A description of the Airbnb \"Airbnb your home\" promo card.",
-      "isCommentAutoGenerated" : true
+    "Browse photo-rich guides, local favorites, and practical plans for your next destination." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Explora guías con fotos, favoritos locales y planes prácticos para tu próximo destino."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "浏览图文丰富的指南、本地精选和实用行程。"
+          }
+        }
+      }
+    },
+    "Browse trip ideas" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Explorar ideas de viaje"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "浏览旅行灵感"
+          }
+        }
+      }
     },
     "Budget" : {
       "localizations" : {
@@ -1518,6 +1329,22 @@
     "Build every day together" : {
       "comment" : "Text describing the feature of building a trip itinerary together.",
       "isCommentAutoGenerated" : true
+    },
+    "Build from scratch" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Crear desde cero"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从头创建"
+          }
+        }
+      }
     },
     "Build your own itinerary" : {
       "comment" : "A heading for the user's itinerary.",
@@ -1659,9 +1486,42 @@
         }
       }
     },
+    "CITY" : {
+      "comment" : "Label stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CIUDAD"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "城市"
+          }
+        }
+      }
+    },
     "Clear" : {
       "comment" : "A label for the clear color option in the navbar transparency slider.",
       "isCommentAutoGenerated" : true
+    },
+    "Clear all" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Borrar todo"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部清除"
+          }
+        }
+      }
     },
     "Clear filters" : {
       "comment" : "A button that clears all filters on the list of expenses.",
@@ -1683,6 +1543,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "关闭"
+          }
+        }
+      }
+    },
+    "COASTLINE" : {
+      "comment" : "Label stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "COSTA"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "海岸"
           }
         }
       }
@@ -1715,6 +1592,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "评论 (%lld)"
+          }
+        }
+      }
+    },
+    "Complete guides with stops, food picks, and a realistic budget." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guías completas con paradas, recomendaciones gastronómicas y un presupuesto realista."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "包含景点、美食推荐和实际预算的完整指南。"
           }
         }
       }
@@ -1932,6 +1825,7 @@
 
     },
     "Create a trip to start tracking expenses." : {
+      "extractionState" : "stale",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -1964,6 +1858,22 @@
         }
       }
     },
+    "Create empty trip" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Crear viaje vacío"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建空白旅行"
+          }
+        }
+      }
+    },
     "Create expense here" : {
       "comment" : "The text of a menu item that creates an expense.",
       "isCommentAutoGenerated" : true
@@ -1975,9 +1885,6 @@
     "Create my itinerary" : {
       "comment" : "A button that creates a new itinerary based on the current trip.",
       "isCommentAutoGenerated" : true
-    },
-    "Create your first trip" : {
-
     },
     "Creditor" : {
       "localizations" : {
@@ -1994,9 +1901,6 @@
           }
         }
       }
-    },
-    "Curated plans grouped by country for faster scanning." : {
-
     },
     "Currency" : {
       "localizations" : {
@@ -2314,6 +2218,23 @@
         }
       }
     },
+    "DESERT" : {
+      "comment" : "Label stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DESIERTO"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沙漠"
+          }
+        }
+      }
+    },
     "Details" : {
       "localizations" : {
         "es" : {
@@ -2326,6 +2247,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "详情"
+          }
+        }
+      }
+    },
+    "DIAMOND HEAD" : {
+      "comment" : "Name of a landmark stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DIAMOND HEAD"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "钻石山"
           }
         }
       }
@@ -2365,6 +2303,38 @@
     "Discard" : {
       "comment" : "Button that discards a draft itinerary.",
       "isCommentAutoGenerated" : true
+    },
+    "Discover trips worth taking" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Descubre viajes que vale la pena hacer"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发现值得出发的旅行"
+          }
+        }
+      }
+    },
+    "Discover trips. Split fairly." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Descubre viajes. Divide con justicia."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发现旅程，公平分摊。"
+          }
+        }
+      }
     },
     "Dismiss tip" : {
       "comment" : "A label for a button that dismisses a tip.",
@@ -2543,6 +2513,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "编辑行程"
+          }
+        }
+      }
+    },
+    "Editor picks" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Selección editorial"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编辑精选"
           }
         }
       }
@@ -2817,9 +2803,21 @@
       "comment" : "The eyebrow text for the first onboarding page in the Explore onboarding flow.",
       "isCommentAutoGenerated" : true
     },
-    "Explore is for members" : {
-      "comment" : "A title that appears on the Explore tab when the user is not signed in.",
-      "isCommentAutoGenerated" : true
+    "Explore every curated guide by country." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Explora todas las guías seleccionadas por país."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按国家探索所有精选指南。"
+          }
+        }
+      }
     },
     "Exploring:" : {
       "comment" : "A prefix for a map screen's \"Exploring: ...\" pill.",
@@ -2829,9 +2827,21 @@
       "comment" : "A pill showing the name of the city being explored.",
       "isCommentAutoGenerated" : true
     },
-    "Fair splits down to the cent, and the fewest payments to square everyone away." : {
-      "comment" : "Text describing the benefits of using TripSplit for splitting expenses.",
-      "isCommentAutoGenerated" : true
+    "Featured travel guides" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guías de viaje destacadas"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "精选旅行指南"
+          }
+        }
+      }
     },
     "Feed" : {
       "comment" : "The name of the feed tab in the trip detail view.",
@@ -2853,8 +2863,21 @@
       "comment" : "A button that shows the number of active filters.",
       "isCommentAutoGenerated" : true
     },
-    "Find a ready-made guide, save your favorites, then make any plan your own." : {
-
+    "Find a destination, shape a plan, then share it with friends." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Encuentra un destino, crea un plan y compártelo con amigos."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "寻找目的地、制定计划，然后与朋友分享。"
+          }
+        }
+      }
     },
     "Find a trip worth taking" : {
       "comment" : "Title of the first onboarding page in the Explore onboarding flow.",
@@ -2866,6 +2889,55 @@
     "Font" : {
       "comment" : "A heading for the list of fonts.",
       "isCommentAutoGenerated" : true
+    },
+    "Food cities" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ciudades gastronómicas"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "美食之城"
+          }
+        }
+      }
+    },
+    "Foodie" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gastronomía"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "美食"
+          }
+        }
+      }
+    },
+    "FOREST" : {
+      "comment" : "Label stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "BOSQUE"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "森林"
+          }
+        }
+      }
     },
     "Forgot password?" : {
       "localizations" : {
@@ -2935,8 +3007,22 @@
         }
       }
     },
-    "Get Started" : {
-
+    "GOLDEN GATE" : {
+      "comment" : "Name of a landmark stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GOLDEN GATE"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "金门大桥"
+          }
+        }
+      }
     },
     "Has receipt" : {
       "comment" : "A toggle that filters expenses by whether they have a receipt.",
@@ -2959,6 +3045,7 @@
       }
     },
     "Hi, %@" : {
+      "extractionState" : "stale",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -2991,6 +3078,7 @@
       }
     },
     "Home" : {
+      "extractionState" : "stale",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -3143,6 +3231,23 @@
         }
       }
     },
+    "ISLAND" : {
+      "comment" : "Label stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ISLA"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "岛屿"
+          }
+        }
+      }
+    },
     "Item" : {
       "localizations" : {
         "es" : {
@@ -3231,16 +3336,26 @@
       "comment" : "Text displayed in the \"Where should we explore?\" card.",
       "isCommentAutoGenerated" : true
     },
-    "Keep every shared cost in one place — hotels, meals, taxis — in any currency." : {
-      "comment" : "Text describing the benefits of using TripSplit for tracking trip expenses.",
-      "isCommentAutoGenerated" : true
-    },
-    "Keep promising trips close" : {
-
-    },
     "Kind" : {
       "comment" : "A label for the kind of the itinerary stop.",
       "isCommentAutoGenerated" : true
+    },
+    "LAKESIDE" : {
+      "comment" : "Label stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LAGO"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "湖畔"
+          }
+        }
+      }
     },
     "Language" : {
       "localizations" : {
@@ -3274,6 +3389,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "允许受邀成员记录由他人支付的支出。你始终可以这样做。"
+          }
+        }
+      }
+    },
+    "LIBERTY" : {
+      "comment" : "Name of a landmark stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LA LIBERTAD"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自由女神"
           }
         }
       }
@@ -3560,6 +3692,23 @@
       "comment" : "A section title in the FocusDetailSheet.",
       "isCommentAutoGenerated" : true
     },
+    "MOUNTAINS" : {
+      "comment" : "Label stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "MONTAÑAS"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "山脉"
+          }
+        }
+      }
+    },
     "Must be at least 6 characters." : {
       "localizations" : {
         "es" : {
@@ -3845,9 +3994,21 @@
         }
       }
     },
-    "No trips match these filters" : {
-      "comment" : "Text displayed when the user has not selected any filters and there are no results.",
-      "isCommentAutoGenerated" : true
+    "No trips match" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No hay viajes que coincidan"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有匹配的旅行"
+          }
+        }
+      }
     },
     "No trips yet" : {
       "localizations" : {
@@ -3932,6 +4093,23 @@
       "comment" : "The label of a button that dismisses an alert.",
       "isCommentAutoGenerated" : true
     },
+    "OLD TOWN" : {
+      "comment" : "Label stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CASCO ANTIGUO"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "古城"
+          }
+        }
+      }
+    },
     "On track" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -3969,11 +4147,37 @@
       "comment" : "Accessibility label for the Explore button. The argument is the name of the selected trip.",
       "isCommentAutoGenerated" : true
     },
-    "Open a guide to see stops, food picks, and practical advice." : {
-
+    "Open a result to preview the full guide." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abre un resultado para ver la guía completa."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开结果即可预览完整指南。"
+          }
+        }
+      }
     },
-    "Open any result to preview the complete guide." : {
-
+    "Open guide" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abrir guía"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开指南"
+          }
+        }
+      }
     },
     "Open now" : {
       "comment" : "Button title that opens a new tab.",
@@ -4425,9 +4629,6 @@
       "comment" : "A button that opens a photo picker.",
       "isCommentAutoGenerated" : true
     },
-    "Pick up where you left off." : {
-
-    },
     "Pinch to zoom, drag to reposition" : {
       "localizations" : {
         "es" : {
@@ -4456,6 +4657,7 @@
       "isCommentAutoGenerated" : true
     },
     "Places to go, things to do…" : {
+      "extractionState" : "stale",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -4499,6 +4701,22 @@
       "comment" : "A button that seeds a day-by-day itinerary for a trip.",
       "isCommentAutoGenerated" : true
     },
+    "Plan days together" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Planeen los días juntos"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一起规划每一天"
+          }
+        }
+      }
+    },
     "Plan each day of this trip: places to go, things to do, and where to eat." : {
       "comment" : "A description of the purpose of the day-by-day itinerary.",
       "isCommentAutoGenerated" : true
@@ -4527,6 +4745,7 @@
       }
     },
     "Plan your next adventure" : {
+      "extractionState" : "stale",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -4538,6 +4757,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "规划你的下一次冒险"
+          }
+        }
+      }
+    },
+    "Plan your next trip" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Planea tu próximo viaje"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "规划你的下一次旅行"
           }
         }
       }
@@ -4597,9 +4832,6 @@
           }
         }
       }
-    },
-    "Popular starting points" : {
-
     },
     "Post" : {
       "comment" : "The text on the button that posts the user's content.",
@@ -5016,6 +5248,22 @@
         }
       }
     },
+    "Resume a plan or revisit a guide you saved." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retoma un plan o vuelve a una guía que guardaste."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "继续规划或重温已保存的指南。"
+          }
+        }
+      }
+    },
     "Retry" : {
       "localizations" : {
         "es" : {
@@ -5116,9 +5364,6 @@
         }
       }
     },
-    "Saved for later" : {
-
-    },
     "Saved places" : {
       "comment" : "Title of a screen that lists places that the user has saved.",
       "isCommentAutoGenerated" : true
@@ -5141,10 +5386,6 @@
     },
     "Scan a receipt to fill in the items and total for you." : {
       "comment" : "A description of the receipt card.",
-      "isCommentAutoGenerated" : true
-    },
-    "Scan receipts" : {
-      "comment" : "Text describing the feature of scanning receipts to automatically fill out the receipt form.",
       "isCommentAutoGenerated" : true
     },
     "Scanning…" : {
@@ -5440,10 +5681,6 @@
         }
       }
     },
-    "Settle up with friends" : {
-      "comment" : "Description of a feature that allows users to settle up with friends.",
-      "isCommentAutoGenerated" : true
-    },
     "Settle with the fewest payments" : {
       "comment" : "A step in the Settle Up process.",
       "isCommentAutoGenerated" : true
@@ -5515,6 +5752,22 @@
     "Settlement updates" : {
       "comment" : "A toggle for receiving settlement updates.",
       "isCommentAutoGenerated" : true
+    },
+    "Shape an itinerary, map every stop, and invite friends to build the trip with you." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Crea un itinerario, ubica cada parada e invita a tus amigos a planear contigo."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "制定行程、标记每一站，并邀请朋友一起规划。"
+          }
+        }
+      }
     },
     "Share a moment from the trip…" : {
       "comment" : "A placeholder text for a text field in a feed composer.",
@@ -5615,9 +5868,21 @@
       "comment" : "Button text for signing in.",
       "isCommentAutoGenerated" : true
     },
-    "Sign in (or create an account) from the profile icon on the Home tab — your invitation will be accepted automatically." : {
-      "comment" : "Alert message that appears when a user accepts an invitation while not being signed in.",
-      "isCommentAutoGenerated" : true
+    "Sign in (or create an account) from the Profile tab — your invitation will be accepted automatically." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inicia sesión (o crea una cuenta) desde la pestaña Perfil; tu invitación se aceptará automáticamente."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请在“个人资料”标签页登录（或创建账户），系统会自动接受邀请。"
+          }
+        }
+      }
     },
     "Sign in from the Settings tab to create trips, add expenses, and edit trips." : {
       "comment" : "A message that appears when a user is not signed in and tries to access a feature that requires an account.",
@@ -5625,10 +5890,6 @@
     },
     "Sign In Required" : {
       "comment" : "The title of an alert that appears when a user is not signed in.",
-      "isCommentAutoGenerated" : true
-    },
-    "Sign in to browse curated trips and destinations." : {
-      "comment" : "Text describing the benefits of signing in to explore.",
       "isCommentAutoGenerated" : true
     },
     "Sign In to Join the Trip" : {
@@ -5717,9 +5978,21 @@
       "comment" : "Text displayed in a banner that explains how to skip manually entering a receipt and instead scan it.",
       "isCommentAutoGenerated" : true
     },
-    "Snap a photo and TripSplit reads the items, tax, and tip for you." : {
-      "comment" : "Text describing how to use the \"Scan receipts\" feature.",
-      "isCommentAutoGenerated" : true
+    "Slow mornings, warm water, and room to wander." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mañanas tranquilas, agua cálida y tiempo para explorar."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "悠闲的早晨、温暖的海水和随心漫步的空间。"
+          }
+        }
+      }
     },
     "Solid" : {
       "comment" : "A label for the solid color of the navbar.",
@@ -5769,6 +6042,40 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "部分行程需要刷新汇率"
+          }
+        }
+      }
+    },
+    "SOUTH BEACH" : {
+      "comment" : "Name of a landmark stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SOUTH BEACH"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "南海滩"
+          }
+        }
+      }
+    },
+    "SPACE NEEDLE" : {
+      "comment" : "Name of a landmark stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SPACE NEEDLE"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "太空针塔"
           }
         }
       }
@@ -5903,6 +6210,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "按百分比分摊"
+          }
+        }
+      }
+    },
+    "Split costs without the spreadsheet" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Divide gastos sin hojas de cálculo"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "告别表格，轻松分摊"
           }
         }
       }
@@ -6076,6 +6399,38 @@
         }
       }
     },
+    "Start with a guide or create an empty trip when you already know where you're going." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Empieza con una guía o crea un viaje vacío si ya sabes adónde vas."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从指南开始；如果已经知道目的地，也可以创建空白旅行。"
+          }
+        }
+      }
+    },
+    "Start with your dates, budget, and a blank day-by-day plan." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Empieza con tus fechas, presupuesto y un plan diario en blanco."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从日期、预算和空白的每日计划开始。"
+          }
+        }
+      }
+    },
     "Start your itinerary from %@?" : {
       "comment" : "The title of a confirmation dialog that lets the user start a new itinerary from a curated trip. The argument is the destination's name.",
       "isCommentAutoGenerated" : true
@@ -6179,9 +6534,6 @@
     "Tag Location" : {
       "comment" : "The title of a sheet that lets the user tag a post with a location.",
       "isCommentAutoGenerated" : true
-    },
-    "Tap a heart to save a guide. Your saved ideas will appear here." : {
-
     },
     "Tap a person to see who owes them." : {
       "comment" : "A description of the settlements list.",
@@ -6450,6 +6802,39 @@
         }
       }
     },
+    "TOKYO TOWER" : {
+      "comment" : "Name of a landmark stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TORRE DE TOKIO"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "东京塔"
+          }
+        }
+      }
+    },
+    "Tokyo, beaches, ramen…" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tokio, playas, ramen…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "东京、海滩、拉面……"
+          }
+        }
+      }
+    },
     "Total" : {
       "localizations" : {
         "es" : {
@@ -6553,15 +6938,28 @@
         }
       }
     },
-    "Track trip expenses" : {
-      "comment" : "Title of a welcome view page that describes the feature of tracking trip expenses.",
-      "isCommentAutoGenerated" : true
+    "Track shared expenses, scan receipts, and settle fairly when the spending starts." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Registra gastos compartidos, escanea recibos y liquida de forma justa cuando empiecen los gastos."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开始消费后，记录共同支出、扫描收据并公平结算。"
+          }
+        }
+      }
     },
     "Transit directions" : {
       "comment" : "A button that opens the Maps app with transit directions.",
       "isCommentAutoGenerated" : true
     },
     "Travel together, split with ease" : {
+      "extractionState" : "stale",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -6777,6 +7175,22 @@
         }
       }
     },
+    "Trips worth planning around the next meal." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Viajes que vale la pena planear alrededor de la próxima comida."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "值得围绕下一餐来规划的旅行。"
+          }
+        }
+      }
+    },
     "TripSplit" : {
 
     },
@@ -6804,8 +7218,21 @@
       "comment" : "Text displayed in a banner that appears when the user is a member of a trip.",
       "isCommentAutoGenerated" : true
     },
-    "Try a longer trip length or a higher budget." : {
-
+    "Try another travel style or broaden your budget." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prueba otro estilo de viaje o amplía tu presupuesto."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "试试其他旅行风格或提高预算。"
+          }
+        }
+      }
     },
     "Type" : {
       "comment" : "The type of a location.",
@@ -6814,6 +7241,22 @@
     "Unarchive" : {
       "comment" : "Label and icon for unarchiving a trip.",
       "isCommentAutoGenerated" : true
+    },
+    "Under $1.5k" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Menos de $1.5 mil"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "低于 $1.5k"
+          }
+        }
+      }
     },
     "Undo \"%@\"" : {
       "localizations" : {
@@ -7014,6 +7457,22 @@
         }
       }
     },
+    "Weekend" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fin de semana"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "周末"
+          }
+        }
+      }
+    },
     "Welcome back" : {
       "localizations" : {
         "es" : {
@@ -7053,9 +7512,6 @@
           }
         }
       }
-    },
-    "Where do you want to go next?" : {
-
     },
     "Where I've been" : {
       "comment" : "A heading for the places the user has visited.",
@@ -7120,6 +7576,23 @@
     "Who's coming?" : {
       "comment" : "Title of the section in the CreateItineraryView that displays the list of trip members.",
       "isCommentAutoGenerated" : true
+    },
+    "WILLIS TOWER" : {
+      "comment" : "Name of a landmark stamped on the ribbon of a visited-place badge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TORRE WILLIS"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "威利斯大厦"
+          }
+        }
+      }
     },
     "Work out each person's share" : {
       "comment" : "A description of how to calculate each person's share of an expense.",
@@ -7331,6 +7804,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "你的份额：%@"
+          }
+        }
+      }
+    },
+    "Your trips" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tus viajes"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的行程"
           }
         }
       }

@@ -84,25 +84,25 @@ struct KeyboardDismissInstaller: UIViewRepresentable {
 
 /// The destinations shown in the floating dock.
 enum DockTab: String, CaseIterable, Identifiable, Hashable {
-    case home = "Home"
+    case explore = "Explore"
     case map = "Map"
-    case rec = "Explore"
+    case trips = "Trips"
     case profile = "Profile"
 
     var id: Self { self }
 
     var systemImage: String {
         switch self {
-        case .home: "house.fill"
+        case .explore: "sparkles"
         case .map: "map.fill"
-        case .rec: "globe"
+        case .trips: "suitcase.fill"
         case .profile: "person.fill"
         }
     }
 }
 
 struct ContentView: View {
-    @State private var selectedTab: DockTab = .home
+    @State private var selectedTab: DockTab = .explore
     @State private var store = TripStore()
     @State private var auth = AuthStore()
     @State private var mapModel = ExploreMapModel()
@@ -113,7 +113,7 @@ struct ContentView: View {
     /// and then kept alive (hidden, not destroyed) so returning to a tab is instant —
     /// the old `switch` tore down and rebuilt the whole screen (map region, scroll
     /// positions, resolved images) on every dock tap, which made navigation feel laggy.
-    @State private var visitedTabs: Set<DockTab> = [.home]
+    @State private var visitedTabs: Set<DockTab> = [.explore]
     /// One-time profile-setup prompt for accounts with no display name yet.
     /// Session-scoped so a skip isn't re-asked until the next launch.
     @State private var showProfileSetup = false
@@ -139,10 +139,10 @@ struct ContentView: View {
                 .padding(.bottom, 8)
         }
         // A failed cloud save must be visible wherever the edit happened, not only on
-        // Home (which shows the same banner inline in its scroll content) — itinerary
+        // Trips (which shows the same banner inline in its scroll content) — itinerary
         // edits in Explore used to fail without any feedback at all.
         .overlay(alignment: .top) {
-            if store.syncState == .failed && selectedTab != .home {
+            if store.syncState == .failed && selectedTab != .trips {
                 SyncFailureBanner()
                     .padding(.horizontal)
                     .transition(.move(edge: .top).combined(with: .opacity))
@@ -151,9 +151,9 @@ struct ContentView: View {
         .animation(.snappy, value: store.syncState)
         .onChange(of: selectedTab) { _, tab in visitedTabs.insert(tab) }
         // Sign-in happens in the profile sheet (it hosts `AuthView` when signed out);
-        // once authentication succeeds, land the user on Home.
+        // once authentication succeeds, keep discovery as the app's front door.
         .onChange(of: auth.isAuthenticated) { _, isAuthenticated in
-            if isAuthenticated { selectedTab = .home }
+            if isAuthenticated { selectedTab = .explore }
             // Redeem an invitation link that was opened before the user signed in.
             if isAuthenticated, let url = pendingInviteURL {
                 pendingInviteURL = nil
@@ -245,7 +245,7 @@ struct ContentView: View {
         .alert("Sign In to Join the Trip", isPresented: $showInviteSignInAlert) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("Sign in (or create an account) from the profile icon on the Home tab — your invitation will be accepted automatically.")
+            Text("Sign in (or create an account) from the Profile tab — your invitation will be accepted automatically.")
         }
         .alert("Couldn't Accept Invitation", isPresented: Binding(
             get: { inviteErrorMessage != nil },
@@ -268,14 +268,13 @@ struct ContentView: View {
     @ViewBuilder
     private func screen(for tab: DockTab) -> some View {
         switch tab {
-        case .home: HomeScreen(isActive: tab == selectedTab)
+        case .explore: RecScreen(isActive: tab == selectedTab)
         case .map: MapScreen(selectedTab: $selectedTab, isActive: tab == selectedTab)
-        case .rec:
-            if auth.isAuthenticated {
-                RecScreen(isActive: tab == selectedTab)
-            } else {
-                LockedExploreScreen(selectedTab: $selectedTab)
-            }
+        case .trips:
+            HomeScreen(
+                isActive: tab == selectedTab,
+                onBrowseIdeas: { selectedTab = .explore }
+            )
         case .profile:
             ProfileScreen()
         }
@@ -291,48 +290,6 @@ struct ContentView: View {
                 .allowsHitTesting(tab == selectedTab)
                 .accessibilityHidden(tab != selectedTab)
                 .animation(nil, value: selectedTab)
-        }
-    }
-}
-
-// MARK: - Screens
-
-/// Shown in place of the Explore tab while signed out: explains the tab is
-/// account-only and opens the sign-in sheet (`SettingsScreen` hosts `AuthView`
-/// when signed out).
-struct LockedExploreScreen: View {
-    @Binding var selectedTab: DockTab
-    @State private var showSignIn = false
-
-    var body: some View {
-        ZStack {
-            AppBackground()
-            VStack(spacing: 16) {
-                Image(systemName: "lock.fill")
-                    .font(.app(size: 40))
-                    .foregroundStyle(.secondary)
-                Text("Explore is for members")
-                    .font(.app(.title3, .semibold))
-                Text("Sign in to browse curated trips and destinations.")
-                    .font(.app(.subheadline))
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                Button {
-                    showSignIn = true
-                } label: {
-                    Text("Sign In")
-                        .font(.app(.subheadline, .semibold))
-                        .foregroundStyle(Theme.onAccent)
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 12)
-                }
-                .buttonStyle(.plain)
-                .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
-            }
-            .padding(.horizontal, 32)
-        }
-        .sheet(isPresented: $showSignIn) {
-            SettingsScreen()
         }
     }
 }

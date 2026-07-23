@@ -79,7 +79,7 @@ struct SplashScreen: View {
                                 startPoint: .leading, endPoint: .trailing
                             )
                         )
-                    Text("Travel together, split with ease")
+                    Text("Discover trips. Split fairly.")
                         .font(.app(.subheadline))
                         .foregroundStyle(.secondary)
                 }

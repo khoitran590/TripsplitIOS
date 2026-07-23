@@ -314,13 +314,13 @@ struct SettingsScreen: View {
         .buttonStyle(.plain)
     }
 
-    /// Promo card in the Airbnb "Airbnb your home" slot, pointing at the Explore tab.
+    /// A quiet reminder that curated guides are the product's planning front door.
     private var exploreCard: some View {
         HStack(spacing: 14) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Plan your next adventure")
+                Text("Featured travel guides")
                     .font(.app(.headline))
-                Text("Browse curated trips and split costs with friends.")
+                Text("Find a destination, shape a plan, then share it with friends.")
                     .font(.app(.subheadline))
                     .foregroundStyle(.secondary)
             }

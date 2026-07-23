@@ -17,15 +17,15 @@ struct WelcomeView: View {
     }
 
     private let pages: [Page] = [
-        Page(systemImage: "suitcase.fill",
-             title: "Track trip expenses",
-             subtitle: "Keep every shared cost in one place — hotels, meals, taxis — in any currency."),
-        Page(systemImage: "doc.text.viewfinder",
-             title: "Scan receipts",
-             subtitle: "Snap a photo and TripSplit reads the items, tax, and tip for you."),
+        Page(systemImage: "sparkles",
+             title: "Discover trips worth taking",
+             subtitle: "Browse photo-rich guides, local favorites, and practical plans for your next destination."),
+        Page(systemImage: "map.fill",
+             title: "Plan days together",
+             subtitle: "Shape an itinerary, map every stop, and invite friends to build the trip with you."),
         Page(systemImage: "person.2.fill",
-             title: "Settle up with friends",
-             subtitle: "Fair splits down to the cent, and the fewest payments to square everyone away."),
+             title: "Split costs without the spreadsheet",
+             subtitle: "Track shared expenses, scan receipts, and settle fairly when the spending starts."),
     ]
 
     var body: some View {
@@ -57,7 +57,7 @@ struct WelcomeView: View {
                         onFinish()
                     }
                 } label: {
-                    Text(page < pages.count - 1 ? "Continue" : "Get Started")
+                    Text(page < pages.count - 1 ? "Continue" : "Start exploring")
                         .font(.app(.headline))
                         .foregroundStyle(Theme.onAccent)
                         .frame(maxWidth: .infinity)

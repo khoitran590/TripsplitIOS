@@ -4,6 +4,7 @@ import SwiftUI
 /// and recent transactions.
 struct HomeScreen: View {
     var isActive = true
+    var onBrowseIdeas: () -> Void = {}
     @Environment(TripStore.self) private var store
     @Environment(AuthStore.self) private var auth
     @AppStorage("appearancePreference") private var appearance: AppearancePreference = .system
@@ -52,7 +53,7 @@ struct HomeScreen: View {
                 .padding(.bottom, 110)
             }
             .background { AppBackground() }
-            .navigationTitle("Hi, \(greetingName)")
+            .navigationTitle("Your trips")
             .refreshable {
                 await store.loadFromCloud()
                 await store.refreshRates()
@@ -180,13 +181,14 @@ struct HomeScreen: View {
                         .foregroundStyle(.tertiary)
                     Text("No trips yet")
                         .font(.app(.subheadline, .medium))
-                    Text("Create a trip to start tracking expenses.")
+                    Text("Start with a guide or create an empty trip when you already know where you're going.")
                         .font(.app(.caption))
                         .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
                     Button {
-                        if auth.isAuthenticated { showAddTrip = true } else { showSignInAlert = true }
+                        onBrowseIdeas()
                     } label: {
-                        Label("Create your first trip", systemImage: "plus")
+                        Label("Browse trip ideas", systemImage: "sparkles")
                             .font(.app(.subheadline, .semibold))
                             .foregroundStyle(Theme.onAccent)
                             .padding(.horizontal, 18)
@@ -196,6 +198,15 @@ struct HomeScreen: View {
                     .buttonStyle(.plain)
                     .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
                     .padding(.top, 4)
+
+                    Button {
+                        if auth.isAuthenticated { showAddTrip = true } else { showSignInAlert = true }
+                    } label: {
+                        Label("Create empty trip", systemImage: "plus")
+                            .font(.app(.subheadline, .semibold))
+                            .frame(minHeight: 44)
+                    }
+                    .buttonStyle(.plain)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 28)
@@ -282,13 +293,6 @@ struct HomeScreen: View {
         case .failed:
             SyncFailureBanner()
         }
-    }
-
-    /// The first-name greeting, falling back to a friendly default until the user
-    /// sets their name in Settings → Personal Information.
-    private var greetingName: String {
-        let trimmed = store.currentUser.name.trimmingCharacters(in: .whitespaces)
-        return trimmed.isEmpty ? "there" : trimmed
     }
 
     private var appearanceToggle: some View {

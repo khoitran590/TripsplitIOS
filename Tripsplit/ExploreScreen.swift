@@ -13,20 +13,22 @@ struct RecScreen: View {
     @State private var navigationPath = NavigationPath()
     /// Saved destinations live on the cloud-backed profile so they survive reinstalls.
     @Environment(TripStore.self) private var store
+    @Environment(AuthStore.self) private var auth
     @Environment(ExploreMapModel.self) private var mapModel
 
     /// Presents the build-your-own-itinerary flow (ItineraryFeature.swift).
     @State private var showCreateItinerary = false
-    /// A short, Explore-specific walkthrough shown the first time a member opens
-    /// this tab. Users can start browsing or choose the blank itinerary builder.
-    @AppStorage("hasSeenExploreOnboarding") private var hasSeenExploreOnboarding = false
+    /// An optional walkthrough opened from the help button, after the destination
+    /// content has already had room to make the first impression.
     @State private var showExploreOnboarding = false
+    @State private var showSignIn = false
     @FocusState private var isSearchFocused: Bool
 
     // Filters
     @State private var showFilterSheet = false
     @State private var tripLength: TripLengthFilter = .any
     @State private var selectedContinent: String?
+    @State private var selectedIntent: ExploreIntent?
     @State private var maxBudget: Double = Self.budgetCap
     /// Slider ceiling; at the cap the budget filter is treated as "no limit".
     static let budgetCap: Double = 3500
@@ -56,14 +58,16 @@ struct RecScreen: View {
 
     private var adventures: [Destination] { Destination.all.filter(\.isFeatured) }
     private var saved: [Destination] { Destination.all.filter { savedIDs.contains($0.id) } }
+    private var hasContinueContent: Bool { !saved.isEmpty || !store.itineraryTrips.isEmpty }
 
     private var isFiltering: Bool {
-        tripLength != .any || selectedContinent != nil || maxBudget < Self.budgetCap
+        tripLength != .any || selectedContinent != nil || selectedIntent != nil || maxBudget < Self.budgetCap
     }
 
     private var activeFilterCount: Int {
         (tripLength != .any ? 1 : 0)
             + (selectedContinent != nil ? 1 : 0)
+            + (selectedIntent != nil ? 1 : 0)
             + (maxBudget < Self.budgetCap ? 1 : 0)
     }
 
@@ -71,6 +75,7 @@ struct RecScreen: View {
         Destination.all.filter { destination in
             tripLength.matches(destination.days)
                 && (selectedContinent == nil || destination.continent == selectedContinent)
+                && (selectedIntent?.matches(destination) ?? true)
                 && (maxBudget >= Self.budgetCap || destination.budgetValue <= maxBudget)
         }
     }
@@ -91,15 +96,28 @@ struct RecScreen: View {
     private func resetFilters() {
         tripLength = .any
         selectedContinent = nil
+        selectedIntent = nil
         maxBudget = Self.budgetCap
     }
 
     /// Seeds a new editable itinerary from a curated trip and pushes its planner on
     /// top of the detail page, so the curated plan becomes the starting point.
     private func startItinerary(from destination: Destination) {
+        guard auth.isAuthenticated else {
+            showSignIn = true
+            return
+        }
         let trip = destination.starterTrip(creator: store.currentUser)
         store.addTrip(trip)
         navigationPath.append(trip.id)
+    }
+
+    private func createItinerary() {
+        guard auth.isAuthenticated else {
+            showSignIn = true
+            return
+        }
+        showCreateItinerary = true
     }
 
     var body: some View {
@@ -124,112 +142,24 @@ struct RecScreen: View {
                     } else {
                         filterBar
 
-                        if !isFiltering {
-                            savedSection
-
-                            VStack(alignment: .leading, spacing: 14) {
-                                sectionTitle(
-                                    "Popular starting points",
-                                    subtitle: "Open a guide to see stops, food picks, and practical advice."
-                                )
-                                ScrollView(.horizontal, showsIndicators: false) {
-                                    LazyHStack(spacing: 14) {
-                                        ForEach(adventures) { destination in
-                                            NavigationLink(value: destination.id) {
-                                                AdventureCard(
-                                                    destination: destination,
-                                                    isSaved: savedIDs.contains(destination.id),
-                                                    onToggleSave: { toggleSaved(destination.id) }
-                                                )
-                                            }
-                                            .buttonStyle(.plain)
-                                        }
-                                    }
-                                    .scrollTargetLayout()
-                                    .padding(.horizontal)
-                                }
-                                .scrollTargetBehavior(.viewAligned)
-                                .padding(.horizontal, -16)
-                            }
-                            .padding(16)
-                            .readableSurface(cornerRadius: 24)
-
-                            ItineraryPlannerSection(onCreate: { showCreateItinerary = true })
+                        if isFiltering {
+                            matchingTripsSection
                         } else {
-                            HStack {
-                                Text("\(filteredDestinations.count) trip\(filteredDestinations.count == 1 ? "" : "s") match")
-                                    .font(.app(.subheadline, .semibold))
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                Button("Reset") { resetFilters() }
-                                    .font(.app(.subheadline, .semibold))
-                                    .foregroundStyle(Theme.accent)
-                                    .buttonStyle(.plain)
-                            }
-                        }
-
-                        if !filteredDestinations.isEmpty {
-                            sectionTitle(
-                                isFiltering ? "Matching trips" : "Browse by destination",
-                                subtitle: isFiltering
-                                    ? "Open any result to preview the complete guide."
-                                    : "Curated plans grouped by country for faster scanning."
+                            if hasContinueContent { continueSection }
+                            featuredSection
+                            collectionSection(
+                                title: "Food cities",
+                                subtitle: "Trips worth planning around the next meal.",
+                                destinations: Destination.all.filter { $0.tags.contains("Foodie") || $0.tags.contains("Markets") || $0.tags.contains("Night markets") }
                             )
+                            collectionSection(
+                                title: "Beach escapes",
+                                subtitle: "Slow mornings, warm water, and room to wander.",
+                                destinations: Destination.all.filter { $0.tags.contains("Beach") || $0.tags.contains("Coastal") }
+                            )
+                            buildFromScratchCard
+                            destinationDirectory
                         }
-
-                        if filteredDestinations.isEmpty {
-                            VStack(spacing: 10) {
-                                Image(systemName: "line.3.horizontal.decrease.circle")
-                                    .font(.app(size: 32))
-                                    .foregroundStyle(.tertiary)
-                                Text("No trips match these filters")
-                                    .font(.app(.subheadline, .medium))
-                                Text("Try a longer trip length or a higher budget.")
-                                    .font(.app(.caption))
-                                    .foregroundStyle(.secondary)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 28)
-                            .glassEffect(.regular, in: .rect(cornerRadius: 20))
-                        } else {
-                            ForEach(countrySections, id: \.country) { section in
-                                VStack(alignment: .leading, spacing: 12) {
-                                    HStack(alignment: .firstTextBaseline, spacing: 10) {
-                                        sectionHeader(LocalizedStringKey(section.country))
-                                        Text(section.destinations[0].continent.uppercased())
-                                            .font(.app(.caption2, .bold))
-                                            .tracking(1)
-                                            .foregroundStyle(.secondary)
-                                        Spacer()
-                                        Text("\(section.destinations.count) trip\(section.destinations.count == 1 ? "" : "s")")
-                                            .font(.app(.caption, .semibold))
-                                            .foregroundStyle(.secondary)
-                                            .padding(.horizontal, 10)
-                                            .padding(.vertical, 5)
-                                            .glassEffect(.regular, in: .capsule)
-                                    }
-                                    ScrollView(.horizontal, showsIndicators: false) {
-                                        LazyHStack(spacing: 14) {
-                                            ForEach(section.destinations) { destination in
-                                                NavigationLink(value: destination.id) {
-                                                    CountryTripCard(
-                                                        destination: destination,
-                                                        isSaved: savedIDs.contains(destination.id),
-                                                        onToggleSave: { toggleSaved(destination.id) }
-                                                    )
-                                                }
-                                                .buttonStyle(.plain)
-                                            }
-                                        }
-                                        .scrollTargetLayout()
-                                        .padding(.horizontal)
-                                    }
-                                    .scrollTargetBehavior(.viewAligned)
-                                    .padding(.horizontal, -16)
-                                }
-                            }
-                        }
-
                     }
                 }
                 .padding()
@@ -267,17 +197,18 @@ struct RecScreen: View {
                     navigationPath.append(newTripID)
                 }
             }
+            .sheet(isPresented: $showSignIn) {
+                SettingsScreen()
+            }
             .fullScreenCover(isPresented: $showExploreOnboarding) {
                 ExploreOnboardingView {
-                    hasSeenExploreOnboarding = true
                     showExploreOnboarding = false
                 } onBuildItinerary: {
-                    hasSeenExploreOnboarding = true
                     showExploreOnboarding = false
                     // Wait for the full-screen cover to finish handing control back
                     // before presenting the itinerary sheet.
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                        showCreateItinerary = true
+                        createItinerary()
                     }
                 }
             }
@@ -292,11 +223,6 @@ struct RecScreen: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
             }
-            .onAppear {
-                if !hasSeenExploreOnboarding {
-                    showExploreOnboarding = true
-                }
-            }
             .task(id: mapModel.exploreRequest) {
                 guard let tripID = mapModel.takeRequestedItinerary(),
                       store.trip(tripID)?.itinerary != nil else { return }
@@ -307,47 +233,34 @@ struct RecScreen: View {
         }
     }
 
-    /// A plain-language orientation above the controls. This remains useful after
-    /// onboarding and gives VoiceOver users the purpose of the tab before its many
-    /// destination rails.
     private var exploreIntroduction: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Where do you want to go next?")
-                .font(.app(.title2, .bold))
-            Text("Find a ready-made guide, save your favorites, then make any plan your own.")
-                .font(.app(.subheadline))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
+        Text("Plan your next trip")
+            .font(.app(.title2, .bold))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
     }
 
-    /// Saved ideas belong near the top of Explore: returning users most often want
-    /// to resume evaluating a place, not scroll past the full destination directory.
-    @ViewBuilder
-    private var savedSection: some View {
-        if saved.isEmpty {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "heart")
-                    .font(.app(.headline))
-                    .foregroundStyle(Theme.accent)
-                    .frame(width: 34, height: 34)
-                    .background(Theme.accent.opacity(0.12), in: .circle)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Keep promising trips close")
-                        .font(.app(.subheadline, .semibold))
-                    Text("Tap a heart to save a guide. Your saved ideas will appear here.")
-                        .font(.app(.caption))
-                        .foregroundStyle(.secondary)
+    private var continueSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            sectionTitle("Continue", subtitle: "Resume a plan or revisit a guide you saved.")
+
+            if !store.itineraryTrips.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 14) {
+                        ForEach(store.itineraryTrips) { trip in
+                            NavigationLink(value: trip.id) {
+                                ItineraryTripCard(trip: trip)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .scrollTargetLayout()
+                    .padding(.horizontal)
                 }
+                .scrollTargetBehavior(.viewAligned)
+                .padding(.horizontal, -16)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(14)
-            .readableSurface(cornerRadius: 18)
-        } else {
-            VStack(alignment: .leading, spacing: 12) {
-                sectionTitle("Saved for later", subtitle: "Pick up where you left off.")
+
+            if !saved.isEmpty {
                 ForEach(saved) { destination in
                     NavigationLink(value: destination.id) {
                         DestinationRow(destination: destination)
@@ -356,10 +269,167 @@ struct RecScreen: View {
                 }
             }
         }
+        .padding(16)
+        .readableSurface(cornerRadius: 24)
     }
 
-    /// Horizontal chip row: the Filters button (with active count), then one chip
-    /// per continent for the most common narrowing in a single tap.
+    private var featuredSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            sectionTitle("Editor picks", subtitle: "Complete guides with stops, food picks, and a realistic budget.")
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 14) {
+                    ForEach(adventures) { destination in
+                        NavigationLink(value: destination.id) {
+                            AdventureCard(
+                                destination: destination,
+                                isSaved: savedIDs.contains(destination.id),
+                                onToggleSave: { toggleSaved(destination.id) },
+                                showsCTA: true
+                            )
+                            .containerRelativeFrame(.horizontal, count: 1, spacing: 14)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .scrollTargetLayout()
+                .padding(.horizontal)
+            }
+            .scrollTargetBehavior(.viewAligned)
+            .padding(.horizontal, -16)
+        }
+    }
+
+    private func collectionSection(
+        title: LocalizedStringKey,
+        subtitle: LocalizedStringKey,
+        destinations: [Destination]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionTitle(title, subtitle: subtitle)
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 14) {
+                    ForEach(destinations) { destination in
+                        NavigationLink(value: destination.id) {
+                            CountryTripCard(
+                                destination: destination,
+                                isSaved: savedIDs.contains(destination.id),
+                                onToggleSave: { toggleSaved(destination.id) }
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .scrollTargetLayout()
+                .padding(.horizontal)
+            }
+            .scrollTargetBehavior(.viewAligned)
+            .padding(.horizontal, -16)
+        }
+    }
+
+    private var buildFromScratchCard: some View {
+        Button(action: createItinerary) {
+            HStack(spacing: 14) {
+                Image(systemName: "map.fill")
+                    .font(.app(.title2))
+                    .foregroundStyle(Theme.onAccent)
+                    .frame(width: 52, height: 52)
+                    .background(Theme.accent, in: .rect(cornerRadius: 16))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Build from scratch")
+                        .font(.app(.subheadline, .semibold))
+                        .foregroundStyle(.primary)
+                    Text("Start with your dates, budget, and a blank day-by-day plan.")
+                        .font(.app(.caption))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(14)
+            .readableSurface(cornerRadius: 20, elevated: true)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var matchingTripsSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                sectionTitle("Matching trips", subtitle: "Open a result to preview the full guide.")
+                Spacer()
+                Button("Clear all", action: resetFilters)
+                    .font(.app(.subheadline, .semibold))
+                    .foregroundStyle(Theme.accent)
+                    .buttonStyle(.plain)
+            }
+
+            if filteredDestinations.isEmpty {
+                ContentUnavailableView(
+                    "No trips match",
+                    systemImage: "line.3.horizontal.decrease.circle",
+                    description: Text("Try another travel style or broaden your budget.")
+                )
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 24)
+                .readableSurface(cornerRadius: 20)
+            } else {
+                LazyVGrid(
+                    columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible())],
+                    spacing: 12
+                ) {
+                    ForEach(filteredDestinations) { destination in
+                        NavigationLink(value: destination.id) {
+                            MatchingTripCard(
+                                destination: destination,
+                                isSaved: savedIDs.contains(destination.id),
+                                onToggleSave: { toggleSaved(destination.id) }
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+
+    private var destinationDirectory: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            sectionTitle("Browse by destination", subtitle: "Explore every curated guide by country.")
+            ForEach(countrySections, id: \.country) { section in
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        sectionHeader(LocalizedStringKey(section.country))
+                        Text(section.destinations[0].continent.uppercased())
+                            .font(.app(.caption2, .bold))
+                            .tracking(1)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        LazyHStack(spacing: 14) {
+                            ForEach(section.destinations) { destination in
+                                NavigationLink(value: destination.id) {
+                                    CountryTripCard(
+                                        destination: destination,
+                                        isSaved: savedIDs.contains(destination.id),
+                                        onToggleSave: { toggleSaved(destination.id) }
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .scrollTargetLayout()
+                        .padding(.horizontal)
+                    }
+                    .scrollTargetBehavior(.viewAligned)
+                    .padding(.horizontal, -16)
+                }
+            }
+        }
+    }
+
     private var filterBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
@@ -373,7 +443,7 @@ struct RecScreen: View {
                     .font(.app(.subheadline, .semibold))
                     .foregroundStyle(activeFilterCount > 0 ? Theme.onAccent : .primary)
                     .padding(.horizontal, 14)
-                    .padding(.vertical, 9)
+                    .frame(minHeight: 44)
                 }
                 .buttonStyle(.plain)
                 .glassEffect(
@@ -381,16 +451,16 @@ struct RecScreen: View {
                     in: .capsule
                 )
 
-                ForEach(Destination.continents, id: \.self) { continent in
-                    let isOn = selectedContinent == continent
+                ForEach(ExploreIntent.allCases) { intent in
+                    let isOn = selectedIntent == intent
                     Button {
-                        selectedContinent = isOn ? nil : continent
+                        selectedIntent = isOn ? nil : intent
                     } label: {
-                        Text(continent)
+                        Label(intent.title, systemImage: intent.systemImage)
                             .font(.app(.subheadline, .medium))
                             .foregroundStyle(isOn ? Theme.onAccent : .primary)
                             .padding(.horizontal, 14)
-                            .padding(.vertical, 9)
+                            .frame(minHeight: 44)
                     }
                     .buttonStyle(.plain)
                     .glassEffect(
@@ -408,7 +478,7 @@ struct RecScreen: View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
-            TextField("Places to go, things to do…", text: $searchText)
+            TextField("Tokyo, beaches, ramen…", text: $searchText)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.words)
                 .submitLabel(.search)
@@ -487,6 +557,10 @@ struct RecScreen: View {
     }
 
     private func toggleSaved(_ id: String) {
+        guard auth.isAuthenticated else {
+            showSignIn = true
+            return
+        }
         var set = savedIDs
         if set.contains(id) {
             set.remove(id)
@@ -494,6 +568,51 @@ struct RecScreen: View {
             set.insert(id)
         }
         store.updateSavedPlaces(destinationIDs: set.sorted())
+    }
+}
+
+/// Fast, human-readable filters that map directly onto the existing curated data.
+enum ExploreIntent: String, CaseIterable, Identifiable {
+    case weekend
+    case fiveToSevenDays
+    case foodie
+    case beach
+    case under1500
+
+    var id: Self { self }
+
+    var title: LocalizedStringKey {
+        switch self {
+        case .weekend: "Weekend"
+        case .fiveToSevenDays: "5–7 days"
+        case .foodie: "Foodie"
+        case .beach: "Beach"
+        case .under1500: "Under $1.5k"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .weekend: "calendar"
+        case .fiveToSevenDays: "calendar.badge.clock"
+        case .foodie: "fork.knife"
+        case .beach: "beach.umbrella.fill"
+        case .under1500: "banknote.fill"
+        }
+    }
+
+    func matches(_ destination: Destination) -> Bool {
+        switch self {
+        case .weekend: destination.days <= 3
+        case .fiveToSevenDays: (5...7).contains(destination.days)
+        case .foodie:
+            destination.tags.contains("Foodie")
+                || destination.tags.contains("Markets")
+                || destination.tags.contains("Night markets")
+        case .beach:
+            destination.tags.contains("Beach") || destination.tags.contains("Coastal")
+        case .under1500: destination.budgetValue <= 1500
+        }
     }
 }
 
@@ -641,6 +760,7 @@ struct AdventureCard: View {
     let destination: Destination
     let isSaved: Bool
     let onToggleSave: () -> Void
+    var showsCTA = false
 
     var body: some View {
         ZStack {
@@ -652,7 +772,8 @@ struct AdventureCard: View {
                 endPoint: .bottom
             )
         }
-        .frame(width: 290, height: 380)
+        .frame(maxWidth: .infinity)
+        .frame(height: 380)
         .overlay(alignment: .topLeading) {
             HStack(spacing: 8) {
                 ForEach(destination.tags, id: \.self) { tag in
@@ -682,6 +803,15 @@ struct AdventureCard: View {
                     .font(.app(.subheadline, .medium))
                     .foregroundStyle(.white.opacity(0.85))
                     .padding(.top, 2)
+                if showsCTA {
+                    Label("Open guide", systemImage: "arrow.right")
+                        .font(.app(.subheadline, .semibold))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 14)
+                        .frame(minHeight: 38)
+                        .background(.white.opacity(0.94), in: .capsule)
+                        .padding(.top, 10)
+                }
             }
             .padding(16)
         }
@@ -750,6 +880,39 @@ struct CountryTripCard: View {
     }
 }
 
+/// A compact photo tile used when intent filters are active. Keeping the result
+/// grid visually simple makes it faster to compare destinations at a glance.
+struct MatchingTripCard: View {
+    let destination: Destination
+    let isSaved: Bool
+    let onToggleSave: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            DestinationPhoto(destination: destination, symbolSize: 44)
+                .frame(height: 140)
+                .overlay(alignment: .topTrailing) {
+                    HeartButton(isSaved: isSaved, action: onToggleSave)
+                        .padding(8)
+                }
+                .clipShape(.rect(cornerRadius: 16))
+
+            Text(destination.city)
+                .font(.app(.headline))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            Text("\(destination.days) days · \(destination.price)")
+                .font(.app(.caption, .medium))
+                .foregroundStyle(.secondary)
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .readableSurface(cornerRadius: 20, elevated: true)
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("Opens the curated guide")
+    }
+}
+
 /// A compact row used for search results and the saved list. `matchedStop` names
 /// the place/restaurant inside the trip that matched a search, so results can show
 /// *why* a city came up.
@@ -802,7 +965,7 @@ struct HeartButton: View {
             Image(systemName: isSaved ? "heart.fill" : "heart")
                 .font(.app(size: 16, weight: .semibold))
                 .foregroundStyle(isSaved ? AnyShapeStyle(.red) : AnyShapeStyle(.black))
-                .frame(width: 38, height: 38)
+                .frame(width: 44, height: 44)
                 .background(.white.opacity(0.95), in: .circle)
         }
         .buttonStyle(.plain)
@@ -864,6 +1027,9 @@ struct DestinationDetailView: View {
                         .foregroundStyle(isSaved ? AnyShapeStyle(.red) : AnyShapeStyle(.primary))
                 }
             }
+        }
+        .safeAreaInset(edge: .bottom) {
+            detailActionBar
         }
     }
 
@@ -936,8 +1102,6 @@ struct DestinationDetailView: View {
                 statTile(value: "\(destination.stops)", label: "Stops")
             }
 
-            useAsPlanButton
-
             VStack(alignment: .leading, spacing: 6) {
                 Label("Planned by \(destination.planner)", systemImage: "person.circle.fill")
                     .font(.app(.subheadline, .semibold))
@@ -976,6 +1140,31 @@ struct DestinationDetailView: View {
         } message: {
             Text("Copies this trip's spots into an editable \(destination.days)-day plan with a \(destination.price) budget — nothing is set in stone.")
         }
+    }
+
+    /// Keep the conversion action reachable from every detail tab, with Map as a
+    /// clear secondary escape hatch instead of another competing primary button.
+    private var detailActionBar: some View {
+        HStack(spacing: 10) {
+            Button {
+                if let firstPlace = destination.places.first {
+                    mapModel.showOnMap(firstPlace, in: destination)
+                }
+            } label: {
+                Label("Map", systemImage: "map.fill")
+                    .font(.app(.subheadline, .semibold))
+                    .frame(minWidth: 76, minHeight: 50)
+                    .contentShape(.capsule)
+            }
+            .buttonStyle(.plain)
+            .readableSurface(cornerRadius: 25, elevated: true)
+
+            useAsPlanButton
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .background(.regularMaterial)
+        .overlay(alignment: .top) { Divider() }
     }
 
     /// Destination-level guidance turns the card collection into a trip a user can
