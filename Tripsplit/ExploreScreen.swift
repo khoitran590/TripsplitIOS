@@ -276,74 +276,46 @@ struct RecScreen: View {
         .accessibilityLabel("Appearance: \(appearance.label)")
     }
 
+    /// The screen title sits directly on the app backdrop — an Apple HIG large
+    /// title, not a boxed hero — so Explore opens flat and uncluttered instead of
+    /// a card wrapping a title wrapping more cards.
     private var exploreIntroduction: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .bottom, spacing: 14) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("CURATED TRAVEL GUIDES", systemImage: "sparkles")
-                        .font(.app(.caption2, .bold))
-                        .foregroundStyle(Theme.accent)
+        VStack(alignment: .leading, spacing: 8) {
+            Label("CURATED TRAVEL GUIDES", systemImage: "sparkles")
+                .font(.app(.caption2, .bold))
+                .foregroundStyle(Theme.accent)
 
-                    Text("Explore")
-                        .font(.app(size: 42, weight: .bold))
-                        .accessibilityAddTraits(.isHeader)
-
-                    Capsule()
-                        .fill(
-                            LinearGradient(
-                                colors: [Theme.accent, Theme.accentSecondary],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        )
-                        .frame(width: 58, height: 5)
-                }
-
-                Spacer(minLength: 0)
-
-                Button(action: createItinerary) {
-                    Label("Create trip", systemImage: "plus")
-                        .font(.app(.subheadline, .semibold))
-                        .foregroundStyle(Theme.onAccent)
-                        .padding(.horizontal, 15)
-                        .frame(minHeight: 46)
-                        .contentShape(.capsule)
-                }
-                .buttonStyle(.plain)
-                .background(
-                    LinearGradient(
-                        colors: [Theme.accent, Theme.accentSecondary],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    ),
-                    in: .capsule
-                )
-                .accessibilityLabel("Create your own trip")
-                .accessibilityHint("Opens the trip builder")
-            }
+            Text("Explore")
+                .font(.app(size: 42, weight: .bold))
+                .accessibilityAddTraits(.isHeader)
 
             Text("Find a place you’ll love, then shape it into a trip that’s completely yours.")
                 .font(.app(.subheadline))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(18)
-        .background {
-            ZStack {
-                Theme.surface.opacity(0.94)
-                LinearGradient(
-                    colors: [Theme.accent.opacity(0.12), .clear, Theme.accentSecondary.opacity(0.08)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
+                .padding(.trailing, 8)
+
+            Button(action: createItinerary) {
+                Label("Create a trip", systemImage: "plus")
+                    .font(.app(.headline))
+                    .foregroundStyle(Theme.onAccent)
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: 52)
+                    .contentShape(.capsule)
             }
+            .buttonStyle(.plain)
+            .background(
+                LinearGradient(
+                    colors: [Theme.accent, Theme.accentSecondary],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                ),
+                in: .capsule
+            )
+            .padding(.top, 6)
+            .accessibilityLabel("Create your own trip")
+            .accessibilityHint("Opens the trip builder")
         }
-        .clipShape(.rect(cornerRadius: 28))
-        .overlay {
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .strokeBorder(Theme.separator.opacity(0.75), lineWidth: 1)
-        }
-        .shadow(color: Theme.elevatedShadow, radius: 12, y: 5)
     }
 
     private var continueSection: some View {
@@ -376,8 +348,6 @@ struct RecScreen: View {
                 }
             }
         }
-        .padding(16)
-        .readableSurface(cornerRadius: 24)
     }
 
     private var featuredSection: some View {
@@ -882,17 +852,15 @@ struct AdventureCard: View {
         .frame(maxWidth: .infinity)
         .frame(height: 380)
         .overlay(alignment: .topLeading) {
-            HStack(spacing: 8) {
-                ForEach(destination.tags, id: \.self) { tag in
-                    Text(tag)
-                        .font(.app(.caption, .semibold))
-                        .foregroundStyle(.black)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(.white.opacity(0.92), in: .rect(cornerRadius: 8))
-                }
+            if let tag = destination.tags.first {
+                Text(tag)
+                    .font(.app(.caption, .semibold))
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(.white.opacity(0.92), in: .rect(cornerRadius: 8))
+                    .padding(12)
             }
-            .padding(12)
         }
         .overlay(alignment: .topTrailing) {
             HeartButton(isSaved: isSaved, action: onToggleSave)
@@ -938,47 +906,23 @@ struct CountryTripCard: View {
             DestinationPhoto(destination: destination, symbolSize: 64)
 
             LinearGradient(
-                colors: [.black.opacity(0.25), .clear, .clear, .black.opacity(0.72)],
+                colors: [.black.opacity(0.2), .clear, .clear, .black.opacity(0.78)],
                 startPoint: .top, endPoint: .bottom
             )
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(destination.city)
                     .font(.app(.title2, .bold))
                     .foregroundStyle(.white)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
-                Text("\(destination.dailyBudget) · \(destination.stops) stops")
-                    .font(.app(.caption, .medium))
-                    .foregroundStyle(.white.opacity(0.85))
-                HStack(spacing: 6) {
-                    Text(destination.price)
-                        .font(.app(.caption, .bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .glassEffect(.regular.tint(Theme.accent.opacity(0.7)), in: .capsule)
-                    Text(destination.tags.last ?? "")
-                        .font(.app(.caption, .semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .glassEffect(.regular, in: .capsule)
-                }
-                .padding(.top, 2)
+                Text("\(destination.days) days · \(destination.price)")
+                    .font(.app(.subheadline, .medium))
+                    .foregroundStyle(.white.opacity(0.9))
             }
             .padding(14)
         }
         .frame(width: 240, height: 300)
-        .overlay(alignment: .topLeading) {
-            Text("\(destination.days) days")
-                .font(.app(.caption, .semibold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .glassEffect(.regular, in: .capsule)
-                .padding(10)
-        }
         .overlay(alignment: .topTrailing) {
             HeartButton(isSaved: isSaved, action: onToggleSave)
                 .padding(10)
