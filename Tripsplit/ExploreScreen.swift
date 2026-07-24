@@ -26,21 +26,36 @@ struct RecScreen: View {
     @State private var showSettings = false
     @FocusState private var isSearchFocused: Bool
 
-    // Filters
+    // Filters. Every facet here is edited by *both* the quick chips and the filter
+    // sheet — the chips used to be a parallel set of predicates, which let a chip and
+    // the sheet contradict each other (e.g. "Weekend" plus "6+ days" → always empty).
     @State private var showFilterSheet = false
     @State private var tripLength: TripLengthFilter = .any
     @State private var selectedContinent: String?
-    @State private var selectedIntent: ExploreIntent?
+    @State private var selectedStyle: ExploreStyle?
     @State private var maxBudget: Double = Self.budgetCap
     /// Slider ceiling; at the cap the budget filter is treated as "no limit".
     static let budgetCap: Double = 3500
+    /// The value the "Under $1.5k" quick chip applies, and the threshold at or below
+    /// which that chip reads as selected.
+    static let budgetPreset: Double = 1500
+
+    /// An account-gated action parked while the sign-in sheet is up, replayed once
+    /// authentication succeeds.
+    @State private var pendingAction: ExploreGatedAction?
+    @State private var showSignIn = false
 
     private var savedIDs: Set<String> { Set(store.userProfile.savedDestinationIDs) }
 
+    private var searchQuery: String { searchText.trimmingCharacters(in: .whitespaces) }
+    private var isSearching: Bool { !searchQuery.isEmpty }
+
+    /// Search runs *inside* the active filter set, so a chip the user turned on still
+    /// means something once they start typing.
     private var searchResults: [Destination] {
-        let query = searchText.trimmingCharacters(in: .whitespaces)
-        guard !query.isEmpty else { return [] }
-        return Destination.popularFirst.filter { destination in
+        guard isSearching else { return [] }
+        let query = searchQuery
+        return filteredDestinations.filter { destination in
             destination.city.localizedCaseInsensitiveContains(query)
                 || destination.country.localizedCaseInsensitiveContains(query)
                 || destination.title.localizedCaseInsensitiveContains(query)
@@ -63,13 +78,13 @@ struct RecScreen: View {
     private var hasContinueContent: Bool { !saved.isEmpty || !store.itineraryTrips.isEmpty }
 
     private var isFiltering: Bool {
-        tripLength != .any || selectedContinent != nil || selectedIntent != nil || maxBudget < Self.budgetCap
+        tripLength != .any || selectedContinent != nil || selectedStyle != nil || maxBudget < Self.budgetCap
     }
 
     private var activeFilterCount: Int {
         (tripLength != .any ? 1 : 0)
             + (selectedContinent != nil ? 1 : 0)
-            + (selectedIntent != nil ? 1 : 0)
+            + (selectedStyle != nil ? 1 : 0)
             + (maxBudget < Self.budgetCap ? 1 : 0)
     }
 
@@ -77,54 +92,80 @@ struct RecScreen: View {
         Destination.popularFirst.filter { destination in
             tripLength.matches(destination.days)
                 && (selectedContinent == nil || destination.continent == selectedContinent)
-                && (selectedIntent?.matches(destination) ?? true)
+                && (selectedStyle?.matches(destination) ?? true)
                 && (maxBudget >= Self.budgetCap || destination.budgetValue <= maxBudget)
         }
     }
 
-    /// Curated trips grouped by country, with the most popular destination in each
-    /// group deciding its position so the directory starts with familiar choices.
-    private var countrySections: [(country: String, destinations: [Destination])] {
-        let grouped = Dictionary(grouping: filteredDestinations, by: \.country)
-        return grouped
-            .map {
-                (
-                    country: $0.key,
-                    destinations: $0.value.sorted { $0.popularityRank < $1.popularityRank }
-                )
-            }
-            .sorted {
-                let lhs = $0.destinations.map(\.popularityRank).min() ?? .max
-                let rhs = $1.destinations.map(\.popularityRank).min() ?? .max
-                return lhs == rhs ? $0.country < $1.country : lhs < rhs
-            }
+    /// Curated trips grouped by region, in `Destination.continents` display order.
+    /// This used to group by *country*, which meant 17 of the 22 groups were a
+    /// horizontal carousel holding a single card that couldn't scroll.
+    private var continentSections: [(continent: String, destinations: [Destination])] {
+        let grouped = Dictionary(grouping: filteredDestinations, by: \.continent)
+        return Destination.continents.compactMap { continent in
+            guard let matches = grouped[continent], !matches.isEmpty else { return nil }
+            return (continent, matches.sorted { $0.popularityRank < $1.popularityRank })
+        }
     }
 
     private func resetFilters() {
         tripLength = .any
         selectedContinent = nil
-        selectedIntent = nil
+        selectedStyle = nil
         maxBudget = Self.budgetCap
     }
 
-    /// Seeds a new editable itinerary from a curated trip and pushes its planner on
-    /// top of the detail page, so the curated plan becomes the starting point.
-    private func startItinerary(from destination: Destination) {
-        guard auth.isAuthenticated else {
-            showSettings = true
-            return
+    // MARK: Quick chips
+
+    /// Whether `filter`'s shortcut currently matches the shared filter state. Derived
+    /// rather than stored, so opening the sheet and changing the underlying facet
+    /// keeps the chip honest.
+    private func isQuickFilterOn(_ filter: ExploreQuickFilter) -> Bool {
+        switch filter {
+        case .weekend: tripLength == .short
+        case .style(let style): selectedStyle == style
+        case .budget: maxBudget <= Self.budgetPreset
         }
-        let trip = destination.starterTrip(creator: store.currentUser)
-        store.addTrip(trip)
-        navigationPath.append(trip.id)
     }
 
-    private func createItinerary() {
+    private func toggleQuickFilter(_ filter: ExploreQuickFilter) {
+        let isOn = isQuickFilterOn(filter)
+        switch filter {
+        case .weekend: tripLength = isOn ? .any : .short
+        case .style(let style): selectedStyle = isOn ? nil : style
+        case .budget: maxBudget = isOn ? Self.budgetCap : Self.budgetPreset
+        }
+    }
+
+    // MARK: Account-gated actions
+
+    /// Runs `action` when signed in; otherwise parks it behind a sign-in sheet that
+    /// explains *why* an account is needed. Explore used to drop the user into the
+    /// full Settings screen with no explanation and forget what they were doing.
+    private func requireAccount(_ action: ExploreGatedAction) {
         guard auth.isAuthenticated else {
-            showSettings = true
+            isSearchFocused = false
+            pendingAction = action
+            showSignIn = true
             return
         }
-        showCreateItinerary = true
+        perform(action)
+    }
+
+    private func perform(_ action: ExploreGatedAction) {
+        switch action {
+        case .save(let id):
+            var set = savedIDs
+            if set.contains(id) { set.remove(id) } else { set.insert(id) }
+            store.updateSavedPlaces(destinationIDs: set.sorted())
+        case .createItinerary:
+            showCreateItinerary = true
+        case .startItinerary(let id):
+            guard let destination = Destination.all.first(where: { $0.id == id }) else { return }
+            let trip = destination.starterTrip(creator: store.currentUser)
+            store.addTrip(trip)
+            navigationPath.append(trip.id)
+        }
     }
 
     var body: some View {
@@ -140,29 +181,28 @@ struct RecScreen: View {
     private var exploreContent: some View {
         NavigationStack(path: $navigationPath) {
             ScrollView {
+                // One page: the search field and filter bar are always present, and
+                // refining never tears the screen down. "Continue" in particular used
+                // to vanish the moment any filter was applied.
                 LazyVStack(alignment: .leading, spacing: 24) {
                     exploreIntroduction
                     searchBar
+                    filterBar
+                    activeFilterTokens
 
-                    if !searchText.trimmingCharacters(in: .whitespaces).isEmpty {
+                    if isSearching {
                         searchResultsList
                     } else {
-                        filterBar
+                        if hasContinueContent { continueSection }
 
                         if isFiltering {
                             matchingTripsSection
                         } else {
-                            if hasContinueContent { continueSection }
                             featuredSection
                             collectionSection(
                                 title: "Food cities",
                                 subtitle: "Trips worth planning around the next meal.",
-                                destinations: Destination.popularFirst.filter { $0.tags.contains("Foodie") || $0.tags.contains("Markets") || $0.tags.contains("Night markets") }
-                            )
-                            collectionSection(
-                                title: "Beach escapes",
-                                subtitle: "Slow mornings, warm water, and room to wander.",
-                                destinations: Destination.popularFirst.filter { $0.tags.contains("Beach") || $0.tags.contains("Coastal") }
+                                destinations: Destination.popularFirst.filter(ExploreStyle.foodie.matches)
                             )
                             buildFromScratchCard
                             destinationDirectory
@@ -208,8 +248,8 @@ struct RecScreen: View {
                     DestinationDetailView(
                         destination: destination,
                         isSaved: savedIDs.contains(id),
-                        onToggleSave: { toggleSaved(id) },
-                        onUseAsPlan: { startItinerary(from: destination) }
+                        onToggleSave: { requireAccount(.save(destinationID: id)) },
+                        onUseAsPlan: { requireAccount(.startItinerary(destinationID: id)) }
                     )
                 }
             }
@@ -233,7 +273,7 @@ struct RecScreen: View {
                     // Wait for the full-screen cover to finish handing control back
                     // before presenting the itinerary sheet.
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                        createItinerary()
+                        requireAccount(.createItinerary)
                     }
                 }
             }
@@ -241,12 +281,28 @@ struct RecScreen: View {
                 ExploreFilterSheet(
                     tripLength: $tripLength,
                     selectedContinent: $selectedContinent,
+                    selectedStyle: $selectedStyle,
                     maxBudget: $maxBudget,
                     budgetCap: Self.budgetCap,
                     onReset: resetFilters
                 )
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
+            }
+            .sheet(isPresented: $showSignIn, onDismiss: { pendingAction = nil }) {
+                ExploreSignInSheet(action: pendingAction ?? .createItinerary)
+            }
+            // Replay whatever the user was trying to do the moment they're signed in,
+            // so a sign-in detour doesn't cost them the tap that triggered it.
+            .onChange(of: auth.isAuthenticated) { _, isAuthenticated in
+                guard isAuthenticated, let action = pendingAction else { return }
+                // `onDismiss` clears `pendingAction`; clearing it here instead would
+                // re-render the still-visible sheet with the fallback copy.
+                showSignIn = false
+                // Wait for the sheet to finish dismissing before pushing or presenting.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    perform(action)
+                }
             }
             .task(id: mapModel.exploreRequest) {
                 guard let tripID = mapModel.takeRequestedItinerary(),
@@ -295,7 +351,7 @@ struct RecScreen: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.trailing, 8)
 
-            Button(action: createItinerary) {
+            Button { requireAccount(.createItinerary) } label: {
                 Label("Create a trip", systemImage: "plus")
                     .font(.app(.headline))
                     .foregroundStyle(Theme.onAccent)
@@ -360,7 +416,7 @@ struct RecScreen: View {
                             AdventureCard(
                                 destination: destination,
                                 isSaved: savedIDs.contains(destination.id),
-                                onToggleSave: { toggleSaved(destination.id) },
+                                onToggleSave: { requireAccount(.save(destinationID: destination.id)) },
                                 showsCTA: true
                             )
                             .containerRelativeFrame(.horizontal, count: 1, spacing: 14)
@@ -390,7 +446,7 @@ struct RecScreen: View {
                             CountryTripCard(
                                 destination: destination,
                                 isSaved: savedIDs.contains(destination.id),
-                                onToggleSave: { toggleSaved(destination.id) }
+                                onToggleSave: { requireAccount(.save(destinationID: destination.id)) }
                             )
                         }
                         .buttonStyle(.plain)
@@ -405,7 +461,7 @@ struct RecScreen: View {
     }
 
     private var buildFromScratchCard: some View {
-        Button(action: createItinerary) {
+        Button { requireAccount(.createItinerary) } label: {
             HStack(spacing: 14) {
                 Image(systemName: "map.fill")
                     .font(.app(.title2))
@@ -433,75 +489,73 @@ struct RecScreen: View {
 
     private var matchingTripsSection: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                sectionTitle("Matching trips", subtitle: "Open a result to preview the full guide.")
-                Spacer()
-                Button("Clear all", action: resetFilters)
-                    .font(.app(.subheadline, .semibold))
-                    .foregroundStyle(Theme.accent)
-                    .buttonStyle(.plain)
-            }
+            sectionTitle("Matching trips", subtitle: "Open a result to preview the full guide.")
 
             if filteredDestinations.isEmpty {
-                ContentUnavailableView(
-                    "No trips match",
-                    systemImage: "line.3.horizontal.decrease.circle",
-                    description: Text("Try another travel style or broaden your budget.")
-                )
+                // Name the actual problem: with several facets on, "broaden your
+                // budget" was frequently the wrong advice.
+                ContentUnavailableView {
+                    Label("No trips match", systemImage: "line.3.horizontal.decrease.circle")
+                } description: {
+                    Text(activeFilterCount == 1
+                         ? "No curated guide matches that filter. Remove it above to widen the search."
+                         : "No curated guide fits all \(activeFilterCount) of your filters. Remove one above to widen the search.")
+                } actions: {
+                    Button("Clear all filters", action: resetFilters)
+                        .font(.app(.subheadline, .semibold))
+                        .foregroundStyle(Theme.accent)
+                }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 24)
                 .readableSurface(cornerRadius: 20)
             } else {
-                LazyVGrid(
-                    columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible())],
-                    spacing: 12
-                ) {
-                    ForEach(filteredDestinations) { destination in
-                        NavigationLink(value: destination.id) {
-                            MatchingTripCard(
-                                destination: destination,
-                                isSaved: savedIDs.contains(destination.id),
-                                onToggleSave: { toggleSaved(destination.id) }
-                            )
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
+                destinationGrid(filteredDestinations)
             }
         }
     }
 
     private var destinationDirectory: some View {
         VStack(alignment: .leading, spacing: 22) {
-            sectionTitle("Browse by destination", subtitle: "Explore every curated guide by country.")
-            ForEach(countrySections, id: \.country) { section in
+            sectionTitle("Browse by destination", subtitle: "Every curated guide, grouped by region.")
+            ForEach(continentSections, id: \.continent) { section in
                 VStack(alignment: .leading, spacing: 12) {
-                    HStack(alignment: .firstTextBaseline, spacing: 10) {
-                        sectionHeader(LocalizedStringKey(section.country))
-                        Text(section.destinations[0].continent.uppercased())
-                            .font(.app(.caption2, .bold))
-                            .tracking(1)
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        sectionHeader(LocalizedStringKey(section.continent))
+                        Text("\(section.destinations.count)")
+                            .font(.app(.subheadline, .bold))
                             .foregroundStyle(.secondary)
+                            .monospacedDigit()
                         Spacer()
                     }
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        LazyHStack(spacing: 14) {
-                            ForEach(section.destinations) { destination in
-                                NavigationLink(value: destination.id) {
-                                    CountryTripCard(
-                                        destination: destination,
-                                        isSaved: savedIDs.contains(destination.id),
-                                        onToggleSave: { toggleSaved(destination.id) }
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .scrollTargetLayout()
-                        .padding(.horizontal)
-                    }
-                    .scrollTargetBehavior(.viewAligned)
-                    .padding(.horizontal, -16)
+                    .accessibilityElement(children: .combine)
+
+                    destinationGrid(section.destinations)
+                }
+            }
+        }
+    }
+
+    /// The shared two-column result grid, used for both filtered results and the
+    /// region directory so the two never drift apart visually.
+    private func destinationGrid(_ destinations: [Destination]) -> some View {
+        LazyVGrid(
+            columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible())],
+            spacing: 12
+        ) {
+            ForEach(destinations) { destination in
+                NavigationLink(value: destination.id) {
+                    MatchingTripCard(destination: destination)
+                }
+                .buttonStyle(.plain)
+                // The heart lives outside the NavigationLink on purpose: nested
+                // inside it, VoiceOver folded it into the link and saving from the
+                // grid became impossible.
+                .overlay(alignment: .topTrailing) {
+                    HeartButton(
+                        isSaved: savedIDs.contains(destination.id),
+                        action: { requireAccount(.save(destinationID: destination.id)) }
+                    )
+                    .padding(16)
                 }
             }
         }
@@ -511,6 +565,7 @@ struct RecScreen: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 Button {
+                    isSearchFocused = false
                     showFilterSheet = true
                 } label: {
                     HStack(spacing: 6) {
@@ -528,12 +583,12 @@ struct RecScreen: View {
                     in: .capsule
                 )
 
-                ForEach(ExploreIntent.allCases) { intent in
-                    let isOn = selectedIntent == intent
+                ForEach(ExploreQuickFilter.allCases) { filter in
+                    let isOn = isQuickFilterOn(filter)
                     Button {
-                        selectedIntent = isOn ? nil : intent
+                        toggleQuickFilter(filter)
                     } label: {
-                        Label(intent.title, systemImage: intent.systemImage)
+                        Label(filter.title, systemImage: filter.systemImage)
                             .font(.app(.subheadline, .medium))
                             .foregroundStyle(isOn ? Theme.onAccent : .primary)
                             .padding(.horizontal, 14)
@@ -544,11 +599,64 @@ struct RecScreen: View {
                         isOn ? .regular.tint(Theme.accent).interactive() : .regular.interactive(),
                         in: .capsule
                     )
+                    .accessibilityAddTraits(isOn ? [.isSelected] : [])
                 }
             }
             .padding(.horizontal)
         }
         .padding(.horizontal, -16)
+    }
+
+    /// One removable token per active filter. The quick chips only cover the presets,
+    /// so a continent or a custom budget set in the sheet would otherwise be invisible
+    /// once it closed — leaving results narrowed for no apparent reason.
+    @ViewBuilder
+    private var activeFilterTokens: some View {
+        if isFiltering {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    if tripLength != .any {
+                        filterToken(tripLength.label) { tripLength = .any }
+                    }
+                    if let style = selectedStyle {
+                        filterToken(style.title) { selectedStyle = nil }
+                    }
+                    if let continent = selectedContinent {
+                        filterToken(LocalizedStringKey(continent)) { selectedContinent = nil }
+                    }
+                    if maxBudget < Self.budgetCap {
+                        filterToken("Up to $\(Int(maxBudget))") { maxBudget = Self.budgetCap }
+                    }
+
+                    Button("Clear all", action: resetFilters)
+                        .font(.app(.subheadline, .semibold))
+                        .foregroundStyle(Theme.accent)
+                        .buttonStyle(.plain)
+                        .padding(.horizontal, 8)
+                        .frame(minHeight: 36)
+                }
+                .padding(.horizontal)
+            }
+            .padding(.horizontal, -16)
+        }
+    }
+
+    private func filterToken(_ label: LocalizedStringKey, remove: @escaping () -> Void) -> some View {
+        Button(action: remove) {
+            HStack(spacing: 5) {
+                Text(label)
+                Image(systemName: "xmark")
+                    .font(.app(.caption2, .bold))
+            }
+            .font(.app(.subheadline, .medium))
+            .foregroundStyle(Theme.accent)
+            .padding(.horizontal, 12)
+            .frame(minHeight: 36)
+            .background(Theme.accent.opacity(0.12), in: .capsule)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(label))
+        .accessibilityHint("Removes this filter")
     }
 
     private var searchBar: some View {
@@ -583,14 +691,30 @@ struct RecScreen: View {
     @ViewBuilder
     private var searchResultsList: some View {
         if searchResults.isEmpty {
-            ContentUnavailableView.search(text: searchText)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 32)
-                .glassEffect(.regular, in: .rect(cornerRadius: 24))
+            // Searching now runs inside the active filters, so an empty result with
+            // filters on needs to say so — otherwise the query looks like the culprit.
+            ContentUnavailableView {
+                Label("No results", systemImage: "magnifyingglass")
+            } description: {
+                Text(isFiltering
+                     ? "Nothing matches “\(searchQuery)” with your filters applied."
+                     : "Nothing matches “\(searchQuery)”. Try a city, country, or something to eat.")
+            } actions: {
+                if isFiltering {
+                    Button("Search without filters", action: resetFilters)
+                        .font(.app(.subheadline, .semibold))
+                        .foregroundStyle(Theme.accent)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 32)
+            .glassEffect(.regular, in: .rect(cornerRadius: 24))
         } else {
-            let query = searchText.trimmingCharacters(in: .whitespaces)
+            let query = searchQuery
             VStack(alignment: .leading, spacing: 12) {
-                Text("\(searchResults.count) result\(searchResults.count == 1 ? "" : "s")")
+                // Two explicit keys instead of an inline "s" — the old form baked
+                // English plural rules into the localization key.
+                Text(searchResults.count == 1 ? "1 result" : "\(searchResults.count) results")
                     .font(.app(.subheadline, .semibold))
                     .foregroundStyle(.secondary)
                 ForEach(searchResults) { destination in
@@ -633,62 +757,70 @@ struct RecScreen: View {
         .accessibilityElement(children: .combine)
     }
 
-    private func toggleSaved(_ id: String) {
-        guard auth.isAuthenticated else {
-            showSettings = true
-            return
-        }
-        var set = savedIDs
-        if set.contains(id) {
-            set.remove(id)
-        } else {
-            set.insert(id)
-        }
-        store.updateSavedPlaces(destinationIDs: set.sorted())
-    }
 }
 
-/// Fast, human-readable filters that map directly onto the existing curated data.
-enum ExploreIntent: String, CaseIterable, Identifiable {
-    case weekend
-    case fiveToSevenDays
+/// The travel-style facet. This is the single definition of what counts as a
+/// "foodie" or "beach" trip — the quick chip, the filter sheet, and the curated
+/// "Food cities" rail all read it, so the tag literals can't drift apart the way
+/// the duplicated copies used to.
+enum ExploreStyle: String, CaseIterable, Identifiable {
     case foodie
     case beach
-    case under1500
 
     var id: Self { self }
 
     var title: LocalizedStringKey {
         switch self {
-        case .weekend: "Weekend"
-        case .fiveToSevenDays: "5–7 days"
         case .foodie: "Foodie"
         case .beach: "Beach"
-        case .under1500: "Under $1.5k"
         }
     }
 
     var systemImage: String {
         switch self {
-        case .weekend: "calendar"
-        case .fiveToSevenDays: "calendar.badge.clock"
         case .foodie: "fork.knife"
         case .beach: "beach.umbrella.fill"
-        case .under1500: "banknote.fill"
         }
     }
 
     func matches(_ destination: Destination) -> Bool {
         switch self {
-        case .weekend: destination.days <= 3
-        case .fiveToSevenDays: (5...7).contains(destination.days)
         case .foodie:
             destination.tags.contains("Foodie")
                 || destination.tags.contains("Markets")
                 || destination.tags.contains("Night markets")
         case .beach:
             destination.tags.contains("Beach") || destination.tags.contains("Coastal")
-        case .under1500: destination.budgetValue <= 1500
+        }
+    }
+}
+
+/// The chips above Explore's results. Each is a *shortcut into the same state the
+/// filter sheet edits* — never a parallel predicate — so a chip and the sheet can
+/// no longer contradict each other into a guaranteed-empty result set.
+enum ExploreQuickFilter: Hashable, Identifiable {
+    case weekend
+    case style(ExploreStyle)
+    case budget
+
+    var id: Self { self }
+
+    static let allCases: [ExploreQuickFilter] =
+        [.weekend] + ExploreStyle.allCases.map(ExploreQuickFilter.style) + [.budget]
+
+    var title: LocalizedStringKey {
+        switch self {
+        case .weekend: "Weekend"
+        case .style(let style): style.title
+        case .budget: "Under $1.5k"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .weekend: "calendar"
+        case .style(let style): style.systemImage
+        case .budget: "banknote.fill"
         }
     }
 }
@@ -702,6 +834,17 @@ enum TripLengthFilter: String, CaseIterable, Identifiable {
 
     var id: Self { self }
 
+    /// The displayed label. `rawValue` is identity only — passing it to `Text` gave a
+    /// `String`, which renders verbatim and skipped localization entirely.
+    var label: LocalizedStringKey {
+        switch self {
+        case .any: "Any"
+        case .short: "1–3 days"
+        case .medium: "4–5 days"
+        case .long: "6+ days"
+        }
+    }
+
     func matches(_ days: Int) -> Bool {
         switch self {
         case .any: true
@@ -712,14 +855,87 @@ enum TripLengthFilter: String, CaseIterable, Identifiable {
     }
 }
 
-/// The Explore tab's filter sheet: trip length, continent, and a max-budget slider.
+/// An Explore action that requires an account. Held while the sign-in sheet is up so
+/// it can be replayed on success — the tab used to open the full Settings screen and
+/// forget what the user was trying to do.
+enum ExploreGatedAction: Equatable {
+    case save(destinationID: String)
+    case createItinerary
+    case startItinerary(destinationID: String)
+
+    var title: LocalizedStringKey {
+        switch self {
+        case .save: "Sign in to save this guide"
+        case .createItinerary, .startItinerary: "Sign in to start planning"
+        }
+    }
+
+    var message: LocalizedStringKey {
+        switch self {
+        case .save:
+            "Saved guides live on your account, so they're waiting on every device you sign in to."
+        case .createItinerary:
+            "Your itinerary lives on your account so you can edit it anywhere and invite tripmates to plan with you."
+        case .startItinerary:
+            "We'll copy this guide into an editable plan on your account as soon as you're signed in."
+        }
+    }
+}
+
+/// A focused sign-in sheet for Explore's account-gated actions: it says *why* an
+/// account is needed, then hosts the standard `AuthView`. The presenter watches
+/// `auth.isAuthenticated` and replays the original action.
+struct ExploreSignInSheet: View {
+    let action: ExploreGatedAction
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            // `AuthView` brings its own ScrollView, so the explanation sits above it
+            // rather than nesting a second scroll view inside one.
+            VStack(spacing: 0) {
+                VStack(spacing: 8) {
+                    Text(action.title)
+                        .font(.app(.title2, .bold))
+                        .multilineTextAlignment(.center)
+                    Text(action.message)
+                        .font(.app(.subheadline))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 12)
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isHeader)
+
+                AuthView()
+            }
+            .background { AppBackground() }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
+/// The Explore tab's filter sheet — the complete filter surface. Every facet here
+/// is also reachable from a quick chip, and both edit the same state.
 struct ExploreFilterSheet: View {
     @Binding var tripLength: TripLengthFilter
     @Binding var selectedContinent: String?
+    @Binding var selectedStyle: ExploreStyle?
     @Binding var maxBudget: Double
     let budgetCap: Double
     let onReset: () -> Void
     @Environment(\.dismiss) private var dismiss
+
+    private var hasActiveFilters: Bool {
+        tripLength != .any || selectedContinent != nil || selectedStyle != nil || maxBudget < budgetCap
+    }
 
     var body: some View {
         NavigationStack {
@@ -730,10 +946,38 @@ struct ExploreFilterSheet: View {
                             .font(.app(.headline))
                         Picker("Trip length", selection: $tripLength) {
                             ForEach(TripLengthFilter.allCases) { length in
-                                Text(length.rawValue).tag(length)
+                                Text(length.label).tag(length)
                             }
                         }
                         .pickerStyle(.segmented)
+                    }
+
+                    // The style facet used to exist only as a chip on the main screen,
+                    // which is why the sheet's Reset could silently clear a filter the
+                    // sheet never showed.
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Travel style")
+                            .font(.app(.headline))
+                        HStack(spacing: 8) {
+                            ForEach(ExploreStyle.allCases) { style in
+                                let isOn = selectedStyle == style
+                                Button {
+                                    selectedStyle = isOn ? nil : style
+                                } label: {
+                                    Label(style.title, systemImage: style.systemImage)
+                                        .font(.app(.subheadline, .medium))
+                                        .foregroundStyle(isOn ? Theme.onAccent : .primary)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 10)
+                                        .background(
+                                            isOn ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Theme.fieldBackground),
+                                            in: .capsule
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityAddTraits(isOn ? [.isSelected] : [])
+                            }
+                        }
                     }
 
                     VStack(alignment: .leading, spacing: 10) {
@@ -767,8 +1011,12 @@ struct ExploreFilterSheet: View {
             .navigationTitle("Filter trips")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
+                // Deliberately not `.cancellationAction`: this discards filters, it
+                // doesn't cancel the sheet, and sitting in the Cancel slot made it
+                // read as "close without applying".
+                ToolbarItem(placement: .topBarLeading) {
                     Button("Reset", action: onReset)
+                        .disabled(!hasActiveFilters)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
@@ -790,9 +1038,9 @@ private struct FlowingContinentPicker: View {
                 Button {
                     selectedContinent = isOn ? nil : continent
                 } label: {
-                    Text(continent)
+                    Text(LocalizedStringKey(continent))
                         .font(.app(.subheadline, .medium))
-                        .foregroundStyle(isOn ? .white : .primary)
+                        .foregroundStyle(isOn ? Theme.onAccent : .primary)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
                         .background(
@@ -853,7 +1101,7 @@ struct AdventureCard: View {
         .frame(height: 380)
         .overlay(alignment: .topLeading) {
             if let tag = destination.tags.first {
-                Text(tag)
+                Text(LocalizedStringKey(tag))
                     .font(.app(.caption, .semibold))
                     .foregroundStyle(.black)
                     .padding(.horizontal, 10)
@@ -931,26 +1179,32 @@ struct CountryTripCard: View {
     }
 }
 
-/// A compact photo tile used when intent filters are active. Keeping the result
-/// grid visually simple makes it faster to compare destinations at a glance.
+/// The compact photo tile used for filtered results and the region directory. It
+/// carries the country because the directory groups by region, where a city name
+/// alone isn't always enough to place it.
+///
+/// The save button is *not* part of this card — callers overlay it outside the
+/// enclosing `NavigationLink` (see `destinationGrid`), because a `HeartButton`
+/// nested inside the link was folded into the link's combined accessibility
+/// element and became unreachable with VoiceOver.
 struct MatchingTripCard: View {
     let destination: Destination
-    let isSaved: Bool
-    let onToggleSave: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             DestinationPhoto(destination: destination, symbolSize: 44)
                 .frame(height: 140)
-                .overlay(alignment: .topTrailing) {
-                    HeartButton(isSaved: isSaved, action: onToggleSave)
-                        .padding(8)
-                }
                 .clipShape(.rect(cornerRadius: 16))
+                .padding(.bottom, 2)
 
-            Text(destination.city)
+            Text(verbatim: destination.city)
                 .font(.app(.headline))
                 .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            Text(LocalizedStringKey(destination.country))
+                .font(.app(.caption))
+                .foregroundStyle(.secondary)
                 .lineLimit(1)
             Text("\(destination.days) days · \(destination.price)")
                 .font(.app(.caption, .medium))
@@ -1125,7 +1379,7 @@ struct DestinationDetailView: View {
         .overlay(alignment: .bottomLeading) {
             HStack(spacing: 8) {
                 ForEach(destination.tags, id: \.self) { tag in
-                    Text(tag)
+                    Text(LocalizedStringKey(tag))
                         .font(.app(.caption, .semibold))
                         .foregroundStyle(.black)
                         .padding(.horizontal, 10)
