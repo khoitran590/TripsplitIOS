@@ -27,7 +27,7 @@ struct TravelPlanItem: Identifiable {
 }
 
 extension Destination {
-    /// Recommended places across Asia and North America.
+    /// Curated city and resort guides across the app's supported regions.
     static let all: [Destination] = [
         // Asia
         Destination(
@@ -574,7 +574,121 @@ extension Destination {
             ],
             plannerNote: "Hire a driver or use ride apps between sites, and put the pyramids first before the heat builds."
         ),
+        Destination(
+            id: "los-angeles",
+            title: "Los Angeles Highlights", city: "Los Angeles", country: "USA",
+            tags: ["5 days", "Urban"], planner: "Maya Chen", price: "$2.8k",
+            dailyBudget: "~$560/day", stops: 11, isFeatured: true, symbol: "sun.max.fill",
+            colors: [.orange, .pink],
+            places: [
+                TravelPlanItem(name: "Griffith Observatory", detail: "City views, space exhibits, and a sunset look toward the Hollywood Sign.", cost: "Low"),
+                TravelPlanItem(name: "Getty Center", detail: "Architecture, gardens, major art collections, and wide Westside views.", cost: "Low"),
+                TravelPlanItem(name: "Santa Monica + Venice", detail: "Start at the pier, follow the beach path, and finish near the Venice canals.", cost: "Low-mid"),
+                TravelPlanItem(name: "Academy Museum + LACMA", detail: "A focused museum day around film, design, and modern art on Museum Row.", cost: "Mid"),
+                TravelPlanItem(name: "Downtown Arts District", detail: "Murals, independent shops, Little Tokyo, and an evening around Broadway.", cost: "Low-mid"),
+                TravelPlanItem(name: "Universal Studios Hollywood", detail: "A full theme-park day; reserve the first entry window you can use.", cost: "High")
+            ],
+            restaurants: [
+                TravelPlanItem(name: "Grand Central Market", detail: "A flexible downtown lunch with tacos, noodles, sandwiches, and sweets.", cost: "$-$$"),
+                TravelPlanItem(name: "Guelaguetza", detail: "Oaxacan mole, tlayudas, and a lively Koreatown dining room.", cost: "$$"),
+                TravelPlanItem(name: "Holbox", detail: "Bright Mexican seafood near USC, especially ceviche and smoked fish tacos.", cost: "$$"),
+                TravelPlanItem(name: "Howlin' Ray's", detail: "Nashville-style hot chicken with a heat level for every table.", cost: "$"),
+                TravelPlanItem(name: "Porto's Bakery", detail: "Cuban pastries and savory potato balls for an inexpensive breakfast stop.", cost: "$")
+            ],
+            plannerNote: "Treat Los Angeles as several small cities: group each day by neighborhood and avoid crossing town at rush hour."
+        ),
+        Destination(
+            id: "cancun",
+            title: "Cancún Caribbean", city: "Cancún", country: "Mexico",
+            tags: ["5 days", "Beach"], planner: "Valeria Cruz", price: "$2.3k",
+            dailyBudget: "~$460/day", stops: 10, isFeatured: true, symbol: "beach.umbrella.fill",
+            colors: [.cyan, .blue],
+            places: [
+                TravelPlanItem(name: "Isla Mujeres", detail: "Take the morning ferry for Playa Norte, snorkeling, and a slower island pace.", cost: "Mid"),
+                TravelPlanItem(name: "MUSA Underwater Museum", detail: "Snorkel or dive above submerged sculptures in clear Caribbean water.", cost: "Mid-high"),
+                TravelPlanItem(name: "Chichén Itzá", detail: "A long but rewarding day trip; pair the ruins with a nearby cenote swim.", cost: "Mid-high"),
+                TravelPlanItem(name: "Hotel Zone beaches", detail: "Choose one easy beach day around Playa Delfines and the lagoon viewpoints.", cost: "Low"),
+                TravelPlanItem(name: "Puerto Morelos", detail: "A quieter fishing town for reef snorkeling and an unhurried waterfront lunch.", cost: "Mid"),
+                TravelPlanItem(name: "Cenote route", detail: "Pick one or two managed cenotes rather than rushing through a full circuit.", cost: "Mid")
+            ],
+            restaurants: [
+                TravelPlanItem(name: "Parque de las Palapas", detail: "Evening food stalls for tacos, marquesitas, and casual local snacks.", cost: "$"),
+                TravelPlanItem(name: "El Fish Fritanga", detail: "Lagoon-side seafood with ceviche, grilled fish, and relaxed outdoor tables.", cost: "$$"),
+                TravelPlanItem(name: "La Habichuela", detail: "Long-running Cancún dining room for Yucatecan and Caribbean flavors.", cost: "$$$"),
+                TravelPlanItem(name: "Marakame Café", detail: "Garden breakfast and an easy reset away from the resort strip.", cost: "$$")
+            ],
+            plannerNote: "Balance two beach days with one island day and one inland outing; keep the final day flexible for weather."
+        ),
+        Destination(
+            id: "santorini",
+            title: "Santorini Caldera", city: "Santorini", country: "Greece",
+            tags: ["4 days", "Romantic"], planner: "Eleni Markou", price: "$2.4k",
+            dailyBudget: "~$600/day", stops: 9, isFeatured: true, symbol: "water.waves",
+            colors: [.blue, .cyan],
+            places: [
+                TravelPlanItem(name: "Fira to Oia hike", detail: "A caldera-edge walk through Firostefani and Imerovigli; start before the heat.", cost: "Free"),
+                TravelPlanItem(name: "Oia lanes", detail: "Explore early, pause for gallery courtyards, and choose a quieter sunset terrace.", cost: "Low-mid"),
+                TravelPlanItem(name: "Akrotiri", detail: "Walk the sheltered Bronze Age settlement, then continue to the south-coast beaches.", cost: "Mid"),
+                TravelPlanItem(name: "Caldera sailing", detail: "Half-day boat route around the volcanic islets and hot-spring coves.", cost: "High"),
+                TravelPlanItem(name: "Pyrgos + wine country", detail: "Hilltop alleys followed by a tasting focused on the island's volcanic vineyards.", cost: "Mid-high")
+            ],
+            restaurants: [
+                TravelPlanItem(name: "Metaxi Mas", detail: "Cretan and Cycladic dishes in Exo Gonia; reserve an outdoor table.", cost: "$$"),
+                TravelPlanItem(name: "To Psaraki", detail: "Straightforward seafood above Vlychada marina.", cost: "$$-$$$"),
+                TravelPlanItem(name: "Lucky's Souvlakis", detail: "Quick, affordable gyros in central Fira.", cost: "$"),
+                TravelPlanItem(name: "Aktaion", detail: "A compact Firostefani taverna with island classics and caldera atmosphere.", cost: "$$")
+            ],
+            plannerNote: "Stay near Fira for buses or Imerovigli for quiet views, and avoid scheduling every sunset in crowded Oia."
+        ),
+        Destination(
+            id: "marrakech",
+            title: "Marrakech Medina", city: "Marrakech", country: "Morocco",
+            tags: ["4 days", "Markets"], planner: "Salma Idrissi", price: "$1.4k",
+            dailyBudget: "~$350/day", stops: 10, isFeatured: true, symbol: "sun.dust.fill",
+            colors: [.orange, .red],
+            places: [
+                TravelPlanItem(name: "Jemaa el-Fna + souks", detail: "Walk the market lanes by day, then return as the square fills with evening food stalls.", cost: "Low"),
+                TravelPlanItem(name: "Bahia Palace", detail: "Zellige courtyards, carved cedar, and gardens best seen near opening.", cost: "Low-mid"),
+                TravelPlanItem(name: "Jardin Majorelle", detail: "A vivid garden and design stop; reserve a timed entry before arrival.", cost: "Mid"),
+                TravelPlanItem(name: "Ben Youssef Madrasa", detail: "A restored historic school with intricate geometric interiors.", cost: "Low-mid"),
+                TravelPlanItem(name: "Koutoubia + Menara Gardens", detail: "Pair the landmark minaret with a slower late-afternoon garden walk.", cost: "Low"),
+                TravelPlanItem(name: "Atlas Mountains day trip", detail: "Choose a small-group route with village time instead of a rushed multi-stop circuit.", cost: "Mid-high")
+            ],
+            restaurants: [
+                TravelPlanItem(name: "Nomad", detail: "Modern Moroccan plates on a medina rooftop; sunset reservations go quickly.", cost: "$$"),
+                TravelPlanItem(name: "Amal Women's Training Center", detail: "Warm home-style lunch that supports hospitality training.", cost: "$"),
+                TravelPlanItem(name: "Chez Lamine", detail: "Slow-roasted tangia and mechoui close to the market action.", cost: "$-$$"),
+                TravelPlanItem(name: "Le Jardin", detail: "A leafy courtyard break for Moroccan dishes and mint tea.", cost: "$$")
+            ],
+            plannerNote: "Use a licensed guide for the first medina walk, keep cash for small purchases, and build in a quiet midday reset."
+        ),
     ]
+}
+
+extension Destination {
+    /// A deliberate discovery order: globally recognizable first-trip cities lead,
+    /// while every remaining guide keeps a stable position after the ranked set.
+    private static let popularityOrder = [
+        "paris", "tokyo", "new-york", "london", "rome", "barcelona",
+        "los-angeles", "bangkok", "dubai", "bali", "singapore", "cancun",
+        "kyoto", "seoul", "amsterdam", "santorini", "sydney", "istanbul",
+        "mexico-city", "marrakech", "osaka", "honolulu", "san-francisco",
+        "lisbon", "taipei", "vancouver", "rio-de-janeiro", "las-vegas", "cairo"
+    ]
+
+    var popularityRank: Int {
+        Self.popularityOrder.firstIndex(of: id) ?? Self.popularityOrder.count
+    }
+
+    static var popularFirst: [Destination] {
+        all.enumerated()
+            .sorted {
+                let lhs = $0.element.popularityRank
+                let rhs = $1.element.popularityRank
+                return lhs == rhs ? $0.offset < $1.offset : lhs < rhs
+            }
+            .map(\.element)
+    }
 }
 
 extension Destination {
@@ -606,6 +720,10 @@ extension Destination {
         case "amsterdam": "Gabled canals, world-class art in walkable doses, and bikes outnumbering people — Amsterdam is a compact golden-age city built for wandering."
         case "dubai": "Record-breaking towers on one side of the creek and century-old souks on the other — Dubai does spectacle and tradition in the same day."
         case "cairo": "The pyramids at the edge of the city, treasure-filled museums, and bazaar lanes older than most countries — Cairo is history at full volume."
+        case "los-angeles": "Ocean sunsets, hillside views, film history, and food from every corner of the world — Los Angeles works best as a series of neighborhood-sized adventures."
+        case "cancun": "Turquoise water is the headline, but island ferries, cenotes, Maya history, and lively local food give Cancún far more range than a resort-only stay."
+        case "santorini": "Whitewashed villages trace a volcanic caldera above the Aegean, with cliff walks, ancient ruins, and vineyard afternoons beyond the famous sunsets."
+        case "marrakech": "Ochre lanes, tiled palaces, garden courtyards, and a market square that transforms after dark make Marrakech an immersive first stop in Morocco."
         default: "A curated plan with hand-picked places to visit and eat."
         }
     }
@@ -646,6 +764,10 @@ extension Destination {
         case "amsterdam": .init(base: "Jordaan, De Pijp, or the Canal Ring keeps most stops walkable.", transport: "Walk, bike carefully, or use trams for longer trips.", booking: "Rijksmuseum and Van Gogh Museum before arrival.")
         case "dubai": .init(base: "Downtown for landmarks or Al Seef for old-Dubai character.", transport: "Metro covers the spine; taxis fill the gaps efficiently.", booking: "Burj Khalifa, a desert operator, and any beach club.")
         case "cairo": .init(base: "Zamalek or Downtown work well for a first-time base.", transport: "Use a vetted driver or rideshare between major sights.", booking: "A Giza guide or transport, plus museum entry if needed.")
+        case "los-angeles": .init(base: "West Hollywood for central access, Santa Monica for the coast, or Downtown for transit.", transport: "Group days by neighborhood; use Metro where direct and rideshare for the gaps.", booking: "Studio tours, theme parks, and any timed museum entry.")
+        case "cancun": .init(base: "Hotel Zone for a beach-first stay or downtown for local food and lower prices.", transport: "Use buses along the resort corridor and booked transfers for longer outings.", booking: "Ferries, reef trips, and a reputable inland day tour.")
+        case "santorini": .init(base: "Fira for transport, Imerovigli for quieter caldera views, or Kamari for the beach.", transport: "Use buses for main villages; reserve a car only for a focused island loop.", booking: "Sailing, vineyard tastings, and any sunset dinner that matters.")
+        case "marrakech": .init(base: "A riad inside the medina for atmosphere or Hivernage for easier vehicle access.", transport: "Walk the medina, then use licensed taxis or arranged drivers beyond it.", booking: "Jardin Majorelle, a first-day guide, and a vetted Atlas excursion.")
         default: .init(base: "Choose a central, well-connected neighborhood.", transport: "Group stops by area and rely on local transit.", booking: "Reserve the one experience you would be disappointed to miss.")
         }
     }
@@ -679,6 +801,10 @@ extension Destination {
         case "amsterdam": CLLocationCoordinate2D(latitude: 52.3676, longitude: 4.9041)
         case "dubai": CLLocationCoordinate2D(latitude: 25.2048, longitude: 55.2708)
         case "cairo": CLLocationCoordinate2D(latitude: 30.0444, longitude: 31.2357)
+        case "los-angeles": CLLocationCoordinate2D(latitude: 34.0522, longitude: -118.2437)
+        case "cancun": CLLocationCoordinate2D(latitude: 21.1619, longitude: -86.8515)
+        case "santorini": CLLocationCoordinate2D(latitude: 36.3932, longitude: 25.4615)
+        case "marrakech": CLLocationCoordinate2D(latitude: 31.6295, longitude: -7.9811)
         default: CLLocationCoordinate2D(latitude: 0, longitude: 0)
         }
     }
@@ -708,10 +834,10 @@ extension Destination {
     var continent: String {
         switch country {
         case "Japan", "South Korea", "Thailand", "Singapore", "Indonesia", "Taiwan": "Asia"
-        case "France", "Italy", "Spain", "UK", "Portugal", "Netherlands", "Turkey": "Europe"
+        case "France", "Italy", "Spain", "UK", "Portugal", "Netherlands", "Turkey", "Greece": "Europe"
         case "USA", "Canada", "Mexico": "North America"
         case "Brazil": "South America"
-        case "UAE", "Egypt": "Middle East & Africa"
+        case "UAE", "Egypt", "Morocco": "Middle East & Africa"
         case "Australia": "Oceania"
         default: "Other"
         }

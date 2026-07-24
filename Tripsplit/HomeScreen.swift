@@ -7,9 +7,7 @@ struct HomeScreen: View {
     var onBrowseIdeas: () -> Void = {}
     @Environment(TripStore.self) private var store
     @Environment(AuthStore.self) private var auth
-    @AppStorage("appearancePreference") private var appearance: AppearancePreference = .system
     @State private var showAddTrip = false
-    @State private var showSettings = false
     @State private var showSignInAlert = false
     @State private var selectedTrip: Trip?
 
@@ -58,30 +56,9 @@ struct HomeScreen: View {
                 await store.loadFromCloud()
                 await store.refreshRates()
             }
-            .toolbar {
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    appearanceToggle
-                    Button {
-                        showSettings = true
-                    } label: {
-                        ProfileAvatar(
-                            imageData: store.profileImageData,
-                            initials: store.currentUser.initials,
-                            size: 34
-                        )
-                        .frame(width: 44, height: 44)
-                        .contentShape(.rect)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(Text("Profile & settings"))
-                }
-            }
         }
         .sheet(isPresented: $showAddTrip) {
             AddTripView()
-        }
-        .sheet(isPresented: $showSettings) {
-            SettingsScreen()
         }
         .sheet(isPresented: $showArchivedTrips) {
             ArchivedTripsSheet()
@@ -293,21 +270,6 @@ struct HomeScreen: View {
         case .failed:
             SyncFailureBanner()
         }
-    }
-
-    private var appearanceToggle: some View {
-        Menu {
-            Picker("Appearance", selection: $appearance) {
-                ForEach(AppearancePreference.allCases) { option in
-                    Label(option.label, systemImage: option.icon).tag(option)
-                }
-            }
-        } label: {
-            Image(systemName: appearance.icon)
-                .frame(width: 44, height: 44)
-                .contentShape(.rect)
-        }
-        .accessibilityLabel("Appearance: \(appearance.label)")
     }
 
     private var quickActions: some View {

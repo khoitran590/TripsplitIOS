@@ -103,6 +103,9 @@ enum DockTab: String, CaseIterable, Identifiable, Hashable {
 
 struct ContentView: View {
     @State private var selectedTab: DockTab = .explore
+    /// Curated guides have their own sticky bottom action bar. Hide the floating
+    /// dock while one is open so the two controls never overlap.
+    @State private var isExploreDetailPresented = false
     @State private var store = TripStore()
     @State private var auth = AuthStore()
     @State private var mapModel = ExploreMapModel()
@@ -130,13 +133,15 @@ struct ContentView: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            FloatingDock(selectedTab: $selectedTab)
-                // Span the full width and make the whole bottom strip a single hit
-                // region, so a tap landing beside or just around the dock is absorbed
-                // here instead of falling through onto a card behind it.
-                .frame(maxWidth: .infinity)
-                .contentShape(.rect)
-                .padding(.bottom, 8)
+            if selectedTab != .explore || !isExploreDetailPresented {
+                FloatingDock(selectedTab: $selectedTab)
+                    // Span the full width and make the whole bottom strip a single hit
+                    // region, so a tap landing beside or just around the dock is absorbed
+                    // here instead of falling through onto a card behind it.
+                    .frame(maxWidth: .infinity)
+                    .contentShape(.rect)
+                    .padding(.bottom, 8)
+            }
         }
         // A failed cloud save must be visible wherever the edit happened, not only on
         // Trips (which shows the same banner inline in its scroll content) — itinerary
@@ -268,7 +273,10 @@ struct ContentView: View {
     @ViewBuilder
     private func screen(for tab: DockTab) -> some View {
         switch tab {
-        case .explore: RecScreen(isActive: tab == selectedTab)
+        case .explore:
+            RecScreen(isActive: tab == selectedTab) { isShowingDetail in
+                isExploreDetailPresented = isShowingDetail
+            }
         case .map: MapScreen(selectedTab: $selectedTab, isActive: tab == selectedTab)
         case .trips:
             HomeScreen(

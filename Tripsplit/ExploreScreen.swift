@@ -6,6 +6,7 @@ import UIKit
 /// adventure" carousel, a smaller "Trending with travelers" rail, and a saved list.
 struct RecScreen: View {
     var isActive = true
+    var onNavigationDepthChange: (Bool) -> Void = { _ in }
     @State private var searchText = ""
     /// Keep the detail route while Explore is covered by the Map tab. Without an
     /// explicit path, SwiftUI rebuilds the NavigationStack at the curated list when
@@ -15,13 +16,14 @@ struct RecScreen: View {
     @Environment(TripStore.self) private var store
     @Environment(AuthStore.self) private var auth
     @Environment(ExploreMapModel.self) private var mapModel
+    @AppStorage("appearancePreference") private var appearance: AppearancePreference = .system
 
     /// Presents the build-your-own-itinerary flow (ItineraryFeature.swift).
     @State private var showCreateItinerary = false
     /// An optional walkthrough opened from the help button, after the destination
     /// content has already had room to make the first impression.
     @State private var showExploreOnboarding = false
-    @State private var showSignIn = false
+    @State private var showSettings = false
     @FocusState private var isSearchFocused: Bool
 
     // Filters
@@ -38,7 +40,7 @@ struct RecScreen: View {
     private var searchResults: [Destination] {
         let query = searchText.trimmingCharacters(in: .whitespaces)
         guard !query.isEmpty else { return [] }
-        return Destination.all.filter { destination in
+        return Destination.popularFirst.filter { destination in
             destination.city.localizedCaseInsensitiveContains(query)
                 || destination.country.localizedCaseInsensitiveContains(query)
                 || destination.title.localizedCaseInsensitiveContains(query)
@@ -56,8 +58,8 @@ struct RecScreen: View {
         }
     }
 
-    private var adventures: [Destination] { Destination.all.filter(\.isFeatured) }
-    private var saved: [Destination] { Destination.all.filter { savedIDs.contains($0.id) } }
+    private var adventures: [Destination] { Destination.popularFirst.filter(\.isFeatured) }
+    private var saved: [Destination] { Destination.popularFirst.filter { savedIDs.contains($0.id) } }
     private var hasContinueContent: Bool { !saved.isEmpty || !store.itineraryTrips.isEmpty }
 
     private var isFiltering: Bool {
@@ -72,7 +74,7 @@ struct RecScreen: View {
     }
 
     private var filteredDestinations: [Destination] {
-        Destination.all.filter { destination in
+        Destination.popularFirst.filter { destination in
             tripLength.matches(destination.days)
                 && (selectedContinent == nil || destination.continent == selectedContinent)
                 && (selectedIntent?.matches(destination) ?? true)
@@ -80,15 +82,20 @@ struct RecScreen: View {
         }
     }
 
-    /// Curated trips grouped by country, ordered by continent then country name,
-    /// so the browse view reads as a tidy destination directory.
+    /// Curated trips grouped by country, with the most popular destination in each
+    /// group deciding its position so the directory starts with familiar choices.
     private var countrySections: [(country: String, destinations: [Destination])] {
         let grouped = Dictionary(grouping: filteredDestinations, by: \.country)
         return grouped
-            .map { (country: $0.key, destinations: $0.value) }
+            .map {
+                (
+                    country: $0.key,
+                    destinations: $0.value.sorted { $0.popularityRank < $1.popularityRank }
+                )
+            }
             .sorted {
-                let lhs = Destination.continents.firstIndex(of: $0.destinations[0].continent) ?? .max
-                let rhs = Destination.continents.firstIndex(of: $1.destinations[0].continent) ?? .max
+                let lhs = $0.destinations.map(\.popularityRank).min() ?? .max
+                let rhs = $1.destinations.map(\.popularityRank).min() ?? .max
                 return lhs == rhs ? $0.country < $1.country : lhs < rhs
             }
     }
@@ -104,7 +111,7 @@ struct RecScreen: View {
     /// top of the detail page, so the curated plan becomes the starting point.
     private func startItinerary(from destination: Destination) {
         guard auth.isAuthenticated else {
-            showSignIn = true
+            showSettings = true
             return
         }
         let trip = destination.starterTrip(creator: store.currentUser)
@@ -114,7 +121,7 @@ struct RecScreen: View {
 
     private func createItinerary() {
         guard auth.isAuthenticated else {
-            showSignIn = true
+            showSettings = true
             return
         }
         showCreateItinerary = true
@@ -150,12 +157,12 @@ struct RecScreen: View {
                             collectionSection(
                                 title: "Food cities",
                                 subtitle: "Trips worth planning around the next meal.",
-                                destinations: Destination.all.filter { $0.tags.contains("Foodie") || $0.tags.contains("Markets") || $0.tags.contains("Night markets") }
+                                destinations: Destination.popularFirst.filter { $0.tags.contains("Foodie") || $0.tags.contains("Markets") || $0.tags.contains("Night markets") }
                             )
                             collectionSection(
                                 title: "Beach escapes",
                                 subtitle: "Slow mornings, warm water, and room to wander.",
-                                destinations: Destination.all.filter { $0.tags.contains("Beach") || $0.tags.contains("Coastal") }
+                                destinations: Destination.popularFirst.filter { $0.tags.contains("Beach") || $0.tags.contains("Coastal") }
                             )
                             buildFromScratchCard
                             destinationDirectory
@@ -166,9 +173,10 @@ struct RecScreen: View {
                 .padding(.bottom, 80)
             }
             .background { AppBackground() }
-            .navigationTitle("Explore")
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
                     Button {
                         isSearchFocused = false
                         showExploreOnboarding = true
@@ -176,6 +184,23 @@ struct RecScreen: View {
                         Image(systemName: "questionmark.circle")
                     }
                     .accessibilityLabel("How Explore works")
+
+                    appearanceToggle
+
+                    Button {
+                        isSearchFocused = false
+                        showSettings = true
+                    } label: {
+                        ProfileAvatar(
+                            imageData: store.profileImageData,
+                            initials: store.currentUser.initials,
+                            size: 34
+                        )
+                        .frame(width: 44, height: 44)
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Text("Profile & settings"))
                 }
             }
             .navigationDestination(for: String.self) { id in
@@ -197,7 +222,7 @@ struct RecScreen: View {
                     navigationPath.append(newTripID)
                 }
             }
-            .sheet(isPresented: $showSignIn) {
+            .sheet(isPresented: $showSettings) {
                 SettingsScreen()
             }
             .fullScreenCover(isPresented: $showExploreOnboarding) {
@@ -230,13 +255,95 @@ struct RecScreen: View {
                 navigationPath = NavigationPath()
                 navigationPath.append(tripID)
             }
+            .onChange(of: navigationPath.count, initial: true) { _, depth in
+                onNavigationDepthChange(depth > 0)
+            }
         }
     }
 
+    private var appearanceToggle: some View {
+        Menu {
+            Picker("Appearance", selection: $appearance) {
+                ForEach(AppearancePreference.allCases) { option in
+                    Label(option.label, systemImage: option.icon).tag(option)
+                }
+            }
+        } label: {
+            Image(systemName: appearance.icon)
+                .frame(width: 44, height: 44)
+                .contentShape(.rect)
+        }
+        .accessibilityLabel("Appearance: \(appearance.label)")
+    }
+
     private var exploreIntroduction: some View {
-        Text("Plan your next trip")
-            .font(.app(.title2, .bold))
-        .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .bottom, spacing: 14) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("CURATED TRAVEL GUIDES", systemImage: "sparkles")
+                        .font(.app(.caption2, .bold))
+                        .foregroundStyle(Theme.accent)
+
+                    Text("Explore")
+                        .font(.app(size: 42, weight: .bold))
+                        .accessibilityAddTraits(.isHeader)
+
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [Theme.accent, Theme.accentSecondary],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: 58, height: 5)
+                }
+
+                Spacer(minLength: 0)
+
+                Button(action: createItinerary) {
+                    Label("Create trip", systemImage: "plus")
+                        .font(.app(.subheadline, .semibold))
+                        .foregroundStyle(Theme.onAccent)
+                        .padding(.horizontal, 15)
+                        .frame(minHeight: 46)
+                        .contentShape(.capsule)
+                }
+                .buttonStyle(.plain)
+                .background(
+                    LinearGradient(
+                        colors: [Theme.accent, Theme.accentSecondary],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    ),
+                    in: .capsule
+                )
+                .accessibilityLabel("Create your own trip")
+                .accessibilityHint("Opens the trip builder")
+            }
+
+            Text("Find a place you’ll love, then shape it into a trip that’s completely yours.")
+                .font(.app(.subheadline))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(18)
+        .background {
+            ZStack {
+                Theme.surface.opacity(0.94)
+                LinearGradient(
+                    colors: [Theme.accent.opacity(0.12), .clear, Theme.accentSecondary.opacity(0.08)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            }
+        }
+        .clipShape(.rect(cornerRadius: 28))
+        .overlay {
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .strokeBorder(Theme.separator.opacity(0.75), lineWidth: 1)
+        }
+        .shadow(color: Theme.elevatedShadow, radius: 12, y: 5)
     }
 
     private var continueSection: some View {
@@ -558,7 +665,7 @@ struct RecScreen: View {
 
     private func toggleSaved(_ id: String) {
         guard auth.isAuthenticated else {
-            showSignIn = true
+            showSettings = true
             return
         }
         var set = savedIDs
