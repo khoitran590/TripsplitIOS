@@ -16,12 +16,13 @@ struct RecScreen: View {
     @Environment(TripStore.self) private var store
     @Environment(AuthStore.self) private var auth
     @Environment(ExploreMapModel.self) private var mapModel
+    @Environment(OnboardingCoordinator.self) private var onboarding
     @AppStorage("appearancePreference") private var appearance: AppearancePreference = .system
 
     /// Presents the build-your-own-itinerary flow (ItineraryFeature.swift).
     @State private var showCreateItinerary = false
-    /// An optional walkthrough opened from the help button, after the destination
-    /// content has already had room to make the first impression.
+    /// The walkthrough: shown automatically as the last step of a new account's
+    /// first-run sequence, and on demand from the help button after that.
     @State private var showExploreOnboarding = false
     @State private var showSettings = false
     @FocusState private var isSearchFocused: Bool
@@ -147,6 +148,10 @@ struct RecScreen: View {
             isSearchFocused = false
             pendingAction = action
             showSignIn = true
+            // Signing in here starts onboarding, but the user asked for something
+            // specific first — hold the steps until the replayed action is done, so
+            // nothing tries to present on top of it.
+            onboarding.isPaused = true
             return
         }
         perform(action)
@@ -158,6 +163,9 @@ struct RecScreen: View {
             var set = savedIDs
             if set.contains(id) { set.remove(id) } else { set.insert(id) }
             store.updateSavedPlaces(destinationIDs: set.sorted())
+            // Saving presents nothing, so onboarding can carry on immediately; the
+            // other two cases resume when their screen closes.
+            onboarding.isPaused = false
         case .createItinerary:
             showCreateItinerary = true
         case .startItinerary(let id):
@@ -256,7 +264,11 @@ struct RecScreen: View {
             .navigationDestination(for: Trip.ID.self) { tripID in
                 ItineraryDetailView(tripID: tripID)
             }
-            .sheet(isPresented: $showCreateItinerary) {
+            .sheet(isPresented: $showCreateItinerary, onDismiss: {
+                // Closed without creating anything: no planner to protect, so a step
+                // parked for this action can go ahead.
+                if navigationPath.isEmpty { onboarding.isPaused = false }
+            }) {
                 // Push the new itinerary's planner as the sheet closes.
                 CreateItineraryView { newTripID in
                     navigationPath.append(newTripID)
@@ -268,8 +280,10 @@ struct RecScreen: View {
             .fullScreenCover(isPresented: $showExploreOnboarding) {
                 ExploreOnboardingView {
                     showExploreOnboarding = false
+                    onboarding.exploreTourFinished()
                 } onBuildItinerary: {
                     showExploreOnboarding = false
+                    onboarding.exploreTourFinished()
                     // Wait for the full-screen cover to finish handing control back
                     // before presenting the itinerary sheet.
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
@@ -289,7 +303,12 @@ struct RecScreen: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
             }
-            .sheet(isPresented: $showSignIn, onDismiss: { pendingAction = nil }) {
+            .sheet(isPresented: $showSignIn, onDismiss: {
+                pendingAction = nil
+                // Dismissed without signing in: nothing will be replayed, so the hold
+                // placed in `requireAccount` has to come off.
+                if !auth.isAuthenticated { onboarding.isPaused = false }
+            }) {
                 ExploreSignInSheet(action: pendingAction ?? .createItinerary)
             }
             // Replay whatever the user was trying to do the moment they're signed in,
@@ -311,8 +330,17 @@ struct RecScreen: View {
                 navigationPath = NavigationPath()
                 navigationPath.append(tripID)
             }
+            // The walkthrough is the last step of the first-run sequence, and this is
+            // the tab that owns it. `task(id:)` rather than `onChange` so a step queued
+            // while Explore was off screen still lands when it comes back.
+            .task(id: onboarding.visibleStep) {
+                if onboarding.visibleStep == .exploreTour { showExploreOnboarding = true }
+            }
             .onChange(of: navigationPath.count, initial: true) { _, depth in
                 onNavigationDepthChange(depth > 0)
+                // An onboarding step parked behind a post-sign-in action resumes once
+                // that action's own screen is closed.
+                if depth == 0 { onboarding.isPaused = false }
             }
         }
     }

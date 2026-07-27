@@ -8,16 +8,26 @@ struct RootView: View {
     @State private var fontManager = FontManager.shared
     @AppStorage("appearancePreference") private var appearance: AppearancePreference = .system
     @AppStorage("hasSeenWelcome") private var hasSeenWelcome = false
+    /// Whether an account was already signed in when the app launched. The welcome
+    /// flow is for people arriving at the app, not for a session that's already live —
+    /// and the Keychain session survives reinstalls, where `hasSeenWelcome` doesn't.
+    @State private var isSignedInAtLaunch = AuthSessionStore.load() != nil
+    /// Set when the welcome flow ends on "Create an account", so `ContentView` can
+    /// open sign-in instead of leaving the user to find it.
+    @State private var startsAtSignIn = false
 
     var body: some View {
         ZStack {
             if isActive {
-                if hasSeenWelcome {
-                    ContentView()
+                if hasSeenWelcome || isSignedInAtLaunch {
+                    ContentView(startsAtSignIn: startsAtSignIn)
                         .transition(.opacity)
                 } else {
-                    WelcomeView {
-                        withAnimation(.easeInOut(duration: 0.35)) { hasSeenWelcome = true }
+                    WelcomeView { intent in
+                        withAnimation(.easeInOut(duration: 0.35)) {
+                            startsAtSignIn = intent == .signIn
+                            hasSeenWelcome = true
+                        }
                     }
                     .transition(.opacity)
                 }

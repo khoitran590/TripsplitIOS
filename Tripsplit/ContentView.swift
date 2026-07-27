@@ -102,6 +102,10 @@ enum DockTab: String, CaseIterable, Identifiable, Hashable {
 }
 
 struct ContentView: View {
+    /// Set by the welcome flow when the user asked to create an account, so the
+    /// sign-in sheet opens as the app appears.
+    var startsAtSignIn = false
+
     @State private var selectedTab: DockTab = .explore
     /// Curated guides have their own sticky bottom action bar. Hide the floating
     /// dock while one is open so the two controls never overlap.
@@ -117,10 +121,13 @@ struct ContentView: View {
     /// the old `switch` tore down and rebuilt the whole screen (map region, scroll
     /// positions, resolved images) on every dock tap, which made navigation feel laggy.
     @State private var visitedTabs: Set<DockTab> = [.explore]
-    /// One-time profile-setup prompt for accounts with no display name yet.
-    /// Session-scoped so a skip isn't re-asked until the next launch.
+    /// Drives the post-sign-in onboarding steps (see `OnboardingCoordinator`): it
+    /// only ever fires for a sign-in performed in this session, never for a session
+    /// restored at launch.
+    @State private var onboarding = OnboardingCoordinator()
     @State private var showProfileSetup = false
-    @State private var promptedProfileSetup = false
+    /// Sign-in sheet opened straight from the welcome flow.
+    @State private var showWelcomeSignIn = false
     /// An invite link opened while signed out, held until the user signs in.
     @State private var pendingInviteURL: URL?
     @State private var showInviteSignInAlert = false
@@ -154,6 +161,15 @@ struct ContentView: View {
             }
         }
         .animation(.snappy, value: store.syncState)
+        // A returning account gets this instead of the first-run sequence.
+        .overlay(alignment: .top) {
+            if let name = onboarding.welcomeBackName {
+                WelcomeBackToast(name: name)
+                    .padding(.top, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.snappy, value: onboarding.welcomeBackName)
         .onChange(of: selectedTab) { _, tab in visitedTabs.insert(tab) }
         // Sign-in happens in the profile sheet (it hosts `AuthView` when signed out);
         // once authentication succeeds, keep discovery as the app's front door.
@@ -186,8 +202,14 @@ struct ContentView: View {
         // Attached before the `.environment(...)` modifiers below so the sheet's
         // content inherits TripStore/AuthStore — a sheet added outside that scope
         // crashes on its `@Environment` lookup.
-        .sheet(isPresented: $showProfileSetup) {
-            ProfileSetupView()
+        // `onDismiss` covers every way out of the sheet — Save, Skip, and swipe-down
+        // alike — so the sequence always moves on rather than stalling on a step that
+        // is no longer on screen.
+        .sheet(isPresented: $showProfileSetup, onDismiss: { onboarding.profileSetupFinished() }) {
+            ProfileSetupView(isFirstRun: onboarding.isFirstRunFlow)
+        }
+        .sheet(isPresented: $showWelcomeSignIn) {
+            WelcomeSignInSheet()
         }
         // Same rule as above: attach before the `.environment(...)` modifiers so the
         // shared profile sheet inherits FriendsStore/AuthStore/TripStore.
@@ -200,6 +222,17 @@ struct ContentView: View {
         .environment(auth)
         .environment(mapModel)
         .environment(friends)
+        .environment(onboarding)
+        .task {
+            // The welcome flow's "Create an account" hands over here; a sign-in that
+            // already happened (e.g. a restored session) needs no sheet.
+            if startsAtSignIn, !auth.isAuthenticated { showWelcomeSignIn = true }
+        }
+        // Reading the step as a `task` id (rather than inside a custom Binding) keeps
+        // the read in the body's observation scope, so a queued step reliably presents.
+        .task(id: onboarding.visibleStep) {
+            showProfileSetup = onboarding.visibleStep == .profileSetup
+        }
         .task(id: auth.session?.accessToken) {
             // Keep the trip store's token + identity in sync with the auth session and
             // reload the user's trips from Supabase whenever they sign in (or back out).
@@ -214,6 +247,14 @@ struct ContentView: View {
             // Load the cloud profile first so `loadFromCloud`'s member healing uses
             // the authoritative name/avatar rather than the local cache.
             await store.loadProfileFromCloud()
+            // Hand the settled identity to onboarding before the (slower) trip load,
+            // so a new account isn't left staring at an empty app first. Called on
+            // every token change; the coordinator ignores everything but a real
+            // sign-in, sign-out, or account switch.
+            onboarding.update(
+                userID: auth.isAuthenticated ? store.currentUser.id : nil,
+                displayName: store.currentUser.name
+            )
             await store.loadFromCloud()
             // Keep the friends graph in sync with the session: load it when signed in,
             // clear it on sign-out so one account's friends never linger for the next.
@@ -221,13 +262,6 @@ struct ContentView: View {
                 await friends.refresh()
             } else {
                 friends.reset()
-            }
-            // Fresh account with no display name: offer the one-time profile setup so
-            // the user doesn't show up to trip mates as a bare email handle.
-            if auth.isAuthenticated, !promptedProfileSetup,
-               store.currentUser.name.trimmingCharacters(in: .whitespaces).isEmpty {
-                promptedProfileSetup = true
-                showProfileSetup = true
             }
         }
         .onOpenURL { url in

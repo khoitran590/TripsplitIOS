@@ -1,100 +1,337 @@
 import SwiftUI
 import PhotosUI
 
-/// First-launch welcome flow: three swipeable value pages shown once, after the
-/// splash screen and before the main app. Gated by the `hasSeenWelcome` flag so
-/// existing users and every later launch skip straight to `ContentView`.
+// MARK: - Onboarding coordinator
+
+/// Sequences the post-sign-in onboarding steps and remembers which accounts have
+/// already been through them on this device.
+///
+/// Onboarding hangs off the **sign-in event**, not app launch: an account whose
+/// session is restored from the Keychain is already in, so it is marked onboarded
+/// silently and never interrupted. A sign-in the user actually performs starts the
+/// flow — the full sequence for an account new to this device, and only the steps
+/// still missing (plus a "welcome back" greeting) for one that has been here before.
+@MainActor
+@Observable
+final class OnboardingCoordinator {
+    /// One screen of the post-sign-in sequence.
+    enum Step: Equatable {
+        /// Display name + avatar. Shown whenever the account still has no name.
+        case profileSetup
+        /// The Explore walkthrough, for accounts new to this device.
+        case exploreTour
+    }
+
+    /// The step waiting to be shown, if any.
+    private(set) var step: Step?
+
+    /// Set while another flow owns the screen — an Explore action replayed right
+    /// after sign-in, say. Presenters watch `visibleStep`, so a queued step waits
+    /// its turn instead of stacking a sheet on top of whatever is already up.
+    var isPaused = false
+
+    /// The name to greet a returning account with, until it times out.
+    private(set) var welcomeBackName: String?
+
+    /// The step presenters should show right now.
+    var visibleStep: Step? { isPaused ? nil : step }
+
+    /// Whether the account is mid-way through the first-run sequence, so steps can
+    /// tell the user how much is left.
+    var isFirstRunFlow: Bool {
+        guard let id = currentUserID else { return false }
+        return !isOnboarded(id)
+    }
+
+    private let defaults = UserDefaults.standard
+    private let onboardedKey = "onboardedUserIDs"
+    private var currentUserID: UUID?
+    /// Guards the once-per-launch pass, which never starts the flow.
+    private var didBootstrap = false
+
+    /// Reports the signed-in account (nil when signed out). Safe to call on every
+    /// auth refresh — a rotated access token reports the same account and is ignored,
+    /// so only a genuine sign-in or account switch starts the flow.
+    func update(userID: UUID?, displayName: String) {
+        let previous = currentUserID
+        currentUserID = userID
+
+        guard didBootstrap else {
+            didBootstrap = true
+            // A session restored at launch: the user never signed in here, so nothing
+            // is shown. Remembering the account keeps a later sign-out/sign-in cycle
+            // on the "returning user" path.
+            if let userID { markOnboarded(userID) }
+            return
+        }
+        guard userID != previous else { return }
+        guard let userID else {
+            step = nil
+            welcomeBackName = nil
+            return
+        }
+        start(userID: userID, displayName: displayName)
+    }
+
+    private func start(userID: UUID, displayName: String) {
+        let name = displayName.trimmingCharacters(in: .whitespaces)
+        guard isOnboarded(userID) else {
+            // New here: name first (it's how trip mates see them), then the tour.
+            step = name.isEmpty ? .profileSetup : .exploreTour
+            return
+        }
+        if !name.isEmpty { greet(name) }
+        step = name.isEmpty ? .profileSetup : nil
+    }
+
+    /// Called when the profile step leaves the screen, however it was closed.
+    func profileSetupFinished() {
+        guard step == .profileSetup else { return }
+        step = nil
+        guard let currentUserID, !isOnboarded(currentUserID) else { return }
+        // Let the sheet finish dismissing before the walkthrough takes the screen.
+        Task {
+            try? await Task.sleep(for: .seconds(0.35))
+            if step == nil { step = .exploreTour }
+        }
+    }
+
+    /// Called when the Explore walkthrough closes — including when the user opens it
+    /// themselves from the help button, which counts just as well.
+    func exploreTourFinished() {
+        if let currentUserID { markOnboarded(currentUserID) }
+        if step == .exploreTour { step = nil }
+    }
+
+    private func greet(_ name: String) {
+        welcomeBackName = name
+        Task {
+            try? await Task.sleep(for: .seconds(2.6))
+            withAnimation(.snappy) { welcomeBackName = nil }
+        }
+    }
+
+    // MARK: Per-account persistence
+
+    private var onboardedIDs: Set<String> {
+        Set(defaults.stringArray(forKey: onboardedKey) ?? [])
+    }
+
+    private func isOnboarded(_ id: UUID) -> Bool {
+        onboardedIDs.contains(id.uuidString)
+    }
+
+    private func markOnboarded(_ id: UUID) {
+        var ids = onboardedIDs
+        guard ids.insert(id.uuidString).inserted else { return }
+        defaults.set(Array(ids), forKey: onboardedKey)
+    }
+}
+
+// MARK: - Welcome flow
+
+/// How the user chose to leave the welcome flow.
+enum WelcomeIntent {
+    /// Go straight to the sign-in sheet.
+    case signIn
+    /// Look around signed out; Explore gates every account-bound action anyway.
+    case browse
+}
+
+/// First-launch welcome flow: three swipeable value pages ending in a sign-in
+/// invitation. Shown to signed-out first launches only — `RootView` skips it both
+/// for accounts with a stored session and once `hasSeenWelcome` is set.
 struct WelcomeView: View {
-    /// Set to true when the user finishes (or skips) the flow.
-    var onFinish: () -> Void
+    /// Called when the user finishes or skips the flow.
+    var onFinish: (WelcomeIntent) -> Void
 
     @State private var page = 0
 
     private struct Page {
         let systemImage: String
+        let eyebrow: LocalizedStringKey
         let title: LocalizedStringKey
         let subtitle: LocalizedStringKey
     }
 
     private let pages: [Page] = [
-        Page(systemImage: "sparkles",
+        Page(systemImage: "sparkles", eyebrow: "DISCOVER",
              title: "Discover trips worth taking",
              subtitle: "Browse photo-rich guides, local favorites, and practical plans for your next destination."),
-        Page(systemImage: "map.fill",
+        Page(systemImage: "map.fill", eyebrow: "PLAN",
              title: "Plan days together",
              subtitle: "Shape an itinerary, map every stop, and invite friends to build the trip with you."),
-        Page(systemImage: "person.2.fill",
+        Page(systemImage: "person.2.fill", eyebrow: "SPLIT",
              title: "Split costs without the spreadsheet",
              subtitle: "Track shared expenses, scan receipts, and settle fairly when the spending starts."),
     ]
 
+    private var isLastPage: Bool { page == pages.count - 1 }
+
     var body: some View {
         ZStack {
-            Color(.systemBackground).ignoresSafeArea()
+            AppBackground()
 
             VStack(spacing: 0) {
                 HStack {
                     Spacer()
-                    Button("Skip") { onFinish() }
-                        .font(.app(.subheadline, .medium))
+                    Button("Skip") { onFinish(.browse) }
+                        .font(.app(.subheadline, .semibold))
                         .foregroundStyle(.secondary)
-                        .padding()
+                        .frame(minWidth: 44, minHeight: 44)
                 }
+                .padding(.horizontal, 20)
+                .padding(.top, 8)
 
                 TabView(selection: $page) {
                     ForEach(pages.indices, id: \.self) { index in
-                        pageView(pages[index])
+                        pageView(pages[index], index: index)
                             .tag(index)
                     }
                 }
-                .tabViewStyle(.page(indexDisplayMode: .always))
-                .indexViewStyle(.page(backgroundDisplayMode: .always))
+                .tabViewStyle(.page(indexDisplayMode: .never))
 
-                Button {
-                    if page < pages.count - 1 {
-                        withAnimation(.snappy) { page += 1 }
-                    } else {
-                        onFinish()
+                HStack(spacing: 7) {
+                    ForEach(pages.indices, id: \.self) { index in
+                        Capsule()
+                            .fill(index == page ? Theme.accent : Color.secondary.opacity(0.25))
+                            .frame(width: index == page ? 24 : 7, height: 7)
                     }
-                } label: {
-                    Text(page < pages.count - 1 ? "Continue" : "Start exploring")
-                        .font(.app(.headline))
-                        .foregroundStyle(Theme.onAccent)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
                 }
-                .buttonStyle(.plain)
-                .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
-                .padding(.horizontal, 24)
-                .padding(.bottom, 24)
+                .animation(.snappy, value: page)
+                .padding(.bottom, 22)
+
+                actions
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 20)
             }
         }
     }
 
-    private func pageView(_ page: Page) -> some View {
-        VStack(spacing: 24) {
-            Image(systemName: page.systemImage)
-                .font(.app(size: 72))
-                .foregroundStyle(
-                    LinearGradient(
-                        colors: [Color(hex: 0xF59E0B), Color(hex: 0xEC4899)],
-                        startPoint: .topLeading, endPoint: .bottomTrailing
-                    )
-                )
-                .frame(height: 110)
+    /// The last page trades "Continue" for the two ways into the app, so the flow
+    /// ends on a decision instead of dropping the user somewhere unexplained.
+    @ViewBuilder
+    private var actions: some View {
+        VStack(spacing: 6) {
+            Button {
+                if isLastPage {
+                    onFinish(.signIn)
+                } else {
+                    withAnimation(.snappy) { page += 1 }
+                }
+            } label: {
+                Text(isLastPage ? "Create an account" : "Continue")
+                    .font(.app(.headline))
+                    .foregroundStyle(Theme.onAccent)
+                    .frame(maxWidth: .infinity, minHeight: 54)
+            }
+            .buttonStyle(.plain)
+            .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
 
-            VStack(spacing: 10) {
-                Text(page.title)
-                    .font(.app(.title, .bold))
-                    .multilineTextAlignment(.center)
-                Text(page.subtitle)
-                    .font(.app(.body))
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 36)
+            if isLastPage {
+                Button {
+                    onFinish(.browse)
+                } label: {
+                    Text("Look around first")
+                        .font(.app(.subheadline, .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(maxWidth: .infinity, minHeight: 48)
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Opens the app signed out. You can sign in later from the Profile tab.")
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
         }
-        .padding(.bottom, 48)
+        .animation(.snappy, value: isLastPage)
+    }
+
+    private func pageView(_ item: Page, index: Int) -> some View {
+        ScrollView {
+            VStack(spacing: 28) {
+                ZStack {
+                    Circle()
+                        .fill(Theme.accent.opacity(0.12))
+                        .frame(width: 160, height: 160)
+                    Circle()
+                        .stroke(Theme.accent.opacity(0.18), lineWidth: 1)
+                        .frame(width: 196, height: 196)
+                    Image(systemName: item.systemImage)
+                        .font(.app(size: 64, weight: .medium))
+                        .foregroundStyle(
+                            LinearGradient(colors: [Theme.accent, Theme.accentSecondary],
+                                           startPoint: .topLeading, endPoint: .bottomTrailing)
+                        )
+                        .symbolEffect(.bounce, value: page == index)
+                        .accessibilityHidden(true)
+                }
+
+                VStack(spacing: 12) {
+                    Text(item.eyebrow)
+                        .font(.app(.caption, .bold))
+                        .tracking(1.8)
+                        .foregroundStyle(Theme.accent)
+                    Text(item.title)
+                        .font(.app(.largeTitle, .bold))
+                        .multilineTextAlignment(.center)
+                    Text(item.subtitle)
+                        .font(.app(.body))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .lineSpacing(3)
+                }
+                .padding(.horizontal, 30)
+                .accessibilityElement(children: .combine)
+            }
+            .padding(.vertical, 20)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+    }
+}
+
+/// The sign-in sheet the welcome flow hands off to. `AuthView` covers sign in, sign
+/// up, and password reset; the presenter closes this on success.
+struct WelcomeSignInSheet: View {
+    @Environment(AuthStore.self) private var auth
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                AppBackground()
+                AuthView()
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Not now") { dismiss() }
+                }
+            }
+        }
+        .onChange(of: auth.isAuthenticated) { _, isAuthenticated in
+            if isAuthenticated { dismiss() }
+        }
+    }
+}
+
+/// A brief, non-blocking greeting for an account that has signed in here before —
+/// the whole of what a returning user gets in place of the first-run sequence.
+struct WelcomeBackToast: View {
+    let name: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "hand.wave.fill")
+                .font(.app(.subheadline))
+                .foregroundStyle(Theme.accent)
+            Text("Welcome back,")
+                .font(.app(.subheadline, .semibold))
+            Text(verbatim: name)
+                .font(.app(.subheadline, .semibold))
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .glassEffect(.regular, in: .capsule)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -244,6 +481,10 @@ struct ExploreOnboardingView: View {
 /// name yet: without one, the user appears to trip mates as a bare email handle.
 /// Name is required to save; the avatar is optional. Skipping is always allowed.
 struct ProfileSetupView: View {
+    /// True when this is the first step of a new account's first-run sequence, which
+    /// continues into the Explore walkthrough — so the sheet can say there's more.
+    var isFirstRun = false
+
     @Environment(TripStore.self) private var store
     @Environment(\.dismiss) private var dismiss
 
@@ -252,7 +493,8 @@ struct ProfileSetupView: View {
     @State private var avatarData: Data?
     @State private var isSaving = false
 
-    init() {
+    init(isFirstRun: Bool = false) {
+        self.isFirstRun = isFirstRun
         // Apple sign-in provides the name exactly once, at first authorization —
         // AuthView stashes it here so it isn't lost if the user skips this sheet.
         _name = State(initialValue: UserDefaults.standard.string(forKey: "pendingAppleDisplayName") ?? "")
@@ -283,6 +525,11 @@ struct ProfileSetupView: View {
                 .buttonStyle(.plain)
 
                 VStack(spacing: 6) {
+                    if isFirstRun {
+                        Text("Step 1 of 2")
+                            .font(.app(.caption, .semibold))
+                            .foregroundStyle(Theme.accent)
+                    }
                     Text("What should we call you?")
                         .font(.app(.title2, .bold))
                     Text("Your name is how trip mates see you on shared trips and settle-ups.")
@@ -407,5 +654,5 @@ struct OneTimeTipBanner: View {
 }
 
 #Preview {
-    WelcomeView(onFinish: {})
+    WelcomeView { _ in }
 }
