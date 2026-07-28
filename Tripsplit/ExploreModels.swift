@@ -783,6 +783,51 @@ extension Destination {
         }
     }
 
+    /// Months (1–12) when this destination is at its best — good weather without peak
+    /// crowds, or the local high season where that is genuinely the point (Sydney and
+    /// Rio in the southern summer, Dubai and Cairo in winter).
+    ///
+    /// Deliberately coarse. These are shoulder-season judgements, not forecasts, and
+    /// they drive one discovery rail — nothing here should be read as a guarantee
+    /// about weather on specific dates.
+    var bestMonths: Set<Int> {
+        switch id {
+        case "tokyo", "kyoto", "osaka": [3, 4, 5, 10, 11]
+        case "seoul": [4, 5, 9, 10]
+        case "bangkok": [11, 12, 1, 2]
+        case "singapore": [2, 3, 4, 6, 7, 8]
+        case "bali": [5, 6, 7, 8, 9]
+        case "taipei": [3, 4, 10, 11]
+        case "new-york": [4, 5, 6, 9, 10]
+        case "san-francisco": [5, 6, 9, 10]
+        case "vancouver": [6, 7, 8, 9]
+        case "las-vegas": [3, 4, 5, 10, 11]
+        case "mexico-city": [3, 4, 5, 10, 11]
+        case "los-angeles": [3, 4, 5, 9, 10, 11]
+        case "paris": [4, 5, 6, 9, 10]
+        case "rome": [4, 5, 9, 10]
+        case "barcelona": [5, 6, 9, 10]
+        case "london": [5, 6, 7, 8, 9]
+        case "lisbon": [3, 4, 5, 9, 10]
+        case "amsterdam": [4, 5, 6, 9]
+        case "istanbul": [4, 5, 9, 10]
+        case "santorini": [5, 6, 7, 9, 10]
+        case "honolulu": [4, 5, 6, 9, 10]
+        case "sydney": [10, 11, 12, 1, 2, 3]
+        case "rio-de-janeiro": [11, 12, 1, 2, 3]
+        case "cancun": [12, 1, 2, 3, 4]
+        case "dubai": [11, 12, 1, 2, 3]
+        case "cairo": [10, 11, 12, 1, 2, 3]
+        case "marrakech": [3, 4, 5, 10, 11]
+        default: []
+        }
+    }
+
+    /// Guides at their best in `month`, in discovery order.
+    static func best(inMonth month: Int) -> [Destination] {
+        popularFirst.filter { $0.bestMonths.contains(month) }
+    }
+
     /// City-center coordinate, used to bias the Map tab's POI search and as the
     /// fallback pin location when a specific place can't be resolved.
     var coordinate: CLLocationCoordinate2D {
@@ -834,6 +879,12 @@ extension Destination {
         tags.first.flatMap { Int($0.split(separator: " ").first ?? "") } ?? 0
     }
 
+    /// Tags with the leading duration ("5 days") dropped. Every guide carries one, so
+    /// leaving it in would give any two guides a free point of "similarity".
+    var styleTags: [String] {
+        tags.filter { Int($0.split(separator: " ").first ?? "") == nil }
+    }
+
     /// Numeric total budget, parsed from `price` ("$2.5k" → 2500).
     var budgetValue: Double {
         let trimmed = price.trimmingCharacters(in: CharacterSet(charactersIn: "$"))
@@ -859,7 +910,11 @@ extension Destination {
     /// itinerary budget, and the curated places/restaurants are spread round-robin
     /// across the trip's days (each day tends to get a sight and a meal). Everything
     /// is a normal `ItineraryStop` afterwards — rename, retime, or delete freely.
-    func starterTrip(creator me: Person) -> Trip {
+    ///
+    /// `startDate` is optional because a curated guide is just as usable as an undated
+    /// wish-list. When it is supplied the end date follows from the guide's own length,
+    /// so the copied plan lands on a real calendar instead of a set of unanchored days.
+    func starterTrip(creator me: Person, startDate: Date? = nil) -> Trip {
         let dayCount = min(max(days, 1), 30)
         var itineraryDays = (0..<dayCount).map { _ in ItineraryDay() }
         for (index, place) in places.enumerated() {
@@ -873,6 +928,9 @@ extension Destination {
             )
         }
         let budget = SplitEngine.roundToTwo(budgetValue)
+        let endDate = startDate.flatMap {
+            Calendar.current.date(byAdding: .day, value: dayCount - 1, to: $0)
+        }
         return Trip(
             name: title,
             currencyCode: "USD",
@@ -880,9 +938,20 @@ extension Destination {
             members: [me],
             budgets: [me.id: budget],
             location: "\(city), \(country)",
+            startDate: startDate,
+            endDate: endDate,
             itinerary: Itinerary(totalBudget: budget, days: itineraryDays)
         )
     }
+
+    /// Lowest total budget across the curated set, floored to $100. The filter slider
+    /// used to start at a hard-coded $500 while the cheapest guide was $1.2k, so the
+    /// bottom third of the track was a guaranteed "no trips match".
+    static let budgetFloor: Double = ((all.map(\.budgetValue).min() ?? 0) / 100).rounded(.down) * 100
+
+    /// One $100 step above the priciest guide, so the slider's top end always reads as
+    /// "no limit" — and stays that way if a more expensive guide is added later.
+    static let budgetCeiling: Double = ((all.map(\.budgetValue).max() ?? 0) / 100).rounded(.up) * 100 + 100
 
     /// Continents in display order, limited to ones that actually have trips.
     static var continents: [String] {

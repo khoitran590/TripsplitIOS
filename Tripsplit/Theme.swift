@@ -433,6 +433,12 @@ final class ThemeManager {
 /// screen reads correctly in both light and dark appearances. Accent and backdrop
 /// colors resolve through `ThemeManager`, so they follow the user's chosen theme.
 enum Theme {
+    /// Corner radius for the card family. Explore's cards had drifted to 18/20/22 for
+    /// what reads as one object, so the browse surface looked subtly inconsistent from
+    /// section to section. Photo thumbnails nested *inside* a card keep their own,
+    /// smaller radii — an inner corner has to be tighter than the corner enclosing it.
+    static let cardRadius: CGFloat = 20
+
     /// Home dashboard backdrop for the current theme.
     static var homeGradient: [Color] {
         ThemeManager.shared.selection.homeGradient

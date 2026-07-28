@@ -535,6 +535,16 @@ struct CreateItineraryView: View {
     /// Called with the new trip's id after a successful create, before dismissing.
     var onCreated: (Trip.ID) -> Void = { _ in }
 
+    /// Seeds the name and location fields. Explore passes the user's unmatched search
+    /// query here, so "no guide for Berlin yet" can turn straight into a Berlin trip
+    /// rather than dead-ending in an empty result list.
+    init(prefill: String? = nil, onCreated: @escaping (Trip.ID) -> Void = { _ in }) {
+        let seed = prefill?.trimmingCharacters(in: .whitespaces) ?? ""
+        _name = State(initialValue: seed)
+        _location = State(initialValue: seed)
+        self.onCreated = onCreated
+    }
+
     @State private var name = ""
     @State private var location = ""
     @State private var currency = "USD"
