@@ -512,27 +512,11 @@ enum PlaceRegion {
         }
         return languages
     }
-
-    /// A short code for the sticker: the ISO country code when the suffix is a country,
-    /// otherwise initials ("California" → CA, "New South Wales" → NS).
-    static func displayCode(for name: String) -> String? {
-        let words = regionWords(in: name)
-        guard !words.isEmpty else { return nil }
-        // A state abbreviation stays as written — the badge shows CA, not US.
-        if let abbreviation = words.first(where: { $0.count == 2 && $0.allSatisfy(\.isLetter) }) {
-            return abbreviation.uppercased()
-        }
-        if let iso = isoCode(forRegionIn: name) { return iso }
-        if words.count > 1 {
-            return words.prefix(2).compactMap(\.first).map(String.init).joined().uppercased()
-        }
-        return String(words[0].prefix(2)).uppercased()
-    }
 }
 
-/// The kind of place a visited location is, inferred from its name. Each kind
-/// picks the sticker's silhouette, glyph, and color, so "Lake Tahoe" and "Lake
-/// Arrowhead" share one lake sticker instead of needing per-city artwork.
+/// The kind of place a visited location is, inferred from its name. The kind picks the
+/// stamp's emblem art and its category word, so "Lake Tahoe" and "Lake Arrowhead" share
+/// one lakeside stamp instead of needing per-city artwork.
 enum PlaceTheme {
     case city, mountain, lake, coast, island, desert, forest, snow, historic
 
@@ -730,9 +714,9 @@ enum PlaceTheme {
         }
     }
 
-    /// The word stamped on the badge's ribbon under the place name, in the style of a
-    /// national-park patch ("YOSEMITE / NATIONAL PARK").
-    var label: LocalizedStringKey {
+    /// The category word arced along the top of the stamp. An English key that the card
+    /// localizes (via `String(localized:)`) before drawing it letter-by-letter on the arc.
+    var label: String {
         switch self {
         case .city: "CITY"
         case .mountain: "MOUNTAINS"
@@ -743,46 +727,6 @@ enum PlaceTheme {
         case .forest: "FOREST"
         case .snow: "ALPINE"
         case .historic: "OLD TOWN"
-        }
-    }
-
-    /// Muted, earthy ink colors — a screen-printed patch look rather than the bright
-    /// UI palette. Light values stay dark enough to read on the badge's pale paper.
-    var tint: Color {
-        switch self {
-        case .city: Color(light: 0x3C4A6B, dark: 0xA8B8DE)
-        case .mountain: Color(light: 0x2F5D4A, dark: 0x86C4A6)
-        case .lake: Color(light: 0x1F4E6B, dark: 0x87BFDD)
-        case .coast: Color(light: 0x15646B, dark: 0x79C9CE)
-        case .island: Color(light: 0x8A5A1F, dark: 0xE0B372)
-        case .desert: Color(light: 0x9A4A20, dark: 0xE8A277)
-        case .forest: Color(light: 0x3B5A22, dark: 0x9DC072)
-        case .snow: Color(light: 0x4A5A7A, dark: 0xAFC0E2)
-        case .historic: Color(light: 0x7A3A46, dark: 0xDDA0A9)
-        }
-    }
-
-    /// Warm paper the badge is printed on, so stickers read as pressed card stock
-    /// instead of app surface.
-    var paper: Color {
-        switch self {
-        case .snow, .lake, .city: Color(light: 0xF4F6FA, dark: 0x1B2029)
-        case .island, .desert, .historic: Color(light: 0xFAF3E8, dark: 0x241C18)
-        case .mountain, .forest, .coast: Color(light: 0xF3F6EF, dark: 0x18201C)
-        }
-    }
-
-    var outline: PlaceStickerShape.Kind {
-        switch self {
-        case .city: .shield
-        case .historic: .shield
-        case .mountain: .arrowhead
-        case .desert: .arrowhead
-        case .forest: .arch
-        case .lake: .arch
-        case .coast: .circle
-        case .island: .circle
-        case .snow: .hexagon
         }
     }
 }
@@ -838,8 +782,9 @@ enum PlaceLandmark: CaseIterable {
         }
     }
 
-    /// The landmark's own name, stamped on the ribbon in place of the theme word.
-    var label: LocalizedStringKey {
+    /// The landmark's own name, arced along the top of the stamp in place of the theme
+    /// word. An English key the card localizes before drawing it letter-by-letter.
+    var label: String {
         switch self {
         case .liberty: "LIBERTY"
         case .goldenGate: "GOLDEN GATE"
@@ -849,174 +794,6 @@ enum PlaceLandmark: CaseIterable {
         case .diamondHead: "DIAMOND HEAD"
         case .tokyoTower: "TOKYO TOWER"
         }
-    }
-
-    /// One ink per landmark, borrowed from the thing itself — Liberty's verdigris
-    /// copper, the bridge's international orange, Tokyo Tower's vermilion.
-    var tint: Color {
-        switch self {
-        case .liberty: Color(light: 0x2E6B5E, dark: 0x86CBBA)
-        case .goldenGate: Color(light: 0xB1441E, dark: 0xF0906B)
-        case .willisTower: Color(light: 0x2C4B7C, dark: 0x92B4E8)
-        case .lifeguardStand: Color(light: 0xA83A5E, dark: 0xEE94B2)
-        case .spaceNeedle: Color(light: 0x24583A, dark: 0x7CC194)
-        case .diamondHead: Color(light: 0x0E6E76, dark: 0x6FCBD5)
-        case .tokyoTower: Color(light: 0xA02A3A, dark: 0xEE8B98)
-        }
-    }
-
-    var paper: Color {
-        switch self {
-        case .liberty, .willisTower: Color(light: 0xF4F6FA, dark: 0x1B2029)
-        case .goldenGate, .lifeguardStand, .diamondHead, .tokyoTower: Color(light: 0xFAF3E8, dark: 0x241C18)
-        case .spaceNeedle: Color(light: 0xF3F6EF, dark: 0x18201C)
-        }
-    }
-
-    var outline: PlaceStickerShape.Kind {
-        switch self {
-        case .liberty: .shield
-        case .goldenGate: .arch
-        case .willisTower: .shield
-        case .lifeguardStand: .circle
-        case .spaceNeedle: .hexagon
-        case .diamondHead: .arrowhead
-        case .tokyoTower: .arch
-        }
-    }
-}
-
-/// The die-cut silhouettes the badges are cut from — the shapes national-park patches
-/// and trailhead signs actually use, rather than plain rounded rectangles.
-struct PlaceStickerShape: Shape, InsettableShape {
-    enum Kind {
-        case arch, shield, arrowhead, circle, hexagon
-
-        /// Padding that keeps the badge's contents clear of the silhouette's points and
-        /// curves — a shield loses its bottom corners, an arch loses its top ones.
-        var contentInsets: EdgeInsets {
-            switch self {
-            case .arch: EdgeInsets(top: 30, leading: 16, bottom: 16, trailing: 16)
-            case .shield: EdgeInsets(top: 14, leading: 16, bottom: 32, trailing: 16)
-            case .arrowhead: EdgeInsets(top: 15, leading: 17, bottom: 40, trailing: 17)
-            case .circle: EdgeInsets(top: 26, leading: 24, bottom: 30, trailing: 24)
-            case .hexagon: EdgeInsets(top: 34, leading: 22, bottom: 30, trailing: 22)
-            }
-        }
-
-        /// How wide the ribbon may be. The contents are clipped to the die cut, and the
-        /// ribbon sits low, where a tapering silhouette is far narrower than the badge —
-        /// so a long label ("DIAMOND HEAD") scales down instead of running off the point.
-        var ribbonWidth: CGFloat {
-            switch self {
-            case .arch: 120
-            case .shield: 104
-            case .arrowhead: 84
-            case .circle: 106
-            case .hexagon: 96
-            }
-        }
-    }
-
-    var kind: Kind
-    var insetAmount: CGFloat = 0
-
-    func inset(by amount: CGFloat) -> Self {
-        var copy = self
-        copy.insetAmount += amount
-        return copy
-    }
-
-    func path(in rect: CGRect) -> Path {
-        let r = rect.insetBy(dx: insetAmount, dy: insetAmount)
-        let w = r.width, h = r.height
-        var path = Path()
-
-        switch kind {
-        case .circle:
-            // A true circle, centered in whatever rect it is handed.
-            let side = min(w, h)
-            path.addEllipse(in: CGRect(x: r.midX - side / 2, y: r.midY - side / 2,
-                                       width: side, height: side))
-
-        case .hexagon:
-            // Pointy-top hexagon — the classic trail-marker badge.
-            for corner in 0..<6 {
-                let angle = Double(corner) * .pi / 3
-                let point = CGPoint(x: r.midX + w / 2 * sin(angle),
-                                    y: r.midY - h / 2 * cos(angle))
-                if corner == 0 { path.move(to: point) } else { path.addLine(to: point) }
-            }
-            path.closeSubpath()
-
-        case .arch:
-            // Domed top with rounded feet: a park entrance sign.
-            let foot = w * 0.16
-            path.move(to: CGPoint(x: r.minX, y: r.minY + w / 2))
-            path.addArc(center: CGPoint(x: r.midX, y: r.minY + w / 2), radius: w / 2,
-                        startAngle: .degrees(180), endAngle: .degrees(0), clockwise: false)
-            path.addLine(to: CGPoint(x: r.maxX, y: r.maxY - foot))
-            path.addQuadCurve(to: CGPoint(x: r.maxX - foot, y: r.maxY),
-                              control: CGPoint(x: r.maxX, y: r.maxY))
-            path.addLine(to: CGPoint(x: r.minX + foot, y: r.maxY))
-            path.addQuadCurve(to: CGPoint(x: r.minX, y: r.maxY - foot),
-                              control: CGPoint(x: r.minX, y: r.maxY))
-            path.closeSubpath()
-
-        case .shield:
-            // Flat top, straight flanks, a swept point at the bottom.
-            let corner = w * 0.16
-            path.move(to: CGPoint(x: r.minX, y: r.minY + corner))
-            path.addQuadCurve(to: CGPoint(x: r.minX + corner, y: r.minY),
-                              control: CGPoint(x: r.minX, y: r.minY))
-            path.addLine(to: CGPoint(x: r.maxX - corner, y: r.minY))
-            path.addQuadCurve(to: CGPoint(x: r.maxX, y: r.minY + corner),
-                              control: CGPoint(x: r.maxX, y: r.minY))
-            path.addLine(to: CGPoint(x: r.maxX, y: r.minY + h * 0.62))
-            path.addCurve(to: CGPoint(x: r.midX, y: r.maxY),
-                          control1: CGPoint(x: r.maxX, y: r.minY + h * 0.86),
-                          control2: CGPoint(x: r.midX + w * 0.22, y: r.maxY))
-            path.addCurve(to: CGPoint(x: r.minX, y: r.minY + h * 0.62),
-                          control1: CGPoint(x: r.midX - w * 0.22, y: r.maxY),
-                          control2: CGPoint(x: r.minX, y: r.minY + h * 0.86))
-            path.closeSubpath()
-
-        case .arrowhead:
-            // The National Park Service arrowhead: broad rounded shoulders tapering to
-            // a soft point.
-            let corner = w * 0.13
-            path.move(to: CGPoint(x: r.minX, y: r.minY + corner))
-            path.addQuadCurve(to: CGPoint(x: r.minX + corner, y: r.minY),
-                              control: CGPoint(x: r.minX, y: r.minY))
-            path.addLine(to: CGPoint(x: r.maxX - corner, y: r.minY))
-            path.addQuadCurve(to: CGPoint(x: r.maxX, y: r.minY + corner),
-                              control: CGPoint(x: r.maxX, y: r.minY))
-            path.addLine(to: CGPoint(x: r.maxX, y: r.minY + h * 0.42))
-            path.addCurve(to: CGPoint(x: r.midX + w * 0.02, y: r.maxY),
-                          control1: CGPoint(x: r.maxX - w * 0.02, y: r.minY + h * 0.74),
-                          control2: CGPoint(x: r.midX + w * 0.11, y: r.maxY - h * 0.01))
-            path.addCurve(to: CGPoint(x: r.minX, y: r.minY + h * 0.42),
-                          control1: CGPoint(x: r.midX - w * 0.11, y: r.maxY - h * 0.01),
-                          control2: CGPoint(x: r.minX + w * 0.02, y: r.minY + h * 0.74))
-            path.closeSubpath()
-        }
-        return path
-    }
-}
-
-/// A short banner with notched ends — the ribbon a park patch stamps its subtitle on.
-struct PlaceRibbonShape: Shape {
-    func path(in rect: CGRect) -> Path {
-        let notch = rect.height * 0.42
-        var path = Path()
-        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX - notch, y: rect.midY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
-        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
-        path.addLine(to: CGPoint(x: rect.minX + notch, y: rect.midY))
-        path.closeSubpath()
-        return path
     }
 }
 
@@ -1030,12 +807,23 @@ struct PlaceSceneView: View {
     let tint: Color
     /// The badge's paper, used for cut-out details (windows, snowcaps, sun bands).
     let paper: Color
+    /// A per-place seed so two places on the same generic theme (two cities) don't draw
+    /// an identical scene — the eki-stamp spirit is that every stamp is its own.
+    var seed: UInt64 = 0
 
     var body: some View {
         Canvas { context, size in
             let far = tint.opacity(0.30)
             let mid = tint.opacity(0.58)
             let near = tint
+
+            // Deterministic pseudo-random in 0..<1, seeded per place. Drawn on demand so
+            // a scene that ignores the seed renders identically to before.
+            var rngState = seed &* 2862933555777941757 &+ 3037000493
+            func rand() -> CGFloat {
+                rngState = rngState &* 2862933555777941757 &+ 3037000493
+                return CGFloat((rngState >> 40) & 0xFFFF) / CGFloat(0xFFFF)
+            }
 
             func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
                 CGPoint(x: x * size.width, y: y * size.height)
@@ -1284,13 +1072,13 @@ struct PlaceSceneView: View {
                 bar(0, 0.90, 1, 0.06, near)
 
             case .forest:
-                disc(0.50, 0.30, 0.15, far)
-                pine(0.16, 0.86, 0.52, mid)
-                pine(0.84, 0.86, 0.52, mid)
-                pine(0.34, 0.96, 0.72, near)
-                pine(0.66, 0.96, 0.64, near)
-                pine(0.50, 1.0, 0.86, near)
-                bar(0, 0.96, 1, 0.04, near)
+                // Three clean, well-spaced firs — a tall centre flanked by two shorter —
+                // instead of a thicket of overlapping trees. Heights seeded per place.
+                disc(0.50, 0.28, 0.13, far)
+                pine(0.24, 0.88, 0.44 + rand() * 0.10, mid)
+                pine(0.76, 0.88, 0.44 + rand() * 0.10, mid)
+                pine(0.50, 0.92, 0.66 + rand() * 0.10, near)
+                bar(0.08, 0.88, 0.84, 0.045, near)
 
             case .lake:
                 disc(0.72, 0.22, 0.10, far)
@@ -1343,20 +1131,25 @@ struct PlaceSceneView: View {
                 bar(0, 0.94, 1, 0.06, near)
 
             case .city:
-                disc(0.50, 0.30, 0.16, far)
-                bar(0.04, 0.46, 0.20, 0.50, mid)
-                bar(0.78, 0.52, 0.20, 0.44, mid)
-                bar(0.28, 0.24, 0.20, 0.72, near)
-                bar(0.52, 0.36, 0.22, 0.60, near)
-                bar(0.355, 0.14, 0.03, 0.12, near) // Spire.
-                // Punched windows.
-                for row in 0..<4 {
+                // A centred cluster of towers — kept away from the edges so nothing
+                // clips into "wings" against the round emblem — with heights, spire, sun
+                // and window rows seeded per place so a rail of cities still reads varied.
+                disc(0.38 + rand() * 0.26, 0.30, 0.13, far)
+                bar(0.18, 0.54 + rand() * 0.06, 0.15, 0.40, mid)   // Background pair, moved
+                bar(0.67, 0.56 + rand() * 0.06, 0.15, 0.38, mid)   // inward from the rim.
+                let leftHeight = 0.52 + rand() * 0.16   // Tallest tower on the left.
+                let rightHeight = 0.42 + rand() * 0.18
+                bar(0.34, 0.92 - leftHeight, 0.16, leftHeight, near)
+                bar(0.51, 0.92 - rightHeight, 0.16, rightHeight, near)
+                bar(0.408, 0.92 - leftHeight - 0.09, 0.024, 0.09, near) // Spire.
+                // Punched windows, three rows anchored under each tower's roof.
+                for row in 0..<3 {
                     for column in 0..<2 {
-                        bar(0.31 + CGFloat(column) * 0.08, 0.34 + CGFloat(row) * 0.14, 0.05, 0.06, paper)
-                        bar(0.56 + CGFloat(column) * 0.08, 0.46 + CGFloat(row) * 0.14, 0.05, 0.06, paper)
+                        bar(0.36 + CGFloat(column) * 0.065, (0.92 - leftHeight) + 0.05 + CGFloat(row) * 0.11, 0.04, 0.045, paper)
+                        bar(0.535 + CGFloat(column) * 0.065, (0.92 - rightHeight) + 0.05 + CGFloat(row) * 0.11, 0.04, 0.045, paper)
                     }
                 }
-                bar(0, 0.94, 1, 0.06, near)
+                bar(0.12, 0.90, 0.76, 0.05, near)
 
             case .historic:
                 disc(0.50, 0.32, 0.14, far)
@@ -1374,55 +1167,125 @@ struct PlaceSceneView: View {
     }
 }
 
-/// A die-cut travel sticker for a visited place: the place name, a themed glyph,
-/// and a region code inside a themed silhouette, tilted like it was stuck onto a
-/// suitcase. The theme generalizes the location (city / lake / mountain / …) so
-/// every place gets artwork without needing per-destination illustrations.
+/// Text set letter-by-letter around a circular arc, the way a rubber stamp curves its
+/// wording along the ring. `atBottom` flips the glyphs so the lower arc reads upright,
+/// left-to-right. A string too long for `maxAngle` shrinks to fit rather than overrun.
+struct StampArcText: View {
+    let text: String
+    let color: Color
+    var fontSize: CGFloat = 10
+    var weight: Font.Weight = .heavy
+    /// Where the baseline sits, as a fraction of the circle's radius.
+    var radiusRatio: CGFloat = 0.82
+    var atBottom: Bool = false
+    /// The widest arc the text may occupy before it starts shrinking (~200°).
+    var maxAngle: CGFloat = .pi * 1.12
+    var letterSpacing: CGFloat = 2.2
+
+    var body: some View {
+        Canvas { context, size in
+            let chars = Array(text)
+            guard !chars.isEmpty else { return }
+            let center = CGPoint(x: size.width / 2, y: size.height / 2)
+            let radius = min(size.width, size.height) / 2 * radiusRatio
+            guard radius > 0 else { return }
+
+            // Resolve and measure the glyphs at a given point size, returning each one's
+            // angular width (its advance divided by the radius).
+            func layout(_ pt: CGFloat) -> (glyphs: [GraphicsContext.ResolvedText], angles: [CGFloat], total: CGFloat) {
+                let glyphs = chars.map {
+                    context.resolve(Text(verbatim: String($0))
+                        .font(.system(size: pt, weight: weight))
+                        .foregroundStyle(color))
+                }
+                let angles = glyphs.map { ($0.measure(in: CGSize(width: 900, height: 900)).width + letterSpacing) / radius }
+                return (glyphs, angles, angles.reduce(0, +))
+            }
+
+            var l = layout(fontSize)
+            if l.total > maxAngle { l = layout(fontSize * maxAngle / l.total) }
+
+            let centerAngle: CGFloat = atBottom ? .pi / 2 : -.pi / 2
+            var cursor = -l.total / 2
+            for i in chars.indices {
+                let mid = cursor + l.angles[i] / 2
+                cursor += l.angles[i]
+                let theta = atBottom ? centerAngle - mid : centerAngle + mid
+                context.drawLayer { layer in
+                    layer.translateBy(x: center.x, y: center.y)
+                    layer.rotate(by: .radians(atBottom ? theta - .pi / 2 : theta + .pi / 2))
+                    layer.translateBy(x: 0, y: atBottom ? radius : -radius)
+                    layer.draw(l.glyphs[i], at: .zero, anchor: .center)
+                }
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+/// A round travel stamp for a visited place, in the spirit of a Japanese eki (station)
+/// stamp: a double-ring frame with the category curved along the top and the place name
+/// along the bottom, a single ink per place, and an illustrated emblem in the middle.
 struct VisitedPlaceCard: View {
     let place: VisitedPlace
+    @Environment(\.locale) private var locale
+
+    /// A small, restrained palette of stamp inks. Each place picks one by its seed, so a
+    /// rail shows variety without a different hue shouting on every badge.
+    private static let palette: [Color] = [
+        Color(light: 0x27356B, dark: 0x94A2D8), // indigo
+        Color(light: 0x2A5F45, dark: 0x83C0A1), // pine
+        Color(light: 0x9E3324, dark: 0xE29182), // oxblood
+        Color(light: 0x1C6E74, dark: 0x72C8CE), // teal
+        Color(light: 0x6E3B72, dark: 0xC79ECB), // plum
+        Color(light: 0x9A5A22, dark: 0xE0A874), // sienna
+        Color(light: 0x37506E, dark: 0xA2B4D2), // slate
+    ]
 
     private var theme: PlaceTheme { PlaceTheme.inferred(from: place.name) }
 
     /// Famous places get their own landmark artwork; everywhere else uses its theme.
     private var landmark: PlaceLandmark? { PlaceLandmark.matching(place.name) }
 
-    private var tint: Color { landmark?.tint ?? theme.tint }
-    private var paper: Color { landmark?.paper ?? theme.paper }
-    private var outline: PlaceStickerShape.Kind { landmark?.outline ?? theme.outline }
-    private var ribbonLabel: LocalizedStringKey { landmark?.label ?? theme.label }
+    /// The one ink this stamp is printed in, and the paper it sits on.
+    private var ink: Color { Self.palette[Int(sceneSeed % UInt64(Self.palette.count))] }
+    private var paper: Color { Color(light: 0xFCFAF3, dark: 0x181510) }
 
-    /// The place name without its region suffix — what goes on the sticker itself.
+    /// The category word curved along the top. Localized through `Bundle.main` — which
+    /// the app redirects to the chosen language — before it is drawn letter-by-letter
+    /// (reading `locale` re-localizes it when the in-app language changes).
+    private var categoryText: String {
+        _ = locale
+        let key = landmark?.label ?? theme.label
+        return Bundle.main.localizedString(forKey: key, value: key, table: nil).uppercased()
+    }
+
+    /// The place name without its region suffix — curved along the bottom.
     private var shortName: String {
         place.name.split(separator: ",").first.map { $0.trimmingCharacters(in: .whitespaces) } ?? place.name
     }
-
-    /// The region suffix reduced to a short code: an ISO country code when the name
-    /// is a country ("Japan" → JP), otherwise initials ("California" → CA).
-    private var regionCode: String? { PlaceRegion.displayCode(for: place.name) }
 
     private var monthYear: String? {
         place.date?.formatted(.dateTime.month(.wide).year())
     }
 
-    /// A stable per-place tilt (±5°) so the rail looks hand-stuck. Uses a seeded
-    /// hash rather than `hashValue`, which is randomized on every launch.
-    private var tilt: Double {
+    /// A stable per-place seed from the place id (djb2), used for the ink, the tilt, and
+    /// to vary the generic scene. A seeded hash rather than `hashValue`, which is
+    /// randomized on every launch.
+    private var sceneSeed: UInt64 {
         var seed: UInt64 = 5381
         for scalar in place.id.unicodeScalars { seed = seed &* 33 &+ UInt64(scalar.value) }
-        return Double(seed % 11) - 5
+        return seed
     }
 
-    /// The year stamped on the ribbon, park-patch style ("EST." is reserved for the
-    /// park's founding, so this is just the year the user went).
-    private var year: String? {
-        place.date.map { $0.formatted(.dateTime.year()) }
-    }
+    /// A stable per-place tilt (±5°) so the rail looks hand-stuck.
+    private var tilt: Double { Double(sceneSeed % 11) - 5 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             badge
                 .rotationEffect(.degrees(tilt))
-                .frame(width: 168, height: 192)
+                .frame(width: 168, height: 176)
 
             Text(verbatim: place.name)
                 .font(.app(.subheadline, .semibold))
@@ -1435,60 +1298,33 @@ struct VisitedPlaceCard: View {
         .frame(width: 168, alignment: .leading)
     }
 
-    /// The patch: a die-cut paper silhouette, a heavy ink border with a hairline keyline
-    /// inside it, the place name over an illustrated scene, and a ribbon along the bottom.
+    /// The stamp: paper disc, double ring, curved wording, a centred emblem, and two
+    /// small diamonds where the top and bottom arcs meet.
     private var badge: some View {
-        let shape = PlaceStickerShape(kind: outline)
-        return ZStack {
-            shape
+        ZStack {
+            Circle()
                 .fill(paper)
-                .overlay { shape.inset(by: 3).strokeBorder(tint, lineWidth: 3) }
-                .overlay { shape.inset(by: 9).strokeBorder(tint.opacity(0.45), lineWidth: 1.2) }
-                .shadow(color: Theme.elevatedShadow, radius: 7, x: 0, y: 4)
+                .overlay(Circle().strokeBorder(ink, lineWidth: 2.5))
+                .overlay(Circle().inset(by: 25).strokeBorder(ink.opacity(0.9), lineWidth: 1))
+                .shadow(color: Theme.elevatedShadow, radius: 6, x: 0, y: 4)
 
-            VStack(spacing: 4) {
-                // Small caps across the top, the way a patch prints its region and year.
-                Text(verbatim: [regionCode, year].compactMap { $0 }.joined(separator: " · "))
-                    .font(.app(size: 7, weight: .bold))
-                    .tracking(1.6)
-                    .lineLimit(1)
-                    .foregroundStyle(tint.opacity(0.75))
+            PlaceSceneView(theme: theme, landmark: landmark, tint: ink, paper: paper, seed: sceneSeed)
+                .frame(width: 82, height: 82)
+                .clipShape(Circle())
 
-                Text(verbatim: shortName)
-                    .font(.app(size: 15, weight: .black))
-                    .textCase(.uppercase)
-                    .tracking(0.6)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.55)
-                    .foregroundStyle(tint)
+            StampArcText(text: categoryText, color: ink, fontSize: 9.5, atBottom: false)
+            StampArcText(text: shortName.uppercased(), color: ink, fontSize: 10.5, atBottom: true)
 
-                // The ribbon rides on the scene's lower edge rather than the badge's, so
-                // on a shield or arrowhead it stays where the silhouette is still wide.
-                ZStack(alignment: .bottom) {
-                    PlaceSceneView(theme: theme, landmark: landmark, tint: tint, paper: paper)
-                        .frame(maxWidth: .infinity, minHeight: 54, maxHeight: .infinity)
-                    ribbon.offset(y: 7)
-                }
+            // Small diamonds at 3 and 9 o'clock separating the two runs of text.
+            ForEach([1.0, -1.0], id: \.self) { side in
+                Rectangle()
+                    .fill(ink)
+                    .frame(width: 4, height: 4)
+                    .rotationEffect(.degrees(45))
+                    .offset(x: side * 61.5)
             }
-            .padding(outline.contentInsets)
-            // Scenery is drawn to the edges of its box, so it is trimmed to the die cut.
-            .clipShape(shape.inset(by: 4))
         }
-        .frame(width: 152, height: 176)
-    }
-
-    private var ribbon: some View {
-        Text(ribbonLabel)
-            .font(.app(size: 8, weight: .bold))
-            .tracking(1.4)
-            .lineLimit(1)
-            .minimumScaleFactor(0.6)
-            .foregroundStyle(paper)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 3)
-            .frame(maxWidth: outline.ribbonWidth)
-            .background { PlaceRibbonShape().fill(tint) }
+        .frame(width: 150, height: 150)
     }
 }
 

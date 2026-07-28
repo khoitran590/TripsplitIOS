@@ -46,6 +46,9 @@ struct RecScreen: View {
     @State private var pendingAction: ExploreGatedAction?
     @State private var showSignIn = false
 
+    /// Built from the profile's stored array. Every read allocates a fresh `Set`, so
+    /// call sites that test it once per card bind it to a local first — reading it
+    /// straight from inside a `ForEach` or `filter` body rebuilt the set per element.
     private var savedIDs: Set<String> { Set(store.userProfile.savedDestinationIDs) }
 
     private var searchQuery: String { searchText.trimmingCharacters(in: .whitespaces) }
@@ -74,8 +77,11 @@ struct RecScreen: View {
         }
     }
 
-    private var adventures: [Destination] { Destination.popularFirst.filter(\.isFeatured) }
-    private var saved: [Destination] { Destination.popularFirst.filter { savedIDs.contains($0.id) } }
+    private var adventures: [Destination] { Destination.featured }
+    private var saved: [Destination] {
+        let ids = savedIDs
+        return Destination.popularFirst.filter { ids.contains($0.id) }
+    }
     private var hasContinueContent: Bool { !saved.isEmpty || !store.itineraryTrips.isEmpty }
 
     private var isFiltering: Bool {
@@ -176,14 +182,14 @@ struct RecScreen: View {
         }
     }
 
+    /// Explore stays mounted while other tabs are on top. `ContentView` already hides
+    /// inactive tabs behind `opacity`/`allowsHitTesting`, so swapping this body out for
+    /// a placeholder only destroyed the `ScrollView` — which meant returning from Map or
+    /// Trips snapped the user back to the top of Explore and re-decoded every visible
+    /// photo. `isActive` now gates the one thing that genuinely depends on visibility:
+    /// presenting the walkthrough.
     var body: some View {
-        Group {
-            if isActive {
-                exploreContent
-            } else {
-                Color.clear.ignoresSafeArea()
-            }
-        }
+        exploreContent
     }
 
     private var exploreContent: some View {
@@ -198,22 +204,25 @@ struct RecScreen: View {
                     filterBar
                     activeFilterTokens
 
+                    // Each of these derived collections is computed once here and handed
+                    // down. Read as properties from inside the section builders, they
+                    // were re-derived several times per render (and per keystroke).
                     if isSearching {
-                        searchResultsList
+                        searchResultsList(searchResults)
                     } else {
                         if hasContinueContent { continueSection }
 
                         if isFiltering {
-                            matchingTripsSection
+                            matchingTripsSection(filteredDestinations)
                         } else {
                             featuredSection
                             collectionSection(
                                 title: "Food cities",
                                 subtitle: "Trips worth planning around the next meal.",
-                                destinations: Destination.popularFirst.filter(ExploreStyle.foodie.matches)
+                                destinations: Destination.foodCities
                             )
                             buildFromScratchCard
-                            destinationDirectory
+                            destinationDirectory(continentSections)
                         }
                     }
                 }
@@ -331,10 +340,12 @@ struct RecScreen: View {
                 navigationPath.append(tripID)
             }
             // The walkthrough is the last step of the first-run sequence, and this is
-            // the tab that owns it. `task(id:)` rather than `onChange` so a step queued
-            // while Explore was off screen still lands when it comes back.
-            .task(id: onboarding.visibleStep) {
-                if onboarding.visibleStep == .exploreTour { showExploreOnboarding = true }
+            // the tab that owns it. Keying on the step *and* `isActive` keeps the old
+            // behaviour now that Explore stays mounted: a step queued while another tab
+            // is on top waits, then lands when Explore comes back — rather than throwing
+            // a full-screen cover over whatever the user is actually looking at.
+            .task(id: isActive ? onboarding.visibleStep : nil) {
+                if isActive, onboarding.visibleStep == .exploreTour { showExploreOnboarding = true }
             }
             .onChange(of: navigationPath.count, initial: true) { _, depth in
                 onNavigationDepthChange(depth > 0)
@@ -435,7 +446,8 @@ struct RecScreen: View {
     }
 
     private var featuredSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        let savedSet = savedIDs
+        return VStack(alignment: .leading, spacing: 14) {
             sectionTitle("Editor picks", subtitle: "Complete guides with stops, food picks, and a realistic budget.")
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 14) {
@@ -443,7 +455,7 @@ struct RecScreen: View {
                         NavigationLink(value: destination.id) {
                             AdventureCard(
                                 destination: destination,
-                                isSaved: savedIDs.contains(destination.id),
+                                isSaved: savedSet.contains(destination.id),
                                 onToggleSave: { requireAccount(.save(destinationID: destination.id)) },
                                 showsCTA: true
                             )
@@ -465,7 +477,8 @@ struct RecScreen: View {
         subtitle: LocalizedStringKey,
         destinations: [Destination]
     ) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let savedSet = savedIDs
+        return VStack(alignment: .leading, spacing: 12) {
             sectionTitle(title, subtitle: subtitle)
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 14) {
@@ -473,7 +486,7 @@ struct RecScreen: View {
                         NavigationLink(value: destination.id) {
                             CountryTripCard(
                                 destination: destination,
-                                isSaved: savedIDs.contains(destination.id),
+                                isSaved: savedSet.contains(destination.id),
                                 onToggleSave: { requireAccount(.save(destinationID: destination.id)) }
                             )
                         }
@@ -515,11 +528,11 @@ struct RecScreen: View {
         .buttonStyle(.plain)
     }
 
-    private var matchingTripsSection: some View {
+    private func matchingTripsSection(_ destinations: [Destination]) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             sectionTitle("Matching trips", subtitle: "Open a result to preview the full guide.")
 
-            if filteredDestinations.isEmpty {
+            if destinations.isEmpty {
                 // Name the actual problem: with several facets on, "broaden your
                 // budget" was frequently the wrong advice.
                 ContentUnavailableView {
@@ -537,15 +550,17 @@ struct RecScreen: View {
                 .padding(.vertical, 24)
                 .readableSurface(cornerRadius: 20)
             } else {
-                destinationGrid(filteredDestinations)
+                destinationGrid(destinations)
             }
         }
     }
 
-    private var destinationDirectory: some View {
+    private func destinationDirectory(
+        _ sections: [(continent: String, destinations: [Destination])]
+    ) -> some View {
         VStack(alignment: .leading, spacing: 22) {
             sectionTitle("Browse by destination", subtitle: "Every curated guide, grouped by region.")
-            ForEach(continentSections, id: \.continent) { section in
+            ForEach(sections, id: \.continent) { section in
                 VStack(alignment: .leading, spacing: 12) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         sectionHeader(LocalizedStringKey(section.continent))
@@ -566,7 +581,8 @@ struct RecScreen: View {
     /// The shared two-column result grid, used for both filtered results and the
     /// region directory so the two never drift apart visually.
     private func destinationGrid(_ destinations: [Destination]) -> some View {
-        LazyVGrid(
+        let savedSet = savedIDs
+        return LazyVGrid(
             columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible())],
             spacing: 12
         ) {
@@ -580,7 +596,7 @@ struct RecScreen: View {
                 // grid became impossible.
                 .overlay(alignment: .topTrailing) {
                     HeartButton(
-                        isSaved: savedIDs.contains(destination.id),
+                        isSaved: savedSet.contains(destination.id),
                         action: { requireAccount(.save(destinationID: destination.id)) }
                     )
                     .padding(16)
@@ -717,8 +733,8 @@ struct RecScreen: View {
     }
 
     @ViewBuilder
-    private var searchResultsList: some View {
-        if searchResults.isEmpty {
+    private func searchResultsList(_ results: [Destination]) -> some View {
+        if results.isEmpty {
             // Searching now runs inside the active filters, so an empty result with
             // filters on needs to say so — otherwise the query looks like the culprit.
             ContentUnavailableView {
@@ -742,10 +758,10 @@ struct RecScreen: View {
             VStack(alignment: .leading, spacing: 12) {
                 // Two explicit keys instead of an inline "s" — the old form baked
                 // English plural rules into the localization key.
-                Text(searchResults.count == 1 ? "1 result" : "\(searchResults.count) results")
+                Text(results.count == 1 ? "1 result" : "\(results.count) results")
                     .font(.app(.subheadline, .semibold))
                     .foregroundStyle(.secondary)
-                ForEach(searchResults) { destination in
+                ForEach(results) { destination in
                     NavigationLink(value: destination.id) {
                         DestinationRow(
                             destination: destination,
@@ -821,6 +837,12 @@ enum ExploreStyle: String, CaseIterable, Identifiable {
             destination.tags.contains("Beach") || destination.tags.contains("Coastal")
         }
     }
+}
+
+extension Destination {
+    /// The curated "Food cities" rail. Derived from `ExploreStyle.foodie` so the rail
+    /// and the chip can't disagree, and stored so it isn't re-filtered every render.
+    static let foodCities: [Destination] = popularFirst.filter(ExploreStyle.foodie.matches)
 }
 
 /// The chips above Explore's results. Each is a *shortcut into the same state the
@@ -1082,19 +1104,110 @@ private struct FlowingContinentPicker: View {
     }
 }
 
+/// Downsampled copies of the bundled destination photos.
+///
+/// The source assets are roughly 1400×746 JPEGs — about 4 MB each once decoded — and
+/// the region directory can have a dozen of them on screen at once. Handing
+/// `UIImage(named:)` straight to `Image` kept a full-resolution bitmap alive per
+/// visible card, including 56pt search rows and 140pt grid tiles. Every card renders
+/// through here instead, so what stays resident is sized for the frame it is drawn in.
+final class DestinationImageCache {
+    static let shared = DestinationImageCache()
+
+    private let cache = NSCache<NSString, UIImage>()
+
+    private init() {
+        cache.countLimit = 60
+        cache.totalCostLimit = 32 * 1_024 * 1_024
+    }
+
+    /// A bucketed thumbnail request. Sizes round up to 64pt steps so cards of
+    /// similar-but-unequal widths share one bitmap, and so a resize of a point or two
+    /// neither invalidates the cache nor restarts the load.
+    struct Request: Hashable {
+        let name: String
+        /// Square box, in points, that the thumbnail has to cover. Square because
+        /// `scaledToFill` needs coverage on both axes; the slight overshoot on wide
+        /// frames buys far fewer distinct cache entries.
+        let edge: CGFloat
+        let scale: CGFloat
+
+        init(name: String, size: CGSize, scale: CGFloat) {
+            self.name = name
+            self.edge = max(64, (max(size.width, size.height) / 64).rounded(.up) * 64)
+            self.scale = scale
+        }
+
+        var cacheKey: NSString { "\(name)@\(Int(edge))@\(scale)x" as NSString }
+    }
+
+    func cached(_ request: Request) -> UIImage? {
+        cache.object(forKey: request.cacheKey)
+    }
+
+    func thumbnail(_ request: Request) async -> UIImage? {
+        if let hit = cached(request) { return hit }
+        let image = await Task.detached(priority: .userInitiated) {
+            Self.downsampled(request)
+        }.value
+        guard let image else { return nil }
+        cache.setObject(image, forKey: request.cacheKey, cost: Self.cost(of: image))
+        return image
+    }
+
+    /// Draws the bundled asset once at the size it will actually be shown. The
+    /// full-resolution decode happens here, off the main thread, and is released when
+    /// the draw finishes — only the small copy is retained.
+    ///
+    /// `nonisolated` matters: the type picks up main-actor isolation by default, which
+    /// would send the detached task's work straight back to the main thread and undo
+    /// the point of doing it off it. Mirrors `ImageCache.decodedImage` in
+    /// `ReceiptService.swift`.
+    nonisolated private static func downsampled(_ request: Request) -> UIImage? {
+        guard let source = UIImage(named: request.name) else { return nil }
+        let ratio = max(request.edge / source.size.width, request.edge / source.size.height)
+        // Nothing to gain from rendering a copy that's the same size or larger.
+        guard ratio < 1 else { return source }
+
+        let target = CGSize(width: source.size.width * ratio, height: source.size.height * ratio)
+        let format = UIGraphicsImageRendererFormat.preferred()
+        format.scale = request.scale
+        format.opaque = true
+        return UIGraphicsImageRenderer(size: target, format: format).image { _ in
+            source.draw(in: CGRect(origin: .zero, size: target))
+        }
+    }
+
+    nonisolated private static func cost(of image: UIImage) -> Int {
+        guard let cgImage = image.cgImage else { return 0 }
+        return cgImage.bytesPerRow * cgImage.height
+    }
+}
+
 /// A featured destination, rendered as a photo-style card.
 struct DestinationPhoto: View {
     let destination: Destination
     var symbolSize: CGFloat = 54
 
+    @Environment(\.displayScale) private var displayScale
+    @State private var size: CGSize = .zero
+    @State private var image: UIImage?
+
+    private var request: DestinationImageCache.Request? {
+        guard size.width > 0, size.height > 0 else { return nil }
+        return .init(name: destination.imageName, size: size, scale: displayScale)
+    }
+
     var body: some View {
         Color.clear
             .overlay {
-                if let image = UIImage(named: destination.imageName) {
+                if let image {
                     Image(uiImage: image)
                         .resizable()
                         .scaledToFill()
                 } else {
+                    // Also what a destination with no bundled asset falls back to, so
+                    // a future id without a photo still degrades gracefully.
                     ZStack {
                         LinearGradient(colors: destination.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
                         Image(systemName: destination.symbol)
@@ -1103,7 +1216,21 @@ struct DestinationPhoto: View {
                     }
                 }
             }
+            .animation(.easeOut(duration: 0.15), value: image == nil)
             .clipped()
+            // Measured rather than read from a GeometryReader so the view keeps its
+            // existing, layout-neutral shape at all seven call sites.
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
+            .task(id: request) {
+                guard let request else { return }
+                // A cache hit resolves within the same frame, so scrolling back over a
+                // card that has already been sized never flashes the placeholder.
+                if let hit = DestinationImageCache.shared.cached(request) {
+                    image = hit
+                } else {
+                    image = await DestinationImageCache.shared.thumbnail(request)
+                }
+            }
     }
 }
 

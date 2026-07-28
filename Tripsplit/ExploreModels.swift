@@ -676,19 +676,30 @@ extension Destination {
         "lisbon", "taipei", "vancouver", "rio-de-janeiro", "las-vegas", "cairo"
     ]
 
+    /// Rank by id, built once. The lookup used to be a linear `firstIndex(of:)`, which
+    /// made the sort below quadratic — and `popularFirst` was a *computed* property, so
+    /// Explore paid for that sort several times per render and on every keystroke.
+    private static let popularityRanks: [String: Int] = Dictionary(
+        uniqueKeysWithValues: popularityOrder.enumerated().map { ($0.element, $0.offset) }
+    )
+
     var popularityRank: Int {
-        Self.popularityOrder.firstIndex(of: id) ?? Self.popularityOrder.count
+        Self.popularityRanks[id] ?? Self.popularityOrder.count
     }
 
-    static var popularFirst: [Destination] {
-        all.enumerated()
-            .sorted {
-                let lhs = $0.element.popularityRank
-                let rhs = $1.element.popularityRank
-                return lhs == rhs ? $0.offset < $1.offset : lhs < rhs
-            }
-            .map(\.element)
-    }
+    /// Stored, not computed: the curated set never changes at runtime, so this is
+    /// sorted once for the lifetime of the process.
+    static let popularFirst: [Destination] = all.enumerated()
+        .sorted {
+            let lhs = $0.element.popularityRank
+            let rhs = $1.element.popularityRank
+            return lhs == rhs ? $0.offset < $1.offset : lhs < rhs
+        }
+        .map(\.element)
+
+    /// Editor picks, in discovery order. Derived purely from the curated data, so it
+    /// belongs here rather than being re-filtered on every Explore render.
+    static let featured: [Destination] = popularFirst.filter(\.isFeatured)
 }
 
 extension Destination {
