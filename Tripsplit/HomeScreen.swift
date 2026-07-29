@@ -53,7 +53,9 @@ struct HomeScreen: View {
             .background { AppBackground() }
             .navigationTitle("Your trips")
             .refreshable {
-                await store.loadFromCloud()
+                // A deliberate refresh must bypass the repository's short-lived launch
+                // cache or another trip member's recent edits remain invisible.
+                await store.loadFromCloud(forceRefresh: true)
                 await store.refreshRates()
             }
         }
@@ -152,42 +154,24 @@ struct HomeScreen: View {
             }
 
             if store.myTrips.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "suitcase")
-                        .font(.app(.largeTitle))
-                        .foregroundStyle(.tertiary)
-                    Text("No trips yet")
-                        .font(.app(.subheadline, .medium))
-                    Text("Start with a guide or create an empty trip when you already know where you're going.")
-                        .font(.app(.caption))
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                    Button {
-                        onBrowseIdeas()
-                    } label: {
-                        Label("Browse trip ideas", systemImage: "sparkles")
-                            .font(.app(.subheadline, .semibold))
-                            .foregroundStyle(Theme.onAccent)
-                            .padding(.horizontal, 18)
-                            .frame(minHeight: 44)
-                            .contentShape(.capsule)
+                if store.cloudLoadState == .loading && auth.isAuthenticated {
+                    VStack(spacing: 12) {
+                        ProgressView()
+                        Text("Loading your trips…")
+                            .font(.app(.subheadline, .medium))
+                        Text("Syncing the latest plans and expenses.")
+                            .font(.app(.caption))
+                            .foregroundStyle(.secondary)
                     }
-                    .buttonStyle(.plain)
-                    .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
-                    .padding(.top, 4)
-
-                    Button {
-                        if auth.isAuthenticated { showAddTrip = true } else { showSignInAlert = true }
-                    } label: {
-                        Label("Create empty trip", systemImage: "plus")
-                            .font(.app(.subheadline, .semibold))
-                            .frame(minHeight: 44)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 32)
+                    .glassEffect(.regular, in: .rect(cornerRadius: 20))
+                } else {
+                    if case .failed(let message) = store.cloudLoadState {
+                        cloudLoadFailure(message)
                     }
-                    .buttonStyle(.plain)
+                    emptyTripsCard
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 28)
-                .glassEffect(.regular, in: .rect(cornerRadius: 20))
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 14) {
@@ -250,6 +234,68 @@ struct HomeScreen: View {
                 .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 16))
             }
         }
+    }
+
+    private var emptyTripsCard: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "suitcase")
+                .font(.app(.largeTitle))
+                .foregroundStyle(.tertiary)
+            Text("No trips yet")
+                .font(.app(.subheadline, .medium))
+            Text("Start with a guide or create an empty trip when you already know where you're going.")
+                .font(.app(.caption))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button {
+                onBrowseIdeas()
+            } label: {
+                Label("Browse trip ideas", systemImage: "sparkles")
+                    .font(.app(.subheadline, .semibold))
+                    .foregroundStyle(Theme.onAccent)
+                    .padding(.horizontal, 18)
+                    .frame(minHeight: 44)
+                    .contentShape(.capsule)
+            }
+            .buttonStyle(.plain)
+            .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+            .padding(.top, 4)
+
+            Button {
+                if auth.isAuthenticated { showAddTrip = true } else { showSignInAlert = true }
+            } label: {
+                Label("Create empty trip", systemImage: "plus")
+                    .font(.app(.subheadline, .semibold))
+                    .frame(minHeight: 44)
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 28)
+        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+    }
+
+    private func cloudLoadFailure(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "wifi.exclamationmark")
+                .foregroundStyle(Theme.negative)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Couldn't refresh trips")
+                    .font(.app(.subheadline, .semibold))
+                Text(verbatim: message)
+                    .font(.app(.caption))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Button("Retry") {
+                Task { await store.loadFromCloud(forceRefresh: true) }
+            }
+            .font(.app(.caption, .semibold))
+            .buttonStyle(.bordered)
+            .tint(Theme.accent)
+        }
+        .padding(14)
+        .glassEffect(.regular, in: .rect(cornerRadius: 16))
     }
 
     /// Surfaces cloud-sync status so a failed save isn't silent: a spinner while saving

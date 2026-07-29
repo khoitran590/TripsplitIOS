@@ -65,9 +65,10 @@ actor TripsRepository {
     /// Fetches every trip visible to the token through `trip_members`. Decodes rows individually so a
     /// single malformed trip can't drop the entire list. Throws only on network/HTTP
     /// failure, letting callers distinguish "couldn't reach the server" from "no trips".
-    func fetch(accessToken: String) async throws -> [Trip] {
+    func fetch(accessToken: String, forceRefresh: Bool = false) async throws -> [Trip] {
         alignSnapshots(with: accessToken)
-        if let userID = TripStore.userID(fromJWT: accessToken),
+        if !forceRefresh,
+           let userID = TripStore.userID(fromJWT: accessToken),
            let cached = tripCache,
            cached.userID == userID,
            Date().timeIntervalSince(cached.timestamp) < cacheLifetime {

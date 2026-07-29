@@ -2,6 +2,9 @@
 #
 # gitignore contributors: remember to update Global/Xcode.gitignore, Objective-C.gitignore & Swift.gitignore
 
+# macOS metadata
+.DS_Store
+
 ## User settings
 xcuserdata/
 
@@ -30,6 +33,12 @@ playground.xcworkspace
 # .swiftpm
 
 .build/
+
+# Node (there is no JavaScript package in this project)
+node_modules/
+
+# Local Supabase CLI link/runtime state
+supabase/.temp/
 
 # CocoaPods
 #

@@ -1,7 +1,4 @@
 import SwiftUI
-import MapKit
-import Playgrounds
-import PhotosUI
 import UIKit
 
 @main struct MyApp: App {
@@ -298,7 +295,11 @@ struct ContentView: View {
 
     private func acceptInvite(_ url: URL) async {
         do {
-            try await store.acceptInvitationLink(url)
+            if try await store.acceptInvitationLink(url) != nil {
+                // The invitation flow's natural destination is the trip list. Leaving
+                // the user on Explore made a successful deep link look like a no-op.
+                selectedTab = .trips
+            }
         } catch {
             inviteErrorMessage = (error as? AuthError)?.message ?? error.localizedDescription
         }

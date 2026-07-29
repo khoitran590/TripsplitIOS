@@ -15,7 +15,7 @@ another model/agent as the source of truth for execution.
 
 **Project:** TripSplit — native iOS SwiftUI app (expense splitting + light trip planning)  
 **Real app target:** `Tripsplit.xcodeproj` + `Tripsplit/*.swift`  
-**Not the app:** `Package.swift`, `Sources/Tripsplit/`, `Tests/TripsplitTests/` (dead SPM Hello World — never add app code/tests there)
+**Tests:** `TripsplitAppTests/` in the Xcode project. The old SPM Hello World scaffold has been removed.
 
 ---
 
@@ -52,7 +52,7 @@ These exist because each has already caused a real shipped bug:
 - **No third-party dependencies.** Pure SwiftUI + Foundation + system frameworks.
 - **No Supabase Swift SDK.** Direct REST over `URLSession`.
 - **One vertical-slice style** is OK — models + store + views can stay feature-oriented. Do **not** introduce MVVM/DI frameworks unless explicitly asked.
-- **Verification:** clean `xcodebuild` is enough unless user asks for simulator. Do not invent work in the dead SPM test package.
+- **Verification:** clean `xcodebuild` is enough unless the user asks for simulator verification.
 - **Surgical changes:** only touch what the PR requires; no drive-by cleanups.
 
 ### Build command
@@ -152,7 +152,7 @@ Symbols from `ContentView.swift` used elsewhere:
 - No logic rewrites during splits
 - No renaming path fields in the same PR as a move
 - No schema/backend changes for Track A
-- No app code in dead SPM package
+- No parallel package or duplicate app target
 
 ## Target layout (after Track A)
 
@@ -214,7 +214,7 @@ Splits without tests are hope-driven. Pure money math is the highest-value unit-
 
 ### Scope
 
-1. Add a real **Xcode unit test target** linked to the **app** `Tripsplit` module (not SPM).
+1. Use the **Xcode unit test target** linked to the app's `Tripsplit` module.
 2. Tests only (no product UI):
    - `SplitEngine.equalShares` remainder / sum-exact cases
    - `SplitEngine.allocateProportionally`
@@ -222,7 +222,7 @@ Splits without tests are hope-driven. Pure money math is the highest-value unit-
    - `SplitEngine.settleUp` deterministic pairing for fixed nets
    - `Trip.share` / `netBalances` / `remainingOwed` with confirmed `SettlementRecord`s
    - Encode → decode a `Trip` **missing newer keys** (hard rule 1)
-3. Do **not** put these tests under `Tests/TripsplitTests` SPM stub.
+3. Put these tests in `TripsplitAppTests/`.
 
 ### Verify
 
@@ -387,12 +387,11 @@ Medium only for map focus / environment object wiring.
 
 ---
 
-## PR A6 — Housekeeping (optional)
+## PR A6 — Housekeeping (completed)
 
-- Delete or quarantine SPM stub so nobody tests the wrong module
-- Update `CLAUDE.md` / this doc file table to match new names
-- Grep for orphaned imports after moves
-- No drive-by refactors
+- Removed the unused SPM and npm scaffolds
+- Updated `CLAUDE.md` / this doc file table to match the Xcode-only setup
+- Grepped for and removed orphaned imports after moves
 
 ---
 

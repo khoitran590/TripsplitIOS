@@ -2,7 +2,7 @@
 
 Hand this file to another agent to implement. **Do not treat this as a pure tab-order swap.** Making Explore the primary tab requires first-impression, dock, empty-state, and engagement redesign so the product reads as *inspiration → plan → spend/split*, not *ledger → maybe browse later*.
 
-**Scope:** UI/UX product + interaction design recommendations. Implementation should stay surgical and follow `Claude.md` hard rules (localization, main-actor state, no SPM stub tests, clean `xcodebuild` only unless the user asks for simulator verify).
+**Scope:** UI/UX product + interaction design recommendations. Implementation should stay surgical and follow `CLAUDE.md` hard rules (localization, main-actor state, Xcode app tests, clean `xcodebuild` only unless the user asks for simulator verify).
 
 **Out of scope for this handoff:** backend schema changes, new third-party SDKs, rewriting Map or Feed architecture, inventing AI features that need new Edge Functions (unless already present).
 

@@ -1795,6 +1795,38 @@
         }
       }
     },
+    "Couldn't refresh trips" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudieron actualizar los viajes"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法刷新行程"
+          }
+        }
+      }
+    },
+    "Couldn't refresh your trips. Check your connection and try again." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudieron actualizar tus viajes. Comprueba tu conexión e inténtalo de nuevo."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法刷新你的行程。请检查网络连接后重试。"
+          }
+        }
+      }
+    },
     "Couldn't save to cloud" : {
       "localizations" : {
         "es" : {
@@ -3559,6 +3591,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在加载汇率…"
+          }
+        }
+      }
+    },
+    "Loading your trips…" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cargando tus viajes…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载你的行程…"
           }
         }
       }
@@ -6465,6 +6513,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "分摊"
+          }
+        }
+      }
+    },
+    "Syncing the latest plans and expenses." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sincronizando los planes y gastos más recientes."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在同步最新的计划和支出。"
           }
         }
       }

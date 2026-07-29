@@ -79,6 +79,15 @@ final class TripStore {
     enum SyncState: Equatable { case idle, syncing, failed }
     var syncState: SyncState = .idle
 
+    /// State of the latest cloud read. This is separate from `syncState`, which only
+    /// describes writes, so an unreachable server is never mistaken for an empty account.
+    enum CloudLoadState: Equatable {
+        case idle, loading, loaded
+        case failed(String)
+    }
+    var cloudLoadState: CloudLoadState = .idle
+    @ObservationIgnored private var cloudLoadRevision = 0
+
     /// A user-facing reason for the most recent sync failure (e.g. an expired session),
     /// shown in the failure banner. Nil for generic server/HTTP failures.
     var syncErrorMessage: String?
@@ -730,11 +739,12 @@ final class TripStore {
         return url
     }
 
-    func acceptInvitationLink(_ url: URL) async throws {
+    @discardableResult
+    func acceptInvitationLink(_ url: URL) async throws -> Trip.ID? {
         guard url.scheme == "tripsplit", url.host == "invite",
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               let token = components.queryItems?.first(where: { $0.name == "token" })?.value,
-              !token.isEmpty else { return }
+              !token.isEmpty else { return nil }
         guard let accessToken = try await authorizedAccessToken() else {
             throw AuthError(message: "Sign in to accept this invitation.")
         }
@@ -742,11 +752,13 @@ final class TripStore {
             try await TripsRepository.shared.acceptInvitation(token: token, accessToken: tokenValue)
         }
         await loadFromCloud()
-        guard let index = trips.firstIndex(where: { $0.id == tripID }),
-              !trips[index].members.contains(where: { $0.id == currentUser.id }) else { return }
-        trips[index].members.append(currentUser)
-        trips[index].budgets[currentUser.id] = trips[index].budgets[currentUser.id] ?? 0
-        persist(trips[index])
+        if let index = trips.firstIndex(where: { $0.id == tripID }),
+           !trips[index].members.contains(where: { $0.id == currentUser.id }) {
+            trips[index].members.append(currentUser)
+            trips[index].budgets[currentUser.id] = trips[index].budgets[currentUser.id] ?? 0
+            persist(trips[index])
+        }
+        return tripID
     }
 
     /// Sets a member's budget on a trip and syncs the change.
@@ -821,6 +833,8 @@ final class TripStore {
             feedPostsByTrip = [:]
             resetSignedImageURLs()
             trips = []
+            cloudLoadRevision += 1
+            cloudLoadState = .idle
             return
         }
         // Identity changed: drop cached feeds so a different account never sees the
@@ -830,6 +844,8 @@ final class TripStore {
             cancelPendingCacheWrite()
             feedPostsByTrip = [:]
             resetSignedImageURLs()
+            cloudLoadRevision += 1
+            cloudLoadState = .idle
         }
         currentUser.id = uuid
         // Load this specific user's saved profile (name, photo, avatarURL) keyed to their UUID.
@@ -899,8 +915,14 @@ final class TripStore {
     /// Each creator-owned row is re-anchored to the signed-in user's stable id so trips
     /// created under a previous random local identity still show up and settle correctly.
     /// Shared trips created by other accounts are left with their original creator id.
-    func loadFromCloud() async {
-        guard let accessToken = try? await authorizedAccessToken() else { return }
+    func loadFromCloud(forceRefresh: Bool = false) async {
+        guard let accessToken = try? await authorizedAccessToken() else {
+            cloudLoadState = .idle
+            return
+        }
+        cloudLoadRevision += 1
+        let revision = cloudLoadRevision
+        cloudLoadState = .loading
 
         // Retry any queued deletions first so a trip pending deletion can't come back.
         await flushPendingDeletions(accessToken: accessToken)
@@ -909,10 +931,20 @@ final class TripStore {
         let loaded: [Trip]
         do {
             loaded = try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
-                try await TripsRepository.shared.fetch(accessToken: token)
+                try await TripsRepository.shared.fetch(
+                    accessToken: token,
+                    forceRefresh: forceRefresh
+                )
             }
         }
-        catch { return }
+        catch {
+            guard revision == cloudLoadRevision else { return }
+            let message = (error as? AuthError)?.message
+                ?? String(localized: "Couldn't refresh your trips. Check your connection and try again.")
+            cloudLoadState = .failed(message)
+            return
+        }
+        guard revision == cloudLoadRevision else { return }
         var healed: [Trip] = []
         var toPersist: Set<Trip.ID> = []
         for trip in loaded {
@@ -944,7 +976,8 @@ final class TripStore {
         var merged = healed.map { pendingTripSaves[$0.id] ?? $0 }
         let localOnly = trips.filter { !cloudIDs.contains($0.id) && !pendingDeletions.contains($0.id) }
         merged.append(contentsOf: localOnly)
-        await MainActor.run { self.trips = merged }
+        trips = merged
+        cloudLoadState = .loaded
         cacheTripsLocally()
         for trip in merged where toPersist.contains(trip.id) { persist(trip) }
         for trip in localOnly { persist(trip) }

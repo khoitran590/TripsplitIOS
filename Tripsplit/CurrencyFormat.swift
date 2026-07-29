@@ -1,6 +1,4 @@
 import Foundation
-import ImageIO
-import UIKit
 
 // MARK: - Currency helper
 

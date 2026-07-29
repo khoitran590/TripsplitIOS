@@ -183,7 +183,7 @@ From `Claude.md`:
 - Do **not** change split math or invent float `total / count` outside `SplitEngine`.
 - Do **not** mutate `@Observable` / `TripStore` off main actor.
 - Do **not** add SPM packages or Supabase SDK.
-- Do **not** put app code in `Sources/Tripsplit` (dead SPM package).
+- Keep app code in the Xcode `Tripsplit` target and tests in `TripsplitAppTests/`.
 - Do **not** refactor unrelated Home sections (trips list, transactions, quick actions) unless needed for navigation hooks.
 - Do **not** run simulator verification unless the user asks; a clean `xcodebuild` is enough per project policy.
 - Do **not** rewrite `homeTotals` aggregation semantics (still personal budget + personal spend + open settlements, FX-converted).

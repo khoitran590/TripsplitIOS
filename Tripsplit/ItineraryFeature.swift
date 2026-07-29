@@ -2264,7 +2264,7 @@ struct ItineraryStopEditorView: View {
         request.naturalLanguageQuery = locationHint
         guard let item = try? await MKLocalSearch(request: request).start().mapItems.first else { return }
         placeCompleter.bias(to: MKCoordinateRegion(
-            center: item.placemark.coordinate,
+            center: item.location.coordinate,
             span: MKCoordinateSpan(latitudeDelta: 1, longitudeDelta: 1)
         ))
     }

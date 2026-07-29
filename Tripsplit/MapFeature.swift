@@ -798,6 +798,16 @@ struct MapScreen: View {
         return "\(selectedTripID.uuidString)|\(trip.startDate?.timeIntervalSince1970 ?? 0)|\(trip.endDate?.timeIntervalSince1970 ?? 0)|\(itinerary.days.count)|\(stops.joined(separator: "|"))"
     }
 
+    /// Includes visibility so leaving Map cancels geocoding/search work, while coming
+    /// back re-runs it with the latest trip state.
+    private var tripRefreshKey: String {
+        "\(isActive)|\(store.myTrips.map { $0.id.uuidString }.joined(separator: ","))"
+    }
+
+    private var activeItineraryResolutionKey: String {
+        isActive ? "\(itineraryResolutionKey)|day:\(selectedItineraryDay)" : "inactive"
+    }
+
     /// A string that changes whenever the focus coordinate does, so `onChange` can
     /// recenter once the async POI search refines the city-center fallback.
     private var coordinateKey: String? {
@@ -872,11 +882,13 @@ struct MapScreen: View {
             recenterOnFocus(force: true)
             await resolveCuratedCompanionPlaces()
         }
-        .task(id: store.myTrips.map(\.id)) {
+        .task(id: tripRefreshKey) {
+            guard isActive else { return }
             initializeTripSelectionIfNeeded()
             await refreshTripDestinations()
         }
-        .task(id: "\(itineraryResolutionKey)|day:\(selectedItineraryDay)") {
+        .task(id: activeItineraryResolutionKey) {
+            guard isActive else { return }
             await resolveMissingItineraryCoordinates()
         }
         .task(id: isActive) {
