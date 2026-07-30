@@ -258,6 +258,7 @@ struct ProfileDetailView: View {
     @Environment(FriendsStore.self) private var friends
 
     @State private var showEditor = false
+    @State private var showSettings = false
     @State private var selectedTrip: Trip?
     /// A friend's profile opened from the Friends rail.
     @State private var viewingProfile: SharedProfileLink?
@@ -282,9 +283,12 @@ struct ProfileDetailView: View {
         return places
     }
 
-    /// Trips the signed-in user created, newest first — the profile's "My trips" rail.
+    /// Trips the signed-in user created, newest first — the profile's "My trips" rail,
+    /// and the set the "Trips" stat counts. Archived trips are excluded (via
+    /// `store.myTrips`) so the rail matches the Trips tab; the creator filter matches
+    /// what `profile_by_token` shows friends, so the profile reads the same either way.
     private var myTrips: [Trip] {
-        store.trips
+        store.myTrips
             .filter { $0.creatorID == store.currentUser.id }
             .sorted { ($0.startDate ?? .distantPast) > ($1.startDate ?? .distantPast) }
     }
@@ -295,7 +299,7 @@ struct ProfileDetailView: View {
                 header
 
                 if !store.userProfile.bio.trimmingCharacters(in: .whitespaces).isEmpty {
-                    Text(store.userProfile.bio)
+                    Text(verbatim: store.userProfile.bio)
                         .font(.app(.body))
                         .foregroundStyle(.primary)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -320,21 +324,48 @@ struct ProfileDetailView: View {
         .navigationTitle("Profile")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
+            // Trailing, where iOS puts sharing — and always present: while the share
+            // token is still loading the button is disabled rather than absent, which
+            // previously read as "this profile can't be shared".
+            ToolbarItem(placement: .topBarTrailing) {
                 if let url = friends.shareURL() {
                     ShareLink(item: url, subject: Text(verbatim: store.currentUser.name),
                               message: Text("Add me on TripSplit")) {
                         Image(systemName: "square.and.arrow.up")
                     }
+                } else {
+                    Button {} label: { Image(systemName: "square.and.arrow.up") }
+                        .disabled(true)
+                        .accessibilityLabel("Share profile")
                 }
+            }
+            // Settings used to be reachable only from the Explore tab, which left the
+            // Profile tab with no route to sign-out, currency, appearance or language.
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showSettings = true
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .accessibilityLabel("Settings")
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Edit") { showEditor = true }
             }
         }
+        .refreshable {
+            await store.loadProfileFromCloud()
+            await store.loadFromCloud(forceRefresh: true)
+            await friends.refresh()
+        }
         .task { await friends.refresh() }
         .sheet(isPresented: $showEditor) {
             EditProfileView()
+        }
+        // `showsProfileLink: false` — the profile page is already on screen behind this
+        // sheet, so Settings must not offer to push another copy of it.
+        .sheet(isPresented: $showSettings) {
+            SettingsScreen(showsProfileLink: false)
         }
         .sheet(item: $selectedTrip) { trip in
             TripDetailView(tripID: trip.id)
@@ -348,14 +379,25 @@ struct ProfileDetailView: View {
 
     private var header: some View {
         VStack(spacing: 12) {
-            AvatarView(person: store.currentUser, imageData: store.profileImageData, size: 110)
-            Text(store.currentUser.name.isEmpty ? "TripSplit User" : store.currentUser.name)
-                .font(.app(.title, .bold))
-            if let email = auth.email {
-                Text(email)
-                    .font(.app(.subheadline))
-                    .foregroundStyle(.secondary)
+            // Tapping your own photo is the expected way into the editor; it used to be
+            // inert, with Edit in the toolbar as the only route.
+            Button { showEditor = true } label: {
+                AvatarView(person: store.currentUser, imageData: store.profileImageData, size: 110)
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Profile photo")
+            .accessibilityHint("Opens profile editing")
+
+            // Split rather than a ternary inside one `Text`: the placeholder is a key to
+            // translate, the name is user text to render as typed.
+            Group {
+                if store.currentUser.name.isEmpty {
+                    Text("TripSplit User")
+                } else {
+                    Text(verbatim: store.currentUser.name)
+                }
+            }
+                .font(.app(.title, .bold))
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 8)
@@ -368,9 +410,15 @@ struct ProfileDetailView: View {
                           value: dob.formatted(date: .long, time: .omitted))
             }
             detailRow(icon: "suitcase.fill", color: Theme.accent, title: "Trips",
-                      value: "\(store.trips.count)")
+                      value: "\(myTrips.count)")
             detailRow(icon: "mappin.and.ellipse", color: Theme.positive, title: "Places visited",
-                      value: "\(visitedPlaces.count)", showsDivider: false)
+                      value: "\(visitedPlaces.count)", showsDivider: auth.email != nil)
+            // Demoted from the hero, where it sat directly under the name: it is only
+            // ever shown to the account holder, so it doesn't earn that placement.
+            if let email = auth.email {
+                detailRow(icon: "envelope.fill", color: Color(hex: 0x3B82F6), title: "Email",
+                          value: email, showsDivider: false)
+            }
         }
         .padding(.horizontal, 16)
         .glassEffect(.regular, in: .rect(cornerRadius: 20))
@@ -383,9 +431,11 @@ struct ProfileDetailView: View {
                 Text(title)
                     .font(.app(.body))
                 Spacer()
-                Text(value)
+                Text(verbatim: value)
                     .font(.app(.body))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
             .padding(.vertical, 14)
             if showsDivider { Divider() }
@@ -419,11 +469,17 @@ struct ProfileDetailView: View {
 
     @ViewBuilder
     private var tripsSection: some View {
-        if !myTrips.isEmpty {
-            VStack(alignment: .leading, spacing: 14) {
-                Text("My trips")
-                    .font(.app(.title3, .bold))
+        VStack(alignment: .leading, spacing: 14) {
+            Text("My trips")
+                .font(.app(.title3, .bold))
 
+            // The section used to vanish entirely when empty, unlike Places and Friends
+            // above it, so a new account's profile just stopped mid-page.
+            if myTrips.isEmpty {
+                Text("Trips you create show up here. Start one from the Trips tab.")
+                    .font(.app(.subheadline))
+                    .foregroundStyle(.secondary)
+            } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 14) {
                         ForEach(myTrips) { trip in
@@ -437,8 +493,8 @@ struct ProfileDetailView: View {
                 }
                 .padding(.horizontal, -16)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -1230,6 +1286,28 @@ struct VisitedPlaceCard: View {
     let place: VisitedPlace
     @Environment(\.locale) private var locale
 
+    /// Everything derived from the place name is resolved once, in `init`, rather than
+    /// from computed properties. `PlaceTheme.inferred` scores ~150 terms across the name,
+    /// and `body` reads the theme, the landmark and the seed several times each — as
+    /// computed properties that scoring ran on every access, on every render pass, for
+    /// every stamp in the rail.
+    private let theme: PlaceTheme
+    /// Famous places get their own landmark artwork; everywhere else uses its theme.
+    private let landmark: PlaceLandmark?
+    /// A stable per-place seed from the place id (djb2), used for the ink, the tilt, and
+    /// to vary the generic scene. A seeded hash rather than `hashValue`, which is
+    /// randomized on every launch.
+    private let sceneSeed: UInt64
+
+    init(place: VisitedPlace) {
+        self.place = place
+        theme = PlaceTheme.inferred(from: place.name)
+        landmark = PlaceLandmark.matching(place.name)
+        var seed: UInt64 = 5381
+        for scalar in place.id.unicodeScalars { seed = seed &* 33 &+ UInt64(scalar.value) }
+        sceneSeed = seed
+    }
+
     /// A small, restrained palette of stamp inks. Each place picks one by its seed, so a
     /// rail shows variety without a different hue shouting on every badge.
     private static let palette: [Color] = [
@@ -1241,11 +1319,6 @@ struct VisitedPlaceCard: View {
         Color(light: 0x9A5A22, dark: 0xE0A874), // sienna
         Color(light: 0x37506E, dark: 0xA2B4D2), // slate
     ]
-
-    private var theme: PlaceTheme { PlaceTheme.inferred(from: place.name) }
-
-    /// Famous places get their own landmark artwork; everywhere else uses its theme.
-    private var landmark: PlaceLandmark? { PlaceLandmark.matching(place.name) }
 
     /// The one ink this stamp is printed in, and the paper it sits on.
     private var ink: Color { Self.palette[Int(sceneSeed % UInt64(Self.palette.count))] }
@@ -1269,15 +1342,6 @@ struct VisitedPlaceCard: View {
         place.date?.formatted(.dateTime.month(.wide).year())
     }
 
-    /// A stable per-place seed from the place id (djb2), used for the ink, the tilt, and
-    /// to vary the generic scene. A seeded hash rather than `hashValue`, which is
-    /// randomized on every launch.
-    private var sceneSeed: UInt64 {
-        var seed: UInt64 = 5381
-        for scalar in place.id.unicodeScalars { seed = seed &* 33 &+ UInt64(scalar.value) }
-        return seed
-    }
-
     /// A stable per-place tilt (±5°) so the rail looks hand-stuck.
     private var tilt: Double { Double(sceneSeed % 11) - 5 }
 
@@ -1286,6 +1350,10 @@ struct VisitedPlaceCard: View {
             badge
                 .rotationEffect(.degrees(tilt))
                 .frame(width: 168, height: 176)
+                // The stamp's wording is drawn glyph-by-glyph into a Canvas, so VoiceOver
+                // saw nothing of the category it prints around the rim.
+                .accessibilityElement()
+                .accessibilityLabel(Text(verbatim: "\(categoryText), \(shortName)"))
 
             Text(verbatim: place.name)
                 .font(.app(.subheadline, .semibold))
@@ -1339,7 +1407,7 @@ struct ProfileTripCard: View {
                 .frame(width: 220, height: 148)
                 .clipShape(.rect(cornerRadius: 18))
 
-            Text(trip.name)
+            Text(verbatim: trip.name)
                 .font(.app(.subheadline, .semibold))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
@@ -1424,9 +1492,27 @@ struct EditProfileView: View {
     /// avatar. `imageData == nil` alone just means no local copy (e.g. after reinstall).
     @State private var photoRemoved = false
     @State private var isSaving = false
+    /// Set when the cloud write failed: the sheet stays open so the edits aren't lost.
+    @State private var showSaveFailed = false
+    @State private var showDiscardConfirmation = false
     /// Apple Maps autocomplete for the "Where I've been" field.
     @StateObject private var placeCompleter = PlaceSearchCompleter()
     @State private var isResolvingPlace = false
+
+    /// What `load()` put on screen, so Cancel can tell edits from an untouched sheet.
+    @State private var loadedSnapshot: [String] = []
+
+    /// Longest bio the profile card and every friend's copy of it are laid out for.
+    private static let bioLimit = 160
+
+    /// The editable fields flattened for comparison against `loadedSnapshot`.
+    private var snapshot: [String] {
+        [name, bio, hasDateOfBirth ? UserProfile.dobFormatter.string(from: dateOfBirth) : ""] + places
+    }
+
+    private var hasChanges: Bool {
+        snapshot != loadedSnapshot || photoRemoved || imageData != store.profileImageData
+    }
 
     /// Whether the account has an avatar this sheet can show/remove: a locally picked
     /// photo, or the cloud avatar (still present after reinstalls).
@@ -1441,36 +1527,28 @@ struct EditProfileView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                photoSection
+            ZStack {
+                LinearGradient(colors: Theme.sheetGradient, startPoint: .top, endPoint: .bottom)
+                    .ignoresSafeArea()
 
-                Section("Name") {
-                    TextField("Your name", text: $name)
-                        .textContentType(.name)
-                }
-
-                Section("Date of birth") {
-                    Toggle("Show date of birth", isOn: $hasDateOfBirth.animation())
-                    if hasDateOfBirth {
-                        DatePicker("Birthday", selection: $dateOfBirth,
-                                   in: ...Date.now, displayedComponents: .date)
+                ScrollView {
+                    VStack(spacing: 18) {
+                        photoCard
+                        detailsCard
+                        bioCard
+                        placesCard
                     }
+                    .padding()
+                    .padding(.bottom, 24)
                 }
-
-                Section {
-                    TextField("Tell your travel buddies about yourself…", text: $bio, axis: .vertical)
-                        .lineLimit(3...6)
-                } header: {
-                    Text("About you")
-                }
-
-                placesSection
             }
             .navigationTitle("Edit Profile")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel") {
+                        if hasChanges { showDiscardConfirmation = true } else { dismiss() }
+                    }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     if isSaving {
@@ -1489,45 +1567,137 @@ struct EditProfileView: View {
                     photoRemoved = false
                 }
             }
+            .alert("Couldn't save your profile", isPresented: $showSaveFailed) {
+                Button("Try Again") { save() }
+                Button("Close", role: .cancel) { dismiss() }
+            } message: {
+                Text("Your changes are saved on this device but couldn't be uploaded. Check your connection and try again.")
+            }
+            .confirmationDialog("Discard changes?", isPresented: $showDiscardConfirmation,
+                                titleVisibility: .visible) {
+                Button("Discard Changes", role: .destructive) { dismiss() }
+                Button("Keep Editing", role: .cancel) {}
+            }
         }
     }
 
-    private var photoSection: some View {
-        Section {
+    private var photoCard: some View {
+        TripCard(title: "Photo", icon: "person.crop.circle.fill") {
             HStack {
                 Spacer()
-                VStack(spacing: 12) {
-                    if imageData == nil && hasPhoto {
-                        // No local copy (fresh install) but the cloud avatar exists.
-                        AvatarView(person: store.currentUser, size: 96)
-                    } else {
-                        ProfileAvatar(imageData: imageData, initials: initials, size: 96)
-                    }
-                    PhotosPicker(selection: $photoItem, matching: .images) {
-                        Text(hasPhoto ? "Change Photo" : "Add Photo")
-                    }
-                    if hasPhoto {
-                        Button("Remove Photo", role: .destructive) {
-                            imageData = nil
-                            photoItem = nil
-                            photoRemoved = true
-                        }
-                    }
+                if imageData == nil && hasPhoto {
+                    // No local copy (fresh install) but the cloud avatar exists.
+                    AvatarView(person: store.currentUser, size: 96)
+                } else {
+                    ProfileAvatar(imageData: imageData, initials: initials, size: 96)
                 }
                 Spacer()
             }
-            .padding(.vertical, 8)
+
+            PhotosPicker(selection: $photoItem, matching: .images) {
+                Label(hasPhoto ? "Change Photo" : "Add Photo", systemImage: "photo.on.rectangle.angled")
+                    .font(.app(.subheadline, .semibold))
+                    .foregroundStyle(Theme.onAccent)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
+            }
+            .buttonStyle(.plain)
+            .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+
+            if hasPhoto {
+                Button {
+                    imageData = nil
+                    photoItem = nil
+                    photoRemoved = true
+                } label: {
+                    Label("Remove Photo", systemImage: "trash")
+                        .font(.app(.subheadline, .semibold))
+                        .foregroundStyle(Theme.negative)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 11)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: .capsule)
+            }
         }
     }
 
-    private var placesSection: some View {
-        Section {
-            ForEach(places, id: \.self) { place in
-                Label(place, systemImage: "mappin")
-            }
-            .onDelete { places.remove(atOffsets: $0) }
+    private var detailsCard: some View {
+        TripCard(title: "About you", icon: "person.text.rectangle.fill") {
+            TextField("Your name", text: $name)
+                .textContentType(.name)
+                .font(.app(.title3, .semibold))
+                .padding(.horizontal, 14).padding(.vertical, 12)
+                .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
 
-            HStack {
+            Toggle("Show date of birth", isOn: $hasDateOfBirth.animation())
+                .font(.app(.body))
+                .tint(Theme.accent)
+
+            if hasDateOfBirth {
+                DatePicker("Birthday", selection: $dateOfBirth,
+                           in: ...Date.now, displayedComponents: .date)
+                    .font(.app(.body))
+            }
+        }
+    }
+
+    private var bioCard: some View {
+        TripCard(title: "Bio", icon: "text.quote") {
+            TextField("Tell your travel buddies about yourself…", text: $bio, axis: .vertical)
+                .font(.app(.body))
+                .lineLimit(3...6)
+                .padding(.horizontal, 14).padding(.vertical, 12)
+                .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+                // The bio renders in a fixed-height card on the profile and on every
+                // friend's copy of it, so it is capped rather than left to grow.
+                .onChange(of: bio) { _, value in
+                    if value.count > Self.bioLimit { bio = String(value.prefix(Self.bioLimit)) }
+                }
+
+            Text(verbatim: "\(bio.count)/\(Self.bioLimit)")
+                .font(.app(.caption))
+                .foregroundStyle(bio.count >= Self.bioLimit ? Theme.warning : .secondary)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .monospacedDigit()
+        }
+    }
+
+    /// Trip locations that already appear on the profile but aren't in the user's own
+    /// list, so the editor can show them as read-only rather than omitting them.
+    private var tripDerivedPlaces: [String] {
+        var seen = Set(places.map { $0.lowercased() })
+        var derived: [String] = []
+        for trip in store.trips {
+            guard let location = trip.location?.trimmingCharacters(in: .whitespaces),
+                  !location.isEmpty, seen.insert(location.lowercased()).inserted else { continue }
+            derived.append(location)
+        }
+        return derived
+    }
+
+    private var placesCard: some View {
+        TripCard(title: "Where I've been", icon: "mappin.and.ellipse") {
+            ForEach(places, id: \.self) { place in
+                HStack(spacing: 10) {
+                    Image(systemName: "mappin")
+                        .foregroundStyle(Theme.accent)
+                    Text(verbatim: place)
+                        .font(.app(.body))
+                    Spacer(minLength: 0)
+                    Button {
+                        places.removeAll { $0 == place }
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.app(.body))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Remove")
+                }
+            }
+
+            HStack(spacing: 10) {
                 TextField("Search a place (e.g. Tokyo)", text: $newPlace)
                     .autocorrectionDisabled()
                     .onSubmit(addPlace)
@@ -1536,10 +1706,15 @@ struct EditProfileView: View {
                 } else {
                     Button(action: addPlace) {
                         Image(systemName: "plus.circle.fill")
+                            .font(.app(.title3))
+                            .foregroundStyle(Theme.accent)
                     }
+                    .buttonStyle(.plain)
                     .disabled(newPlace.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
+            .padding(.horizontal, 14).padding(.vertical, 12)
+            .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
             .onChange(of: newPlace) { _, value in
                 placeCompleter.update(query: value)
             }
@@ -1568,10 +1743,29 @@ struct EditProfileView: View {
                 }
                 .buttonStyle(.plain)
             }
-        } header: {
-            Text("Where I've been")
-        } footer: {
-            Text("Locations from your trips are added to your profile automatically.")
+
+            // Places the profile shows because a trip has that location. They were
+            // invisible here before, so a stamp the user couldn't find in this list
+            // looked like a bug; they're listed as read-only with the reason why.
+            if !tripDerivedPlaces.isEmpty {
+                Divider()
+                Text("From your trips")
+                    .font(.app(.caption, .semibold))
+                    .foregroundStyle(.secondary)
+                ForEach(tripDerivedPlaces, id: \.self) { place in
+                    HStack(spacing: 10) {
+                        Image(systemName: "suitcase.fill")
+                            .foregroundStyle(.tertiary)
+                        Text(verbatim: place)
+                            .font(.app(.body))
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 0)
+                    }
+                }
+                Text("These come from your trips' locations. Change a trip's location to change its place here.")
+                    .font(.app(.caption))
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -1619,6 +1813,7 @@ struct EditProfileView: View {
             hasDateOfBirth = true
             dateOfBirth = dob
         }
+        loadedSnapshot = snapshot
     }
 
     private func save() {
@@ -1629,9 +1824,10 @@ struct EditProfileView: View {
         profile.visitedPlaces = places
         isSaving = true
         Task {
-            await store.saveProfile(profile, imageData: imageData, removePhoto: photoRemoved)
+            let saved = await store.saveProfile(profile, imageData: imageData, removePhoto: photoRemoved)
             isSaving = false
-            dismiss()
+            // A failed upload used to dismiss exactly like a successful one.
+            if saved { dismiss() } else { showSaveFailed = true }
         }
     }
 

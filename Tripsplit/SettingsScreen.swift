@@ -4,6 +4,10 @@ import UIKit
 /// A Liquid Glass settings screen. The content only appears once the user has
 /// logged in; otherwise the auth screen (sign in / sign up / forgot password) is shown.
 struct SettingsScreen: View {
+    /// False when this screen is opened from the profile page itself, which is already
+    /// on screen behind it — the "Show profile" header would push a second copy.
+    var showsProfileLink = true
+
     @Environment(AuthStore.self) private var auth
     @Environment(TripStore.self) private var store
     @Environment(LocalizationManager.self) private var localization
@@ -28,7 +32,9 @@ struct SettingsScreen: View {
                 NavigationStack {
                     settingsContent
                         .background { AppBackground() }
-                        .navigationTitle("Profile")
+                        // "Settings", not "Profile": the Profile tab has its own page by
+                        // that name, and both used to be titled the same thing.
+                        .navigationTitle("Settings")
                 }
             } else {
                 ZStack {
@@ -61,7 +67,7 @@ struct SettingsScreen: View {
     private var settingsContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                profileHeader
+                if showsProfileLink { profileHeader }
 
                 exploreCard
 
@@ -293,7 +299,7 @@ struct SettingsScreen: View {
                     AvatarView(person: store.currentUser, imageData: store.profileImageData, size: 60)
 
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(displayName)
+                        Text(verbatim: displayName)
                             .font(.app(.title3, .semibold))
                             .foregroundStyle(.primary)
                         Text("Show profile")
@@ -447,7 +453,7 @@ struct ProfileAvatar: View {
                     startPoint: .topLeading, endPoint: .bottomTrailing
                 )
                 .overlay(
-                    Text(initials)
+                    Text(verbatim: initials)
                         .font(.app(size: size * 0.4, weight: .semibold))
                         .foregroundStyle(.white)
                 )

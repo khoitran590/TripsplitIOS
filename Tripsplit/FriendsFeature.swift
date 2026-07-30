@@ -315,6 +315,9 @@ struct FriendsSection: View {
     /// Called with a share token to present that person's profile.
     var onOpenProfile: (String) -> Void
 
+    /// The friend awaiting removal confirmation — unfriending is not undoable from here.
+    @State private var pendingRemoval: Friend?
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
@@ -352,7 +355,7 @@ struct FriendsSection: View {
                             Button { onOpenProfile(friend.shareToken) } label: {
                                 VStack(spacing: 8) {
                                     AvatarView(person: friend.person, size: 62)
-                                    Text(friend.name)
+                                    Text(verbatim: friend.name)
                                         .font(.app(.caption, .medium))
                                         .foregroundStyle(.primary)
                                         .lineLimit(1)
@@ -360,14 +363,56 @@ struct FriendsSection: View {
                                 }
                             }
                             .buttonStyle(.plain)
+                            // `FriendsStore.removeFriend` existed with no way to reach it
+                            // from anywhere in the app.
+                            .contextMenu {
+                                Button("View Profile") { onOpenProfile(friend.shareToken) }
+                                Button("Remove Friend", role: .destructive) {
+                                    pendingRemoval = friend
+                                }
+                            }
                         }
                     }
                     .padding(.horizontal, 16)
                 }
                 .padding(.horizontal, -16)
             }
+
+            // Requests the user sent. They were fetched into `friends.outgoing` and then
+            // never rendered, so a sent request looked like it had gone nowhere.
+            if !friends.outgoing.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Sent")
+                        .font(.app(.subheadline, .semibold))
+                        .foregroundStyle(.secondary)
+                    ForEach(friends.outgoing) { request in
+                        HStack(spacing: 12) {
+                            AvatarView(person: request.person, size: 32)
+                            Text(verbatim: request.name)
+                                .font(.app(.subheadline))
+                                .lineLimit(1)
+                            Spacer()
+                            Text("Pending")
+                                .font(.app(.caption))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .padding(14)
+                .glassEffect(.regular, in: .rect(cornerRadius: 20))
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .confirmationDialog("Remove friend?", isPresented: .init(get: { pendingRemoval != nil },
+                                                                 set: { if !$0 { pendingRemoval = nil } }),
+                            titleVisibility: .visible, presenting: pendingRemoval) { friend in
+            Button("Remove Friend", role: .destructive) {
+                Task { await friends.removeFriend(friend.userID) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { friend in
+            Text("You'll both need to add each other again to reconnect. \(friend.name) isn't notified.")
+        }
     }
 }
 
@@ -380,7 +425,7 @@ private struct RequestRow: View {
     var body: some View {
         HStack(spacing: 12) {
             AvatarView(person: request.person, size: 40)
-            Text(request.name)
+            Text(verbatim: request.name)
                 .font(.app(.subheadline, .medium))
                 .lineLimit(1)
             Spacer()
@@ -456,7 +501,7 @@ struct SharedProfileView: View {
             VStack(spacing: 24) {
                 VStack(spacing: 12) {
                     AvatarView(person: profile.person, size: 110)
-                    Text(profile.name).font(.app(.title, .bold))
+                    Text(verbatim: profile.name).font(.app(.title, .bold))
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.top, 8)
@@ -466,7 +511,7 @@ struct SharedProfileView: View {
                 }
 
                 if !profile.bio.trimmingCharacters(in: .whitespaces).isEmpty {
-                    Text(profile.bio)
+                    Text(verbatim: profile.bio)
                         .font(.app(.body))
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(16)
@@ -488,7 +533,7 @@ struct SharedProfileView: View {
                 }
 
                 if !profile.visitedPlaces.isEmpty {
-                    section(title: "Where \(profile.name) has been") {
+                    section("Where \(profile.name) has been") {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 14) {
                                 ForEach(profile.visitedPlaces) { VisitedPlaceCard(place: $0) }
@@ -500,7 +545,7 @@ struct SharedProfileView: View {
                 }
 
                 if !profile.trips.isEmpty {
-                    section(title: "Trips") {
+                    section("Trips") {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 14) {
                                 ForEach(profile.trips) { SummaryTripCard(trip: $0) }
@@ -516,9 +561,13 @@ struct SharedProfileView: View {
         }
     }
 
-    private func section<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
+    /// `LocalizedStringKey`, not `String`: the heading interpolates the person's name, so
+    /// as a `String` it was pinned to English ("Where %@ has been" never reached the
+    /// catalog). Interpolating into a key keeps the name dynamic and the sentence
+    /// translatable.
+    private func section<Content: View>(_ title: LocalizedStringKey, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(verbatim: title).font(.app(.title3, .bold))
+            Text(title).font(.app(.title3, .bold))
             content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -573,7 +622,15 @@ struct SharedProfileView: View {
             Image(systemName: "person.crop.circle.badge.exclamationmark")
                 .font(.app(size: 40))
                 .foregroundStyle(.secondary)
-            Text(loadError ?? "Couldn't load this profile.")
+            // The error text is already-localized copy from `AuthError`; only the
+            // fallback is a key this bundle can translate.
+            Group {
+                if let loadError {
+                    Text(verbatim: loadError)
+                } else {
+                    Text("Couldn't load this profile.")
+                }
+            }
                 .font(.app(.subheadline))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -610,7 +667,7 @@ struct SummaryTripCard: View {
                 .frame(width: 220, height: 148)
                 .clipShape(.rect(cornerRadius: 18))
 
-            Text(trip.name)
+            Text(verbatim: trip.name)
                 .font(.app(.subheadline, .semibold))
                 .lineLimit(1)
 

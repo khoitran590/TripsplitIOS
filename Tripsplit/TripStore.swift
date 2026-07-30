@@ -261,12 +261,15 @@ final class TripStore {
     /// path on `currentUser.avatarURL`, and pushes the updated Person into every trip so
     /// other members see the new photo on their next sync. (The field name is historical;
     /// it now holds a path that `signedImageURL` resolves at display time.)
-    func uploadAndSetAvatar(_ jpeg: Data) async {
-        guard let accessToken = try? await authorizedAccessToken() else { return }
+    /// Returns false when the upload never reached Storage, so an editor can tell the
+    /// user their new photo was not saved instead of closing as if it had been.
+    @discardableResult
+    func uploadAndSetAvatar(_ jpeg: Data) async -> Bool {
+        guard let accessToken = try? await authorizedAccessToken() else { return false }
         let path = "\(currentUser.id.uuidString.lowercased())/profile.jpg"
         guard let url = try? await withFreshTokenIfNeeded(initialToken: accessToken, operation: { token in
             try await ReceiptStorage.shared.upload(jpeg, path: path, accessToken: token)
-        }) else { return }
+        }) else { return false }
         currentUser.avatarURL = url
         userProfile.avatarPath = url
         // Persist locally so the URL survives a relaunch.
@@ -280,6 +283,7 @@ final class TripStore {
                 persist(trips[index])
             }
         }
+        return true
     }
 
     /// Clears the in-memory profile. Called on sign-out so the next account starts blank.
@@ -315,20 +319,27 @@ final class TripStore {
     /// `imageData == nil` means "no new photo picked", not "remove" — after a reinstall
     /// the local JPEG cache is empty while the cloud avatar still exists, and treating
     /// nil as removal wiped it. Removal is explicit via `removePhoto`.
-    func saveProfile(_ profile: UserProfile, imageData: Data?, removePhoto: Bool = false) async {
+    ///
+    /// Returns whether the avatar upload and the cloud row both went through. The local
+    /// copy is saved either way, so a false result means "this device is up to date but
+    /// your other devices are not" — worth telling the user, not worth discarding edits.
+    @discardableResult
+    func saveProfile(_ profile: UserProfile, imageData: Data?, removePhoto: Bool = false) async -> Bool {
         userProfile = profile
         userProfile.avatarPath = currentUser.avatarURL
         let previousImageData = profileImageData
         updateProfile(name: profile.displayName,
                       imageData: removePhoto ? nil : (imageData ?? profileImageData))
+        var uploaded = true
         if let imageData, !removePhoto, imageData != previousImageData || currentUser.avatarURL == nil {
-            await uploadAndSetAvatar(imageData)
+            uploaded = await uploadAndSetAvatar(imageData)
         } else if removePhoto {
             currentUser.avatarURL = nil
             userProfile.avatarPath = nil
             persistLocalProfile()
         }
-        await pushProfileToCloud()
+        let pushed = await pushProfileToCloud()
+        return uploaded && pushed
     }
 
     /// Updates the cloud-backed bookmark lists (map places and/or Explore destinations),
@@ -386,10 +397,12 @@ final class TripStore {
         }
     }
 
-    /// Upserts the in-memory profile into `public.profiles`. Best-effort: failures are
-    /// logged but not surfaced, since the local copy is already saved.
-    private func pushProfileToCloud() async {
-        guard let accessToken = try? await authorizedAccessToken() else { return }
+    /// Upserts the in-memory profile into `public.profiles`. Failures are logged and
+    /// reported back (the local copy is already saved); callers that edit on the user's
+    /// behalf surface them, background callers ignore the result.
+    @discardableResult
+    private func pushProfileToCloud() async -> Bool {
+        guard let accessToken = try? await authorizedAccessToken() else { return false }
         var profile = userProfile
         profile.displayName = currentUser.name
         profile.avatarPath = currentUser.avatarURL
@@ -398,8 +411,10 @@ final class TripStore {
             try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
                 try await ProfilesRepository.shared.update(profile, userID: userID, accessToken: token)
             }
+            return true
         } catch {
             BackendSecurity.log("Profile cloud save failed", error: error)
+            return false
         }
     }
 
