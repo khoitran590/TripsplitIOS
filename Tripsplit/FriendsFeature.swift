@@ -324,10 +324,18 @@ struct FriendsSection: View {
                 Text("Friends")
                     .font(.app(.title3, .bold))
                 Spacer()
-                if !friends.friends.isEmpty {
-                    Text(verbatim: "\(friends.friends.count)")
-                        .font(.app(.subheadline, .semibold))
-                        .foregroundStyle(.secondary)
+                NavigationLink {
+                    FriendsListView()
+                } label: {
+                    HStack(spacing: 4) {
+                        if !friends.friends.isEmpty {
+                            Text(verbatim: "\(friends.friends.count)")
+                                .font(.app(.subheadline, .semibold))
+                        }
+                        Text("See all")
+                            .font(.app(.subheadline, .semibold))
+                    }
+                    .foregroundStyle(Theme.accent)
                 }
             }
 
@@ -455,6 +463,204 @@ private struct RequestRow: View {
                 }
                 .buttonStyle(.plain)
             }
+        }
+    }
+}
+
+// MARK: - Friends list (full management)
+
+/// The whole friends graph on one screen: everyone the user is connected to, both
+/// directions of pending request, and a field for pasting someone's share link. The
+/// profile rail only ever showed accepted friends, and `removeFriend` had no UI at all.
+struct FriendsListView: View {
+    @Environment(FriendsStore.self) private var friends
+
+    @State private var linkText = ""
+    @State private var isAdding = false
+    @State private var addResult: String?
+    @State private var addFailure: String?
+    @State private var viewingProfile: SharedProfileLink?
+    @State private var pendingRemoval: Friend?
+
+    /// Accepts a full `tripsplit://profile?token=…` link or a bare token, so pasting
+    /// whatever the other person sent works either way.
+    private var parsedToken: String? {
+        let trimmed = linkText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let components = URLComponents(string: trimmed),
+           let token = components.queryItems?.first(where: { $0.name == "token" })?.value,
+           !token.isEmpty {
+            return token
+        }
+        return trimmed.contains("/") || trimmed.contains(" ") ? nil : trimmed
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                addCard
+
+                if !friends.incoming.isEmpty {
+                    section("Requests") {
+                        ForEach(friends.incoming) { RequestRow(request: $0) }
+                    }
+                }
+
+                if !friends.outgoing.isEmpty {
+                    section("Sent") {
+                        ForEach(friends.outgoing) { request in
+                            HStack(spacing: 12) {
+                                AvatarView(person: request.person, size: 40)
+                                Text(verbatim: request.name)
+                                    .font(.app(.subheadline, .medium))
+                                    .lineLimit(1)
+                                Spacer()
+                                Text("Pending")
+                                    .font(.app(.caption))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+
+                section("Friends") {
+                    if friends.friends.isEmpty {
+                        Text("Share your profile to connect with travel buddies. Friends you add show up here.")
+                            .font(.app(.subheadline))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(friends.friends) { friend in
+                            Button { viewingProfile = SharedProfileLink(token: friend.shareToken) } label: {
+                                HStack(spacing: 12) {
+                                    AvatarView(person: friend.person, size: 44)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(verbatim: friend.name)
+                                            .font(.app(.subheadline, .medium))
+                                            .foregroundStyle(.primary)
+                                            .lineLimit(1)
+                                        if !friend.bio.trimmingCharacters(in: .whitespaces).isEmpty {
+                                            Text(verbatim: friend.bio)
+                                                .font(.app(.caption))
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(1)
+                                        }
+                                    }
+                                    Spacer(minLength: 0)
+                                    Button {
+                                        pendingRemoval = friend
+                                    } label: {
+                                        Image(systemName: "person.badge.minus")
+                                            .font(.app(.subheadline))
+                                            .foregroundStyle(Theme.negative)
+                                            .frame(width: 36, height: 36)
+                                            .contentShape(.rect)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel("Remove Friend")
+                                }
+                                .contentShape(.rect)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+            .padding()
+            .padding(.bottom, 80) // Clearance for the floating dock.
+        }
+        .background { AppBackground() }
+        .navigationTitle("Friends")
+        .navigationBarTitleDisplayMode(.inline)
+        .refreshable { await friends.refresh() }
+        .task { await friends.refresh() }
+        .sheet(item: $viewingProfile) { link in
+            NavigationStack { SharedProfileView(token: link.token) }
+        }
+        .confirmationDialog("Remove friend?", isPresented: .init(get: { pendingRemoval != nil },
+                                                                 set: { if !$0 { pendingRemoval = nil } }),
+                            titleVisibility: .visible, presenting: pendingRemoval) { friend in
+            Button("Remove Friend", role: .destructive) {
+                Task { await friends.removeFriend(friend.userID) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { friend in
+            Text("You'll both need to add each other again to reconnect. \(friend.name) isn't notified.")
+        }
+    }
+
+    private var addCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Add by link")
+                .font(.app(.headline))
+            Text("Paste the profile link a friend sent you.")
+                .font(.app(.caption))
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 10) {
+                TextField("tripsplit://profile?token=…", text: $linkText)
+                    .font(.app(.subheadline))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .lineLimit(1)
+                if isAdding {
+                    ProgressView()
+                } else {
+                    Button(action: add) {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.app(.title3))
+                            .foregroundStyle(parsedToken == nil ? .secondary : Theme.accent)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(parsedToken == nil)
+                    .accessibilityLabel("Add friend")
+                }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 12)
+            .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+
+            if let addResult {
+                Label(addResult == "accepted" ? "You're now friends" : "Request sent",
+                      systemImage: addResult == "accepted" ? "checkmark.circle.fill" : "paperplane.fill")
+                    .font(.app(.caption, .semibold))
+                    .foregroundStyle(Theme.positive)
+            }
+            if let addFailure {
+                Text(verbatim: addFailure)
+                    .font(.app(.caption))
+                    .foregroundStyle(Theme.negative)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+    }
+
+    private func section<Content: View>(_ title: LocalizedStringKey,
+                                        @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.app(.subheadline, .semibold))
+                .foregroundStyle(.secondary)
+            content()
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+    }
+
+    private func add() {
+        guard let token = parsedToken else { return }
+        isAdding = true
+        addResult = nil
+        addFailure = nil
+        Task {
+            do {
+                addResult = try await friends.addFriend(token: token)
+                linkText = ""
+            } catch {
+                addFailure = (error as? AuthError)?.message ?? "Couldn't add that profile."
+            }
+            isAdding = false
         }
     }
 }

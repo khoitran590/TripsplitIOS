@@ -53,6 +53,26 @@ struct SavedMapPlace: Codable, Equatable, Identifiable {
     }
 }
 
+/// What a shared profile reveals to other people. Every section defaults to visible,
+/// which is how profiles behaved before the toggles existed — and `profile_by_token`
+/// applies the same default server-side for rows that predate the column.
+struct ProfileVisibility: Codable, Equatable {
+    var bio = true
+    var birthday = true
+    var places = true
+    var trips = true
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        bio = try c.decodeIfPresent(Bool.self, forKey: .bio) ?? true
+        birthday = try c.decodeIfPresent(Bool.self, forKey: .birthday) ?? true
+        places = try c.decodeIfPresent(Bool.self, forKey: .places) ?? true
+        trips = try c.decodeIfPresent(Bool.self, forKey: .trips) ?? true
+    }
+}
+
 /// The signed-in user's personal information, persisted in the `public.profiles`
 /// table so it follows the account across devices and reinstalls. The display name
 /// and avatar path are mirrored onto `TripStore.currentUser` (the `Person` that
@@ -73,6 +93,8 @@ struct UserProfile: Codable, Equatable {
     var savedMapPlaces: [SavedMapPlace] = []
     /// `Destination.id`s saved on the Explore screen.
     var savedDestinationIDs: [String] = []
+    /// Which sections of this profile other people can see.
+    var visibility = ProfileVisibility()
 
     enum CodingKeys: String, CodingKey {
         case displayName = "display_name"
@@ -83,6 +105,7 @@ struct UserProfile: Codable, Equatable {
         case savedPlaceKeys = "saved_place_keys"
         case savedMapPlaces = "saved_map_places"
         case savedDestinationIDs = "saved_destination_ids"
+        case visibility = "profile_visibility"
     }
 
     /// Postgres `date` columns round-trip as plain "yyyy-MM-dd" strings.
@@ -108,6 +131,7 @@ struct UserProfile: Codable, Equatable {
         savedPlaceKeys = try c.decodeIfPresent([String].self, forKey: .savedPlaceKeys) ?? []
         savedMapPlaces = try c.decodeIfPresent([SavedMapPlace].self, forKey: .savedMapPlaces) ?? []
         savedDestinationIDs = try c.decodeIfPresent([String].self, forKey: .savedDestinationIDs) ?? []
+        visibility = try c.decodeIfPresent(ProfileVisibility.self, forKey: .visibility) ?? ProfileVisibility()
     }
 
     func encode(to encoder: Encoder) throws {
@@ -120,6 +144,7 @@ struct UserProfile: Codable, Equatable {
         try c.encode(savedPlaceKeys, forKey: .savedPlaceKeys)
         try c.encode(savedMapPlaces, forKey: .savedMapPlaces)
         try c.encode(savedDestinationIDs, forKey: .savedDestinationIDs)
+        try c.encode(visibility, forKey: .visibility)
     }
 }
 
@@ -132,7 +157,7 @@ actor ProfilesRepository {
     static let shared = ProfilesRepository()
     private let session = BackendSecurity.secureSession
 
-    private static let columns = "display_name,date_of_birth,bio,avatar_path,visited_places,saved_place_keys,saved_map_places,saved_destination_ids"
+    private static let columns = "display_name,date_of_birth,bio,avatar_path,visited_places,saved_place_keys,saved_map_places,saved_destination_ids,profile_visibility"
 
     func fetch(userID: UUID, accessToken: String) async throws -> UserProfile? {
         let path = "/rest/v1/profiles?user_id=eq.\(userID.uuidString.lowercased())&select=\(Self.columns)"
@@ -248,6 +273,67 @@ struct VisitedPlace: Identifiable {
     var id: String { name.lowercased() }
 }
 
+/// The aggregate numbers on the profile's stats card.
+struct ProfileStats {
+    var countries = 0
+    var places = 0
+    var trips = 0
+    /// Nights-inclusive days across every trip with both dates set.
+    var days = 0
+    var spent: Double = 0
+    var owed: Double = 0
+    var owe: Double = 0
+    var currency = "USD"
+}
+
+/// A visited place resolved to a coordinate, for the profile's travel map.
+struct MappedPlace: Identifiable {
+    let name: String
+    let latitude: Double
+    let longitude: Double
+    var id: String { name.lowercased() }
+    var coordinate: CLLocationCoordinate2D { .init(latitude: latitude, longitude: longitude) }
+}
+
+/// Resolves visited place *names* to coordinates so they can be pinned on the profile
+/// map. Bookmarked map places already carry coordinates; names typed into the profile
+/// (or inherited from a trip's location) do not, so each is looked up once via MapKit
+/// and kept for the rest of the session — the profile is revisited constantly and these
+/// names almost never change.
+@Observable
+final class VisitedPlaceGeocoder {
+    static let shared = VisitedPlaceGeocoder()
+
+    private(set) var coordinates: [String: MapCoordinate] = [:]
+    /// Names already looked up, successful or not, so a place MapKit can't find isn't
+    /// retried on every render.
+    @ObservationIgnored private var attempted: Set<String> = []
+
+    /// `CLLocationCoordinate2D` isn't `Equatable`, which `@Observable` diffing wants.
+    struct MapCoordinate: Equatable {
+        let latitude: Double
+        let longitude: Double
+    }
+
+    func coordinate(for name: String) -> MapCoordinate? { coordinates[name.lowercased()] }
+
+    /// Looks up every name not already resolved. Runs them one at a time: MapKit
+    /// throttles bursts of local-search requests, and this is background enrichment for
+    /// a map that renders fine while it fills in.
+    func resolve(_ names: [String]) async {
+        for name in names {
+            let key = name.lowercased()
+            guard attempted.insert(key).inserted else { continue }
+            let request = MKLocalSearch.Request()
+            request.naturalLanguageQuery = name
+            request.resultTypes = [.address, .pointOfInterest]
+            guard let item = try? await MKLocalSearch(request: request).start().mapItems.first else { continue }
+            let location = item.location.coordinate
+            coordinates[key] = MapCoordinate(latitude: location.latitude, longitude: location.longitude)
+        }
+    }
+}
+
 // MARK: - Profile page ("Show profile")
 
 /// The user's public-facing profile card: photo, name, bio, birthday, and the
@@ -262,6 +348,10 @@ struct ProfileDetailView: View {
     @State private var selectedTrip: Trip?
     /// A friend's profile opened from the Friends rail.
     @State private var viewingProfile: SharedProfileLink?
+    /// Rendered lazily for the "Share card" action; nil until the first share.
+    @State private var shareCard: ShareCardItem?
+    @State private var geocoder = VisitedPlaceGeocoder.shared
+    @AppStorage("displayCurrency") private var displayCurrency = "USD"
 
     /// The user's own list first, then any trip locations not already in it.
     /// A trip's start (or end) date is attached so the cards can show when they went.
@@ -293,6 +383,50 @@ struct ProfileDetailView: View {
             .sorted { ($0.startDate ?? .distantPast) > ($1.startDate ?? .distantPast) }
     }
 
+    /// The numbers behind the stats card. Money comes from `homeTotals`, the same
+    /// aggregation the Trips tab shows, so the two screens can never disagree.
+    private var stats: ProfileStats {
+        var stats = ProfileStats()
+        stats.places = visitedPlaces.count
+        stats.countries = Set(visitedPlaces.compactMap { PlaceRegion.isoCode(forRegionIn: $0.name) }).count
+        stats.trips = myTrips.count
+        for trip in store.myTrips {
+            guard let start = trip.startDate, let end = trip.endDate, end >= start else { continue }
+            // Inclusive of both ends: a Friday-to-Sunday trip is three days away.
+            stats.days += (Calendar.current.dateComponents([.day], from: start, to: end).day ?? 0) + 1
+        }
+        let totals = store.homeTotals(in: displayCurrency)
+        stats.spent = totals.spent
+        stats.owed = totals.owedToYou
+        stats.owe = totals.youOwe
+        stats.currency = displayCurrency
+        return stats
+    }
+
+    /// Places on the profile that have a coordinate to plot: bookmarked map places
+    /// exactly, visited place names once the geocoder has resolved them.
+    private var mappedPlaces: [MappedPlace] {
+        var mapped = store.userProfile.savedMapPlaces.map {
+            MappedPlace(name: $0.name, latitude: $0.latitude, longitude: $0.longitude)
+        }
+        var seen = Set(mapped.map { $0.name.lowercased() })
+        for place in visitedPlaces {
+            guard seen.insert(place.name.lowercased()).inserted,
+                  let coordinate = geocoder.coordinate(for: place.name) else { continue }
+            mapped.append(MappedPlace(name: place.name,
+                                      latitude: coordinate.latitude,
+                                      longitude: coordinate.longitude))
+        }
+        return mapped
+    }
+
+    /// Curated guides the user saved on Explore, resolved back to their catalog entries.
+    private var savedDestinations: [Destination] {
+        store.userProfile.savedDestinationIDs.reversed().compactMap { id in
+            Destination.all.first { $0.id == id }
+        }
+    }
+
     var body: some View {
         ScrollView {
             VStack(spacing: 24) {
@@ -307,6 +441,8 @@ struct ProfileDetailView: View {
                         .glassEffect(.regular, in: .rect(cornerRadius: 20))
                 }
 
+                statsCard
+
                 detailsCard
 
                 FriendsSection { token in
@@ -314,6 +450,10 @@ struct ProfileDetailView: View {
                 }
 
                 placesSection
+
+                travelMapCard
+
+                savedSection
 
                 tripsSection
             }
@@ -328,11 +468,8 @@ struct ProfileDetailView: View {
             // token is still loading the button is disabled rather than absent, which
             // previously read as "this profile can't be shared".
             ToolbarItem(placement: .topBarTrailing) {
-                if let url = friends.shareURL() {
-                    ShareLink(item: url, subject: Text(verbatim: store.currentUser.name),
-                              message: Text("Add me on TripSplit")) {
-                        Image(systemName: "square.and.arrow.up")
-                    }
+                if friends.shareURL() != nil {
+                    shareMenu
                 } else {
                     Button {} label: { Image(systemName: "square.and.arrow.up") }
                         .disabled(true)
@@ -359,6 +496,11 @@ struct ProfileDetailView: View {
             await friends.refresh()
         }
         .task { await friends.refresh() }
+        // Rates back the money on the stats card; geocoding fills in the map's pins.
+        .task { await store.refreshRates() }
+        .task(id: visitedPlaces.map(\.name)) {
+            await geocoder.resolve(visitedPlaces.map(\.name))
+        }
         .sheet(isPresented: $showEditor) {
             EditProfileView()
         }
@@ -375,6 +517,47 @@ struct ProfileDetailView: View {
                 SharedProfileView(token: link.token)
             }
         }
+        .sheet(item: $shareCard) { card in
+            ProfileShareSheet(image: card.image, name: store.currentUser.name)
+        }
+    }
+
+    /// Sharing a profile two ways: the deep link (only useful to someone who has the
+    /// app) and a rendered card that reads as a picture anywhere it's posted.
+    @ViewBuilder
+    private var shareMenu: some View {
+        Menu {
+            if let url = friends.shareURL() {
+                ShareLink(item: url, subject: Text(verbatim: store.currentUser.name),
+                          message: Text("Add me on TripSplit")) {
+                    Label("Share Link", systemImage: "link")
+                }
+            }
+            Button {
+                if let image = renderShareCard() { shareCard = ShareCardItem(image: image) }
+            } label: {
+                Label("Share Card", systemImage: "photo")
+            }
+        } label: {
+            Image(systemName: "square.and.arrow.up")
+        }
+        .accessibilityLabel("Share profile")
+    }
+
+    /// Rasterizes the profile into a shareable image. Rendered at 3x so it stays sharp
+    /// when it lands in a photo library or a message thread.
+    @MainActor
+    private func renderShareCard() -> Image? {
+        let card = ProfileShareCard(
+            name: store.currentUser.name.isEmpty ? "TripSplit User" : store.currentUser.name,
+            imageData: store.profileImageData,
+            stats: stats,
+            places: Array(visitedPlaces.prefix(3))
+        )
+        let renderer = ImageRenderer(content: card)
+        renderer.scale = 3
+        guard let uiImage = renderer.uiImage else { return nil }
+        return Image(uiImage: uiImage)
     }
 
     private var header: some View {
@@ -422,6 +605,196 @@ struct ProfileDetailView: View {
         }
         .padding(.horizontal, 16)
         .glassEffect(.regular, in: .rect(cornerRadius: 20))
+    }
+
+    /// Countries, places, trips and days away, plus what the trips have cost and where
+    /// the user stands with everyone. The money is `homeTotals`, the same figures the
+    /// Trips tab reports, in the user's home currency.
+    private var statsCard: some View {
+        let stats = stats
+        return VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 12) {
+                statTile(value: "\(stats.countries)", label: "Countries", icon: "globe.americas.fill",
+                         color: Theme.accent)
+                statTile(value: "\(stats.places)", label: "Places", icon: "mappin.and.ellipse",
+                         color: Theme.positive)
+            }
+            HStack(spacing: 12) {
+                statTile(value: "\(stats.trips)", label: "Trips", icon: "suitcase.fill",
+                         color: Color(hex: 0x8B5CF6))
+                statTile(value: "\(stats.days)", label: "Days away", icon: "calendar",
+                         color: Color(hex: 0xEC4899))
+            }
+
+            Divider()
+
+            HStack {
+                Text("Total spent")
+                    .font(.app(.subheadline))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(verbatim: formattedMoney(stats.spent, stats.currency))
+                    .font(.app(.title3, .bold))
+                    .monospacedDigit()
+            }
+
+            // A one-line standing across every trip. The Trips tab owns the full
+            // balance card (budgets, per-trip breakdown); this is the summary only.
+            if stats.owed > 0.005 || stats.owe > 0.005 {
+                HStack(spacing: 16) {
+                    balanceLeg(title: "You're owed", amount: stats.owed, color: Theme.positive)
+                    Divider().frame(height: 32)
+                    balanceLeg(title: "You owe", amount: stats.owe, color: Theme.negative)
+                }
+            }
+
+            if !milestones(for: stats).isEmpty {
+                FlowLayout(spacing: 8) {
+                    ForEach(milestones(for: stats), id: \.self) { milestone in
+                        Text(LocalizedStringKey(milestone))
+                            .font(.app(.caption, .semibold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Theme.accent.opacity(0.15), in: .capsule)
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+    }
+
+    private func statTile(value: String, label: LocalizedStringKey, icon: String, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Image(systemName: icon)
+                .font(.app(.subheadline, .semibold))
+                .foregroundStyle(color)
+            Text(verbatim: value)
+                .font(.app(.title2, .bold))
+                .monospacedDigit()
+            Text(label)
+                .font(.app(.caption))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(color.opacity(0.10), in: .rect(cornerRadius: 14))
+    }
+
+    private func balanceLeg(title: LocalizedStringKey, amount: Double, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.app(.caption))
+                .foregroundStyle(.secondary)
+            Text(verbatim: formattedMoney(amount, displayCurrency))
+                .font(.app(.headline))
+                .foregroundStyle(color)
+                .monospacedDigit()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Milestones the numbers have already earned. English keys the catalog localizes.
+    private func milestones(for stats: ProfileStats) -> [String] {
+        var earned: [String] = []
+        if stats.trips >= 1 { earned.append("First trip") }
+        if stats.trips >= 10 { earned.append("10 trips") }
+        if stats.countries >= 3 { earned.append("3 countries") }
+        if stats.countries >= 10 { earned.append("Globetrotter") }
+        if stats.places >= 10 { earned.append("10 places") }
+        if stats.days >= 30 { earned.append("A month away") }
+        return earned
+    }
+
+    private func formattedMoney(_ value: Double, _ code: String) -> String {
+        value.formatted(.currency(code: code).precision(.fractionLength(value < 1000 ? 2 : 0)))
+    }
+
+    /// Everywhere the profile can plot, on one map. Bookmarked map places have
+    /// coordinates already; visited names are filled in by `VisitedPlaceGeocoder` as it
+    /// resolves them, so the map starts sparse and completes itself.
+    @ViewBuilder
+    private var travelMapCard: some View {
+        let places = mappedPlaces
+        if !places.isEmpty {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Your map")
+                    .font(.app(.title3, .bold))
+
+                Map(initialPosition: .region(region(for: places)), interactionModes: [.pan, .zoom]) {
+                    ForEach(places) { place in
+                        Marker(place.name, systemImage: "mappin", coordinate: place.coordinate)
+                            .tint(Theme.accent)
+                    }
+                }
+                .frame(height: 220)
+                .clipShape(.rect(cornerRadius: 20))
+                .accessibilityLabel("Map of the places you've been")
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// A region containing every pin, with padding so markers aren't clipped at the rim.
+    private func region(for places: [MappedPlace]) -> MKCoordinateRegion {
+        let latitudes = places.map(\.latitude)
+        let longitudes = places.map(\.longitude)
+        guard let minLatitude = latitudes.min(), let maxLatitude = latitudes.max(),
+              let minLongitude = longitudes.min(), let maxLongitude = longitudes.max() else {
+            return MKCoordinateRegion(center: .init(latitude: 20, longitude: 0),
+                                      span: .init(latitudeDelta: 120, longitudeDelta: 120))
+        }
+        let center = CLLocationCoordinate2D(latitude: (minLatitude + maxLatitude) / 2,
+                                            longitude: (minLongitude + maxLongitude) / 2)
+        let span = MKCoordinateSpan(latitudeDelta: max((maxLatitude - minLatitude) * 1.5, 4),
+                                    longitudeDelta: max((maxLongitude - minLongitude) * 1.5, 4))
+        return MKCoordinateRegion(center: center, span: span)
+    }
+
+    /// Bookmarks made on the Map and Explore tabs. They have always been stored on the
+    /// profile (`savedMapPlaces` / `savedDestinationIDs`) but were only visible on the
+    /// screens that created them.
+    @ViewBuilder
+    private var savedSection: some View {
+        let mapPlaces = store.userProfile.savedMapPlaces
+        let destinations = savedDestinations
+        if !mapPlaces.isEmpty || !destinations.isEmpty {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Saved")
+                    .font(.app(.title3, .bold))
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 14) {
+                        ForEach(destinations) { destination in
+                            SavedDestinationCard(destination: destination)
+                                .contextMenu {
+                                    Button("Remove", role: .destructive) {
+                                        store.updateSavedPlaces(
+                                            destinationIDs: store.userProfile.savedDestinationIDs
+                                                .filter { $0 != destination.id }
+                                        )
+                                    }
+                                }
+                        }
+                        ForEach(mapPlaces) { place in
+                            SavedMapPlaceCard(place: place)
+                                .contextMenu {
+                                    Button("Remove", role: .destructive) {
+                                        store.updateSavedPlaces(
+                                            mapKeys: store.userProfile.savedPlaceKeys.filter { $0 != place.key },
+                                            mapPlaces: mapPlaces.filter { $0.key != place.key }
+                                        )
+                                    }
+                                }
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                }
+                .padding(.horizontal, -16)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     private func detailRow(icon: String, color: Color, title: LocalizedStringKey, value: String, showsDivider: Bool = true) -> some View {
@@ -1396,6 +1769,182 @@ struct VisitedPlaceCard: View {
     }
 }
 
+/// Wraps a rendered share card so it can drive an `.sheet(item:)` presentation.
+struct ShareCardItem: Identifiable {
+    let id = UUID()
+    let image: Image
+}
+
+/// The profile rendered as a picture: a travel card someone can post anywhere,
+/// unlike the `tripsplit://` link, which only does anything for people who already
+/// have the app.
+///
+/// Deliberately built from gradients and solid fills — `ImageRenderer` cannot
+/// rasterize glass or material backgrounds, which come out empty.
+struct ProfileShareCard: View {
+    let name: String
+    let imageData: Data?
+    let stats: ProfileStats
+    let places: [VisitedPlace]
+
+    private var initials: String {
+        String(name.split(separator: " ").prefix(2).compactMap(\.first)).uppercased()
+    }
+
+    var body: some View {
+        VStack(spacing: 20) {
+            VStack(spacing: 12) {
+                ProfileAvatar(imageData: imageData, initials: initials, size: 88)
+                Text(verbatim: name)
+                    .font(.app(.title2, .bold))
+                    .foregroundStyle(.white)
+            }
+
+            HStack(spacing: 0) {
+                shareStat(value: "\(stats.countries)", label: "Countries")
+                shareStat(value: "\(stats.places)", label: "Places")
+                shareStat(value: "\(stats.trips)", label: "Trips")
+                shareStat(value: "\(stats.days)", label: "Days")
+            }
+            .padding(.vertical, 14)
+            .background(.white.opacity(0.12), in: .rect(cornerRadius: 18))
+
+            if !places.isEmpty {
+                HStack(spacing: 10) {
+                    ForEach(places) { place in
+                        VisitedPlaceCard(place: place)
+                            .scaleEffect(0.62, anchor: .top)
+                            .frame(width: 104, height: 122)
+                    }
+                }
+            }
+
+            Text(verbatim: "TripSplit")
+                .font(.app(.subheadline, .bold))
+                .foregroundStyle(.white.opacity(0.7))
+        }
+        .padding(28)
+        .frame(width: 360)
+        .background {
+            LinearGradient(colors: [Theme.accent, Theme.accentSecondary],
+                           startPoint: .topLeading, endPoint: .bottomTrailing)
+        }
+    }
+
+    private func shareStat(value: String, label: LocalizedStringKey) -> some View {
+        VStack(spacing: 3) {
+            Text(verbatim: value)
+                .font(.app(.title3, .bold))
+                .foregroundStyle(.white)
+                .monospacedDigit()
+            Text(label)
+                .font(.app(.caption2))
+                .foregroundStyle(.white.opacity(0.75))
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+/// Previews the rendered card and hands it to the system share sheet.
+struct ProfileShareSheet: View {
+    let image: Image
+    let name: String
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                LinearGradient(colors: Theme.sheetGradient, startPoint: .top, endPoint: .bottom)
+                    .ignoresSafeArea()
+
+                VStack(spacing: 24) {
+                    image
+                        .resizable()
+                        .scaledToFit()
+                        .clipShape(.rect(cornerRadius: 24))
+                        .shadow(color: Theme.elevatedShadow, radius: 12, y: 6)
+                        .padding(.horizontal, 24)
+
+                    ShareLink(item: image,
+                              preview: SharePreview(Text(verbatim: name), image: image)) {
+                        Label("Share Card", systemImage: "square.and.arrow.up")
+                            .font(.app(.subheadline, .semibold))
+                            .foregroundStyle(Theme.onAccent)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 13)
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+                    .padding(.horizontal, 24)
+                }
+            }
+            .navigationTitle("Share Card")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
+/// A saved Explore guide on the profile's "Saved" rail, drawn in the guide's own
+/// colors so it reads the same as it does on the Explore tab.
+struct SavedDestinationCard: View {
+    let destination: Destination
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            LinearGradient(colors: destination.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+                .overlay(alignment: .bottomTrailing) {
+                    Image(systemName: destination.symbol)
+                        .font(.app(size: 30, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.35))
+                        .padding(12)
+                }
+                .frame(width: 168, height: 110)
+                .clipShape(.rect(cornerRadius: 18))
+
+            Text(verbatim: destination.title)
+                .font(.app(.subheadline, .semibold))
+                .lineLimit(1)
+            Text(verbatim: "\(destination.city), \(destination.country)")
+                .font(.app(.caption))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .frame(width: 168, alignment: .leading)
+    }
+}
+
+/// A place bookmarked on the Map tab, shown on the profile's "Saved" rail.
+struct SavedMapPlaceCard: View {
+    let place: SavedMapPlace
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            RoundedRectangle(cornerRadius: 18)
+                .fill(Theme.accent.opacity(0.15))
+                .overlay {
+                    Image(systemName: "mappin.circle.fill")
+                        .font(.app(size: 34, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                }
+                .frame(width: 168, height: 110)
+
+            Text(verbatim: place.name)
+                .font(.app(.subheadline, .semibold))
+                .lineLimit(1)
+            Text(verbatim: place.address ?? place.category.capitalized)
+                .font(.app(.caption))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .frame(width: 168, alignment: .leading)
+    }
+}
+
 /// A compact trip card for the profile's "My trips" rail: cover image with the
 /// trip name, location, and dates beneath. Tapping opens the trip detail sheet.
 struct ProfileTripCard: View {
@@ -1485,6 +2034,7 @@ struct EditProfileView: View {
     @State private var dateOfBirth = Calendar.current.date(byAdding: .year, value: -25, to: .now) ?? .now
     @State private var bio = ""
     @State private var places: [String] = []
+    @State private var visibility = ProfileVisibility()
     @State private var newPlace = ""
     @State private var photoItem: PhotosPickerItem?
     @State private var imageData: Data?
@@ -1512,6 +2062,7 @@ struct EditProfileView: View {
 
     private var hasChanges: Bool {
         snapshot != loadedSnapshot || photoRemoved || imageData != store.profileImageData
+            || visibility != store.userProfile.visibility
     }
 
     /// Whether the account has an avatar this sheet can show/remove: a locally picked
@@ -1537,6 +2088,7 @@ struct EditProfileView: View {
                         detailsCard
                         bioCard
                         placesCard
+                        visibilityCard
                     }
                     .padding()
                     .padding(.bottom, 24)
@@ -1661,6 +2213,24 @@ struct EditProfileView: View {
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .monospacedDigit()
         }
+    }
+
+    /// Per-section privacy. Sharing a profile link used to hand over the birthday, bio,
+    /// places and trip list with no way to withhold any of them; `profile_by_token`
+    /// enforces these server-side, so a hidden section never leaves the database.
+    private var visibilityCard: some View {
+        TripCard(title: "Shown on your shared profile", icon: "eye.fill") {
+            Toggle("Bio", isOn: $visibility.bio)
+            Toggle("Birthday", isOn: $visibility.birthday)
+            Toggle("Where I've been", isOn: $visibility.places)
+            Toggle("Trips", isOn: $visibility.trips)
+
+            Text("You always see everything on your own profile. These control what other people see when they open your link.")
+                .font(.app(.caption))
+                .foregroundStyle(.secondary)
+        }
+        .font(.app(.body))
+        .tint(Theme.accent)
     }
 
     /// Trip locations that already appear on the profile but aren't in the user's own
@@ -1809,6 +2379,7 @@ struct EditProfileView: View {
         imageData = store.profileImageData
         bio = store.userProfile.bio
         places = store.userProfile.visitedPlaces
+        visibility = store.userProfile.visibility
         if let dob = store.userProfile.dateOfBirth {
             hasDateOfBirth = true
             dateOfBirth = dob
@@ -1822,6 +2393,7 @@ struct EditProfileView: View {
         profile.dateOfBirth = hasDateOfBirth ? dateOfBirth : nil
         profile.bio = bio.trimmingCharacters(in: .whitespacesAndNewlines)
         profile.visitedPlaces = places
+        profile.visibility = visibility
         isSaving = true
         Task {
             let saved = await store.saveProfile(profile, imageData: imageData, removePhoto: photoRemoved)

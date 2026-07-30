@@ -166,6 +166,9 @@ final class TripStore {
         var savedPlaceKeys: [String]?
         var savedMapPlaces: [SavedMapPlace]?
         var savedDestinationIDs: [String]?
+        /// Cached so a launch before the cloud fetch lands doesn't show every section as
+        /// visible — and, worse, save that back over the user's hidden ones.
+        var visibility: ProfileVisibility?
     }
 
     /// Returns a UserDefaults key scoped to the given user UUID, so different accounts
@@ -305,7 +308,8 @@ final class TripStore {
             visitedPlaces: userProfile.visitedPlaces,
             savedPlaceKeys: userProfile.savedPlaceKeys,
             savedMapPlaces: userProfile.savedMapPlaces,
-            savedDestinationIDs: userProfile.savedDestinationIDs
+            savedDestinationIDs: userProfile.savedDestinationIDs,
+            visibility: userProfile.visibility
         )
         if let data = try? JSONEncoder().encode(stored) {
             UserDefaults.standard.set(data, forKey: Self.profileKey(for: currentUser.id))
@@ -877,6 +881,7 @@ final class TripStore {
         userProfile.savedPlaceKeys = stored?.savedPlaceKeys ?? Self.legacySavedList("mapSavedPlaceKeys")
         userProfile.savedMapPlaces = stored?.savedMapPlaces ?? []
         userProfile.savedDestinationIDs = stored?.savedDestinationIDs ?? Self.legacySavedList("exploreSavedDestinationIDs")
+        userProfile.visibility = stored?.visibility ?? ProfileVisibility()
         // Paint this user's locally cached trips right away; loadFromCloud replaces them
         // with the authoritative copy as soon as the network round-trip finishes.
         restoreCachedTrips(for: uuid)

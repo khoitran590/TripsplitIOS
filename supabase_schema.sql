@@ -38,6 +38,10 @@ alter table public.profiles add column if not exists visited_places jsonb not nu
 alter table public.profiles add column if not exists saved_place_keys      jsonb not null default '[]'::jsonb;
 alter table public.profiles add column if not exists saved_map_places      jsonb not null default '[]'::jsonb;
 alter table public.profiles add column if not exists saved_destination_ids jsonb not null default '[]'::jsonb;
+-- What a shared profile reveals, as {"bio": true, "birthday": false, ...}. Read only by
+-- profile_by_token() below; a missing key means visible, so existing rows (and any key
+-- added later) default to the pre-toggle behaviour.
+alter table public.profiles add column if not exists profile_visibility jsonb not null default '{}'::jsonb;
 
 create table if not exists public.trip_members (
     trip_id    uuid not null references public.trips (id) on delete cascade,
@@ -1381,16 +1385,27 @@ begin
         limit 1;
     end if;
 
+    -- Section visibility. The owner always sees their own profile in full, so the
+    -- toggles only ever hide things from other people. `coalesce(..., true)` keeps a
+    -- profile that has never set a flag exactly as visible as it was before.
     select jsonb_build_object(
         'userID', p.user_id,
         'isSelf', v_owner = v_viewer,
         'friendStatus', coalesce(v_friend_status, 'none'),
         'displayName', coalesce(p.display_name, ''),
         'avatarPath', p.avatar_path,
-        'bio', coalesce(p.bio, ''),
-        'dateOfBirth', p.date_of_birth,
-        'visitedPlaces', coalesce(p.visited_places, '[]'::jsonb),
-        'trips', coalesce((
+        'bio', case when v_owner = v_viewer
+                     or coalesce((p.profile_visibility->>'bio')::boolean, true)
+                    then coalesce(p.bio, '') else '' end,
+        'dateOfBirth', case when v_owner = v_viewer
+                             or coalesce((p.profile_visibility->>'birthday')::boolean, true)
+                            then p.date_of_birth else null end,
+        'visitedPlaces', case when v_owner = v_viewer
+                               or coalesce((p.profile_visibility->>'places')::boolean, true)
+                              then coalesce(p.visited_places, '[]'::jsonb) else '[]'::jsonb end,
+        'trips', case when v_owner = v_viewer
+                       or coalesce((p.profile_visibility->>'trips')::boolean, true)
+                      then coalesce((
             select jsonb_agg(jsonb_build_object(
                 'id', t.id,
                 'name', coalesce(t.name, t.metadata->>'name', 'Trip'),
@@ -1401,7 +1416,7 @@ begin
             ) order by coalesce(t.metadata->>'startDate', '') desc)
             from public.trips t
             where t.user_id = p.user_id
-        ), '[]'::jsonb)
+        ), '[]'::jsonb) else '[]'::jsonb end
     ) into v_result
     from public.profiles p
     where p.user_id = v_owner;
