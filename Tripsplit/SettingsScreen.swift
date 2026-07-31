@@ -80,8 +80,11 @@ struct SettingsScreen: View {
                                      iconColor: Theme.accent) {
                         showPersonalInfo = true
                     }
+                    // The signed-in address, shown here now that it is off the Profile
+                    // page: it is account data only the holder can see, so it belongs
+                    // with the account rows rather than in the public-facing profile.
                     PlainSettingsRow(icon: "lock.shield.fill", title: "Login & security",
-                                     iconColor: Theme.positive) {
+                                     value: auth.email, iconColor: Theme.positive) {
                         showChangePassword = true
                     }
                     PlainSettingsRow(icon: "creditcard.fill", title: "Payments",
@@ -390,6 +393,10 @@ struct PlainSettingsRow: View {
                         Text(value)
                             .font(.app(.subheadline))
                             .foregroundStyle(.secondary)
+                            // Values are short labels except the account email, which can
+                            // be long enough to squeeze the title off the row.
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                     }
 
                     if showsChevron {

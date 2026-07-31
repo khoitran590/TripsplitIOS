@@ -319,7 +319,9 @@ struct FriendsSection: View {
     @State private var pendingRemoval: Friend?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        // 10, matching the other Profile sections: a heading 14pt off its own content but
+        // only 18 off the previous section floated between the two.
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Friends")
                     .font(.app(.title3, .bold))

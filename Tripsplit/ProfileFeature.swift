@@ -340,7 +340,6 @@ final class VisitedPlaceGeocoder {
 /// places they've been (their own list merged with locations from their trips).
 struct ProfileDetailView: View {
     @Environment(TripStore.self) private var store
-    @Environment(AuthStore.self) private var auth
     @Environment(FriendsStore.self) private var friends
 
     @State private var showEditor = false
@@ -429,21 +428,12 @@ struct ProfileDetailView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 24) {
-                header
-
-                if !store.userProfile.bio.trimmingCharacters(in: .whitespaces).isEmpty {
-                    Text(verbatim: store.userProfile.bio)
-                        .font(.app(.body))
-                        .foregroundStyle(.primary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(16)
-                        .glassEffect(.regular, in: .rect(cornerRadius: 20))
-                }
-
-                statsCard
-
-                detailsCard
+            // Photo, name, bio, the counts and the money are one hero unit rather than
+            // four separately-boxed cards with 24pt between them — the old layout put
+            // 16pt of card padding on either side of every gap, which read as windows
+            // stacked inside windows.
+            VStack(spacing: 18) {
+                heroCard
 
                 FriendsSection { token in
                     viewingProfile = SharedProfileLink(token: token)
@@ -560,93 +550,64 @@ struct ProfileDetailView: View {
         return Image(uiImage: uiImage)
     }
 
-    private var header: some View {
-        VStack(spacing: 12) {
+    /// Identity and the numbers behind it, in one card: photo, name, birthday, bio, the
+    /// four counts, and where the user stands on money. The money is `homeTotals`, the
+    /// same figures the Trips tab reports, in the user's home currency.
+    ///
+    /// The counts are a flat strip separated by hairlines, not four tinted tiles. Tiles
+    /// drew their own rounded background inside this card's, which was the one place in
+    /// the app nesting a surface directly inside another surface.
+    private var heroCard: some View {
+        let stats = stats
+        return VStack(spacing: 14) {
             // Tapping your own photo is the expected way into the editor; it used to be
             // inert, with Edit in the toolbar as the only route.
             Button { showEditor = true } label: {
-                AvatarView(person: store.currentUser, imageData: store.profileImageData, size: 110)
+                AvatarView(person: store.currentUser, imageData: store.profileImageData, size: 88)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Profile photo")
             .accessibilityHint("Opens profile editing")
 
-            // Split rather than a ternary inside one `Text`: the placeholder is a key to
-            // translate, the name is user text to render as typed.
-            Group {
-                if store.currentUser.name.isEmpty {
-                    Text("TripSplit User")
-                } else {
-                    Text(verbatim: store.currentUser.name)
+            VStack(spacing: 4) {
+                // Split rather than a ternary inside one `Text`: the placeholder is a key
+                // to translate, the name is user text to render as typed.
+                Group {
+                    if store.currentUser.name.isEmpty {
+                        Text("TripSplit User")
+                    } else {
+                        Text(verbatim: store.currentUser.name)
+                    }
+                }
+                .font(.app(.title2, .bold))
+
+                // Birthday was a full row in its own card; as a caption under the name it
+                // costs one line instead of a card, and reads as part of the identity.
+                if let dob = store.userProfile.dateOfBirth {
+                    Label {
+                        Text(verbatim: dob.formatted(date: .abbreviated, time: .omitted))
+                    } icon: {
+                        Image(systemName: "birthday.cake.fill")
+                    }
+                    .font(.app(.caption))
+                    .foregroundStyle(.secondary)
+                }
+
+                if !store.userProfile.bio.trimmingCharacters(in: .whitespaces).isEmpty {
+                    Text(verbatim: store.userProfile.bio)
+                        .font(.app(.subheadline))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(3)
+                        .padding(.top, 4)
                 }
             }
-                .font(.app(.title, .bold))
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 8)
-    }
 
-    private var detailsCard: some View {
-        VStack(spacing: 0) {
-            if let dob = store.userProfile.dateOfBirth {
-                detailRow(icon: "birthday.cake.fill", color: Color(hex: 0xEC4899), title: "Birthday",
-                          value: dob.formatted(date: .long, time: .omitted))
-            }
-            detailRow(icon: "suitcase.fill", color: Theme.accent, title: "Trips",
-                      value: "\(myTrips.count)")
-            detailRow(icon: "mappin.and.ellipse", color: Theme.positive, title: "Places visited",
-                      value: "\(visitedPlaces.count)", showsDivider: auth.email != nil)
-            // Demoted from the hero, where it sat directly under the name: it is only
-            // ever shown to the account holder, so it doesn't earn that placement.
-            if let email = auth.email {
-                detailRow(icon: "envelope.fill", color: Color(hex: 0x3B82F6), title: "Email",
-                          value: email, showsDivider: false)
-            }
-        }
-        .padding(.horizontal, 16)
-        .glassEffect(.regular, in: .rect(cornerRadius: 20))
-    }
-
-    /// Countries, places, trips and days away, plus what the trips have cost and where
-    /// the user stands with everyone. The money is `homeTotals`, the same figures the
-    /// Trips tab reports, in the user's home currency.
-    private var statsCard: some View {
-        let stats = stats
-        return VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 12) {
-                statTile(value: "\(stats.countries)", label: "Countries", icon: "globe.americas.fill",
-                         color: Theme.accent)
-                statTile(value: "\(stats.places)", label: "Places", icon: "mappin.and.ellipse",
-                         color: Theme.positive)
-            }
-            HStack(spacing: 12) {
-                statTile(value: "\(stats.trips)", label: "Trips", icon: "suitcase.fill",
-                         color: Color(hex: 0x8B5CF6))
-                statTile(value: "\(stats.days)", label: "Days away", icon: "calendar",
-                         color: Color(hex: 0xEC4899))
-            }
+            statStrip(stats)
 
             Divider()
 
-            HStack {
-                Text("Total spent")
-                    .font(.app(.subheadline))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text(verbatim: formattedMoney(stats.spent, stats.currency))
-                    .font(.app(.title3, .bold))
-                    .monospacedDigit()
-            }
-
-            // A one-line standing across every trip. The Trips tab owns the full
-            // balance card (budgets, per-trip breakdown); this is the summary only.
-            if stats.owed > 0.005 || stats.owe > 0.005 {
-                HStack(spacing: 16) {
-                    balanceLeg(title: "You're owed", amount: stats.owed, color: Theme.positive)
-                    Divider().frame(height: 32)
-                    balanceLeg(title: "You owe", amount: stats.owe, color: Theme.negative)
-                }
-            }
+            moneyStrip(stats)
 
             if !milestones(for: stats).isEmpty {
                 FlowLayout(spacing: 8) {
@@ -658,41 +619,74 @@ struct ProfileDetailView: View {
                             .background(Theme.accent.opacity(0.15), in: .capsule)
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        .frame(maxWidth: .infinity)
         .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+        .glassEffect(.regular, in: .rect(cornerRadius: 24))
     }
 
-    private func statTile(value: String, label: LocalizedStringKey, icon: String, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Image(systemName: icon)
-                .font(.app(.subheadline, .semibold))
-                .foregroundStyle(color)
+    private func statStrip(_ stats: ProfileStats) -> some View {
+        HStack(spacing: 0) {
+            statColumn(value: "\(stats.countries)", label: "Countries")
+            stripDivider
+            statColumn(value: "\(stats.places)", label: "Places")
+            stripDivider
+            statColumn(value: "\(stats.trips)", label: "Trips")
+            stripDivider
+            statColumn(value: "\(stats.days)", label: "Days away")
+        }
+    }
+
+    /// Spent, owed and owing side by side. All three legs are always shown so the strip
+    /// keeps the same shape as the counts above it — the Trips tab owns the full balance
+    /// card (budgets, per-trip breakdown); this is the standing only.
+    private func moneyStrip(_ stats: ProfileStats) -> some View {
+        HStack(spacing: 0) {
+            moneyColumn(label: "Spent", amount: stats.spent, color: .primary)
+            stripDivider
+            moneyColumn(label: "You're owed", amount: stats.owed, color: Theme.positive)
+            stripDivider
+            moneyColumn(label: "You owe", amount: stats.owe, color: Theme.negative)
+        }
+    }
+
+    private var stripDivider: some View {
+        Divider().frame(height: 28)
+    }
+
+    private func statColumn(value: String, label: LocalizedStringKey) -> some View {
+        VStack(spacing: 2) {
             Text(verbatim: value)
-                .font(.app(.title2, .bold))
+                .font(.app(.title3, .bold))
                 .monospacedDigit()
             Text(label)
-                .font(.app(.caption))
+                .font(.app(.caption2))
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(color.opacity(0.10), in: .rect(cornerRadius: 14))
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
     }
 
-    private func balanceLeg(title: LocalizedStringKey, amount: Double, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-                .font(.app(.caption))
-                .foregroundStyle(.secondary)
+    private func moneyColumn(label: LocalizedStringKey, amount: Double, color: Color) -> some View {
+        VStack(spacing: 2) {
             Text(verbatim: formattedMoney(amount, displayCurrency))
                 .font(.app(.headline))
                 .foregroundStyle(color)
                 .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(label)
+                .font(.app(.caption2))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
     }
 
     /// Milestones the numbers have already earned. English keys the catalog localizes.
@@ -718,7 +712,7 @@ struct ProfileDetailView: View {
     private var travelMapCard: some View {
         let places = mappedPlaces
         if !places.isEmpty {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 10) {
                 Text("Your map")
                     .font(.app(.title3, .bold))
 
@@ -760,7 +754,7 @@ struct ProfileDetailView: View {
         let mapPlaces = store.userProfile.savedMapPlaces
         let destinations = savedDestinations
         if !mapPlaces.isEmpty || !destinations.isEmpty {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 10) {
                 Text("Saved")
                     .font(.app(.title3, .bold))
 
@@ -797,27 +791,9 @@ struct ProfileDetailView: View {
         }
     }
 
-    private func detailRow(icon: String, color: Color, title: LocalizedStringKey, value: String, showsDivider: Bool = true) -> some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 14) {
-                SettingsIconBadge(icon: icon, color: color)
-                Text(title)
-                    .font(.app(.body))
-                Spacer()
-                Text(verbatim: value)
-                    .font(.app(.body))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            .padding(.vertical, 14)
-            if showsDivider { Divider() }
-        }
-    }
-
     @ViewBuilder
     private var placesSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 10) {
             Text("Where I've been")
                 .font(.app(.title3, .bold))
 
@@ -842,7 +818,7 @@ struct ProfileDetailView: View {
 
     @ViewBuilder
     private var tripsSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 10) {
             Text("My trips")
                 .font(.app(.title3, .bold))
 

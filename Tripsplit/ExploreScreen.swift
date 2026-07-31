@@ -319,10 +319,15 @@ struct RecScreen: View {
                 // them — and they cost ~110pt of permanent height on a browse screen
                 // whose whole point is the imagery.
                 LazyVStack(alignment: .leading, spacing: 24) {
-                    exploreIntroduction
-                    searchBar
-                    filterBar
-                    activeFilterTokens
+                    // Header, field and chips are one unit at 12pt, not four sections at
+                    // 24 — the controls belong together, and the gap is reserved for the
+                    // boundaries between actual content sections.
+                    VStack(alignment: .leading, spacing: 12) {
+                        exploreHeader
+                        searchBar
+                        filterBar
+                        activeFilterTokens
+                    }
 
                     // Each of these derived collections is computed once here and handed
                     // down. Read as properties from inside the section builders, they
@@ -332,41 +337,24 @@ struct RecScreen: View {
                     } else if isSearching {
                         searchResultsList(searchResults)
                     } else {
+                        // A returning user's own plans come before the editorial page.
                         if hasContinueContent { continueSection }
 
                         if isFiltering {
                             matchingTripsSection(filteredDestinations)
                         } else {
-                            // Personalized first, then timely, then editorial. Each rail
-                            // hides itself when it has nothing to say, so a new account
-                            // still gets the plain editorial screen.
-                            if let recommendations {
+                            // Three sizes, in order: one full-width hero, then rails of
+                            // medium cards, then the compact grid. The page used to be
+                            // five near-identical carousels stacked on the directory,
+                            // which gave it no shape and nothing to anchor on.
+                            featuredHero
+                            ForEach(collectionRails) { rail in
                                 collectionSection(
-                                    title: "Because you saved \(recommendations.seed.city)",
-                                    subtitle: "Guides with a similar feel.",
-                                    destinations: recommendations.matches
+                                    title: rail.title,
+                                    subtitle: rail.subtitle,
+                                    destinations: rail.destinations
                                 )
                             }
-                            if !seasonalPicks.isEmpty {
-                                collectionSection(
-                                    title: "Best in \(currentMonthName)",
-                                    subtitle: "Good weather, without the peak-season crowds.",
-                                    destinations: seasonalPicks
-                                )
-                            }
-                            featuredSection
-                            if !budgetMatches.isEmpty {
-                                collectionSection(
-                                    title: "Fits your usual budget",
-                                    subtitle: "Around what you've budgeted on your own trips.",
-                                    destinations: budgetMatches
-                                )
-                            }
-                            collectionSection(
-                                title: "Food cities",
-                                subtitle: "Trips worth planning around the next meal.",
-                                destinations: Destination.foodCities
-                            )
                             destinationDirectory(continentSections)
                         }
                     }
@@ -528,31 +516,33 @@ struct RecScreen: View {
         .accessibilityLabel("Appearance: \(appearance.label)")
     }
 
-    /// The screen title sits directly on the app backdrop — an Apple HIG large
-    /// title, not a boxed hero — so Explore opens flat and uncluttered instead of
-    /// a card wrapping a title wrapping more cards.
-    private var exploreIntroduction: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("CURATED TRAVEL GUIDES", systemImage: "sparkles")
-                .font(.app(.caption2, .bold))
-                .foregroundStyle(Theme.accent)
+    /// The landing header. Explore is the tab the app opens on, so the top of it has to
+    /// read as a home screen: who's here, one question, and the way to act on it — in
+    /// one row. The previous version spent ~180pt before any content on an eyebrow
+    /// label, a 42pt "Explore" (a word already in the tab bar), a subtitle and a
+    /// full-width button, which is why the screen opened on chrome instead of trips.
+    private var exploreHeader: some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: greeting)
+                    .font(.app(.subheadline))
+                    .foregroundStyle(.secondary)
 
-            Text("Explore")
-                .font(.app(size: 42, weight: .bold))
-                .accessibilityAddTraits(.isHeader)
+                Text("Where to next?")
+                    .font(.app(.title, .bold))
+                    .accessibilityAddTraits(.isHeader)
+            }
 
-            Text("Find a place you’ll love, then shape it into a trip that’s completely yours.")
-                .font(.app(.subheadline))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.trailing, 8)
+            Spacer(minLength: 12)
 
+            // Compact rather than a full-width bar: it keeps the app's primary action
+            // visible without costing a row of its own.
             Button { requireAccount(.createItinerary(prefill: nil)) } label: {
                 Label("Create a trip", systemImage: "plus")
-                    .font(.app(.headline))
+                    .font(.app(.subheadline, .semibold))
                     .foregroundStyle(Theme.onAccent)
-                    .frame(maxWidth: .infinity)
-                    .frame(minHeight: 52)
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 40)
                     .contentShape(.capsule)
             }
             .buttonStyle(.plain)
@@ -564,10 +554,27 @@ struct RecScreen: View {
                 ),
                 in: .capsule
             )
-            .padding(.top, 6)
             .accessibilityLabel("Create your own trip")
             .accessibilityHint("Opens the trip builder")
         }
+    }
+
+    /// Time-of-day greeting, with the user's first name when the profile has one.
+    ///
+    /// The phrase is resolved *before* the name is appended, then rendered verbatim —
+    /// interpolating the name into the `Text` would build a `LocalizedStringKey` that
+    /// matches no catalog entry, so the greeting itself would stop translating.
+    /// `String(localized:)` reads through the bundle `LocalizationManager` swizzles, so
+    /// it honors the in-app language switch (same pattern as `DestinationRow`).
+    private var greeting: String {
+        let hour = Calendar.current.component(.hour, from: .now)
+        let phrase = hour < 12
+            ? "Good morning"
+            : (hour < 18 ? "Good afternoon" : "Good evening")
+        let localized = String(localized: String.LocalizationValue(phrase))
+        let first = store.currentUser.name
+            .split(separator: " ").first.map(String.init) ?? ""
+        return first.isEmpty ? localized : "\(localized), \(first)"
     }
 
     private var continueSection: some View {
@@ -602,34 +609,80 @@ struct RecScreen: View {
         }
     }
 
-    private var featuredSection: some View {
-        let savedSet = savedIDs
-        return VStack(alignment: .leading, spacing: 14) {
-            sectionTitle("Editor picks", subtitle: "Complete guides with stops, food picks, and a realistic budget.")
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 14) {
-                    ForEach(adventures) { destination in
-                        NavigationLink(value: destination.id) {
-                            AdventureCard(
-                                destination: destination,
-                                isSaved: savedSet.contains(destination.id),
-                                onToggleSave: { requireAccount(.save(destinationID: destination.id)) },
-                                showsCTA: true
-                            )
-                            // Inset so the next card peeks in from the edge. At exactly
-                            // full width there was no visual cue that the carousel had
-                            // more than one card in it.
-                            .containerRelativeFrame(.horizontal) { width, _ in width - 44 }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .scrollTargetLayout()
-                .padding(.horizontal)
+    /// The single full-width card the page opens on: the top editor pick, at hero size.
+    /// One anchor beats a carousel of near-full-width cards that all had to be swiped
+    /// past before the screen said anything else.
+    @ViewBuilder
+    private var featuredHero: some View {
+        if let hero = adventures.first {
+            NavigationLink(value: hero.id) {
+                AdventureCard(
+                    destination: hero,
+                    isSaved: savedIDs.contains(hero.id),
+                    onToggleSave: { requireAccount(.save(destinationID: hero.id)) },
+                    showsCTA: true
+                )
             }
-            .scrollTargetBehavior(.viewAligned)
-            .padding(.horizontal, -16)
+            .buttonStyle(.plain)
         }
+    }
+
+    /// One rail of guides under the hero.
+    private struct ExploreRail: Identifiable {
+        let id: String
+        let title: LocalizedStringKey
+        let subtitle: LocalizedStringKey
+        let destinations: [Destination]
+    }
+
+    /// The rails shown under the hero, best-first — personalized, then timely, then
+    /// editorial. Only the top two are used: every candidate renders as the same
+    /// horizontal rail of the same card, so running all five in a row made the page
+    /// read as one repeated element rather than a sequence of sections. Whatever is
+    /// dropped is still reachable in the directory grid below.
+    private var collectionRails: [ExploreRail] {
+        var rails: [ExploreRail] = []
+        if let recommendations {
+            rails.append(ExploreRail(
+                id: "similar",
+                title: "Because you saved \(recommendations.seed.city)",
+                subtitle: "Guides with a similar feel.",
+                destinations: recommendations.matches
+            ))
+        }
+        if !seasonalPicks.isEmpty {
+            rails.append(ExploreRail(
+                id: "seasonal",
+                title: "Best in \(currentMonthName)",
+                subtitle: "Good weather, without the peak-season crowds.",
+                destinations: seasonalPicks
+            ))
+        }
+        if !budgetMatches.isEmpty {
+            rails.append(ExploreRail(
+                id: "budget",
+                title: "Fits your usual budget",
+                subtitle: "Around what you've budgeted on your own trips.",
+                destinations: budgetMatches
+            ))
+        }
+        // The hero is the first editor pick, so this rail carries the rest of them.
+        let remainingPicks = Array(adventures.dropFirst())
+        if !remainingPicks.isEmpty {
+            rails.append(ExploreRail(
+                id: "featured",
+                title: "Editor picks",
+                subtitle: "Complete guides with stops, food picks, and a realistic budget.",
+                destinations: remainingPicks
+            ))
+        }
+        rails.append(ExploreRail(
+            id: "food",
+            title: "Food cities",
+            subtitle: "Trips worth planning around the next meal.",
+            destinations: Destination.foodCities
+        ))
+        return Array(rails.prefix(2))
     }
 
     private func collectionSection(
@@ -747,25 +800,6 @@ struct RecScreen: View {
     private var filterBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                Button {
-                    isSearchFocused = false
-                    showFilterSheet = true
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "line.3.horizontal.decrease")
-                        Text(activeFilterCount > 0 ? "Filters · \(activeFilterCount)" : "Filters")
-                    }
-                    .font(.app(.subheadline, .semibold))
-                    .foregroundStyle(activeFilterCount > 0 ? Theme.onAccent : .primary)
-                    .padding(.horizontal, 14)
-                    .frame(minHeight: 44)
-                }
-                .buttonStyle(.plain)
-                .glassEffect(
-                    activeFilterCount > 0 ? .regular.tint(Theme.accent).interactive() : .regular.interactive(),
-                    in: .capsule
-                )
-
                 ForEach(ExploreQuickFilter.allCases) { filter in
                     let isOn = isQuickFilterOn(filter)
                     Button {
@@ -885,9 +919,33 @@ struct RecScreen: View {
                 .foregroundStyle(Theme.accent)
                 .buttonStyle(.plain)
                 .transition(.move(edge: .trailing).combined(with: .opacity))
+            } else {
+                filterButton
             }
         }
         .animation(.snappy(duration: 0.2), value: isSearchFocused)
+    }
+
+    /// Filters live next to the field they narrow, rather than as the first chip in the
+    /// row below it. The chip row is the *quick* presets only, so the two aren't two
+    /// different-looking doors to the same thing.
+    private var filterButton: some View {
+        Button {
+            isSearchFocused = false
+            showFilterSheet = true
+        } label: {
+            Image(systemName: "line.3.horizontal.decrease")
+                .font(.app(.subheadline, .semibold))
+                .foregroundStyle(activeFilterCount > 0 ? Theme.onAccent : .primary)
+                .frame(width: 48, height: 48)
+                .contentShape(.circle)
+        }
+        .buttonStyle(.plain)
+        .glassEffect(
+            activeFilterCount > 0 ? .regular.tint(Theme.accent).interactive() : .regular.interactive(),
+            in: .circle
+        )
+        .accessibilityLabel(activeFilterCount > 0 ? "Filters · \(activeFilterCount)" : "Filters")
     }
 
     /// What the focused-but-empty search field offers instead of a blank screen:
@@ -1615,43 +1673,80 @@ struct AdventureCard: View {
     }
 }
 
-/// Photo-forward card for the country rails: full-bleed image, glass tag chips,
-/// city name over a bottom scrim, and a glass price pill — Tripadvisor/Viator style.
+/// The rail card: photo on top, facts underneath.
+///
+/// Everything this card said used to be white text over an uncontrolled photo — the
+/// city and "5 days · $$", and nothing else. That is pretty, but it never answers the
+/// question someone browsing is actually asking, which is what they get if they open
+/// it. The strip below the image carries the length, the total budget, the stop count
+/// and two of the stops *by name*, on a readable surface.
 struct CountryTripCard: View {
     let destination: Destination
     let isSaved: Bool
     let onToggleSave: () -> Void
 
-    @ScaledMetric(relativeTo: .body) private var cardWidth: CGFloat = 240
-    @ScaledMetric(relativeTo: .body) private var cardHeight: CGFloat = 300
+    @ScaledMetric(relativeTo: .body) private var cardWidth: CGFloat = 250
+    @ScaledMetric(relativeTo: .body) private var cardHeight: CGFloat = 274
+
+    /// Two stops by name, plus a count of everything else in the guide. Names are what
+    /// distinguish a real itinerary from a stock photo with a price on it.
+    private var stopPreview: String? {
+        let names = destination.places.prefix(2).map(\.name)
+        guard !names.isEmpty else { return nil }
+        let remainder = destination.stops - names.count
+        return remainder > 0
+            ? names.joined(separator: " · ") + " · +\(remainder)"
+            : names.joined(separator: " · ")
+    }
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
+        VStack(alignment: .leading, spacing: 0) {
             DestinationPhoto(destination: destination, symbolSize: 64)
+                .frame(height: 148)
+                .clipShape(.rect(
+                    topLeadingRadius: Theme.cardRadius,
+                    topTrailingRadius: Theme.cardRadius
+                ))
+                .overlay(alignment: .topTrailing) {
+                    HeartButton(isSaved: isSaved, action: onToggleSave)
+                        .padding(8)
+                }
 
-            LinearGradient(
-                colors: [.black.opacity(0.2), .clear, .clear, .black.opacity(0.78)],
-                startPoint: .top, endPoint: .bottom
-            )
+            VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 1) {
+                    // City is a proper noun; the country goes through the catalog, the
+                    // way the grid tiles already do it.
+                    Text(verbatim: destination.city)
+                        .font(.app(.headline))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    Text(LocalizedStringKey(destination.country))
+                        .font(.app(.caption))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text(destination.city)
-                    .font(.app(.title2, .bold))
-                    .foregroundStyle(.white)
+                Text("\(destination.days) days · \(destination.price) · \(destination.stops) stops")
+                    .font(.app(.caption, .medium))
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                Text("\(destination.days) days · \(destination.price)")
-                    .font(.app(.subheadline, .medium))
-                    .foregroundStyle(.white.opacity(0.9))
+                    .minimumScaleFactor(0.8)
+
+                if let stopPreview {
+                    Text(verbatim: stopPreview)
+                        .font(.app(.caption2))
+                        .foregroundStyle(Theme.accent)
+                        .lineLimit(1)
+                }
             }
-            .padding(14)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Spacer(minLength: 0)
         }
-        .frame(width: min(cardWidth, 320), height: min(cardHeight, 400))
-        .overlay(alignment: .topTrailing) {
-            HeartButton(isSaved: isSaved, action: onToggleSave)
-                .padding(10)
-        }
-        .clipShape(.rect(cornerRadius: Theme.cardRadius))
+        .frame(width: min(cardWidth, 320), height: min(cardHeight, 360), alignment: .top)
+        .readableSurface(cornerRadius: Theme.cardRadius, elevated: true)
     }
 }
 
@@ -1682,9 +1777,13 @@ struct MatchingTripCard: View {
                 .font(.app(.caption))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-            Text("\(destination.days) days · \(destination.price)")
+            // Same meta line as the rail cards, so a guide reads the same wherever it
+            // appears — the stop count was missing only here.
+            Text("\(destination.days) days · \(destination.price) · \(destination.stops) stops")
                 .font(.app(.caption, .medium))
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
         }
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
