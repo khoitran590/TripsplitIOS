@@ -271,6 +271,12 @@ struct VisitedPlace: Identifiable {
     let name: String
     let date: Date?
     var id: String { name.lowercased() }
+
+    /// The place without its region suffix — "Tokyo" from "Tokyo, Japan". What the stamp
+    /// prints around its rim, and what the share card captions it with.
+    var shortName: String {
+        name.split(separator: ",").first.map { $0.trimmingCharacters(in: .whitespaces) } ?? name
+    }
 }
 
 /// The aggregate numbers on the profile's stats card.
@@ -556,9 +562,12 @@ struct ProfileDetailView: View {
             name: store.currentUser.name.isEmpty ? "TripSplit User" : store.currentUser.name,
             imageData: store.profileImageData,
             stats: stats,
-            places: Array(visitedPlaces.prefix(3))
+            places: visitedPlaces
         )
-        let renderer = ImageRenderer(content: card)
+        // Pinned to light: the card is a printed object — cream stamps on the accent
+        // gradient — and the renderer would otherwise resolve its adaptive colors against
+        // whatever appearance the app happens to be in.
+        let renderer = ImageRenderer(content: card.environment(\.colorScheme, .light))
         renderer.scale = 3
         guard let uiImage = renderer.uiImage else { return nil }
         return Image(uiImage: uiImage)
@@ -1653,8 +1662,15 @@ struct StampArcText: View {
 /// A round travel stamp for a visited place, in the spirit of a Japanese eki (station)
 /// stamp: a double-ring frame with the category curved along the top and the place name
 /// along the bottom, a single ink per place, and an illustrated emblem in the middle.
-struct VisitedPlaceCard: View {
+///
+/// Every metric is expressed against the 150pt reference drawing, so a stamp asked for at
+/// a smaller `size` is *drawn* at that size rather than scaled down: the curved wording
+/// stays sharp, and the view occupies exactly `size` in layout (a `scaleEffect`ed view
+/// keeps its unscaled footprint, which is what used to make the share card's stamps ride
+/// up over the row above them).
+struct PlaceStampBadge: View {
     let place: VisitedPlace
+    var size: CGFloat = 150
     @Environment(\.locale) private var locale
 
     /// Everything derived from the place name is resolved once, in `init`, rather than
@@ -1670,8 +1686,9 @@ struct VisitedPlaceCard: View {
     /// randomized on every launch.
     private let sceneSeed: UInt64
 
-    init(place: VisitedPlace) {
+    init(place: VisitedPlace, size: CGFloat = 150) {
         self.place = place
+        self.size = size
         theme = PlaceTheme.inferred(from: place.name)
         landmark = PlaceLandmark.matching(place.name)
         var seed: UInt64 = 5381
@@ -1704,27 +1721,62 @@ struct VisitedPlaceCard: View {
         return Bundle.main.localizedString(forKey: key, value: key, table: nil).uppercased()
     }
 
-    /// The place name without its region suffix — curved along the bottom.
-    private var shortName: String {
-        place.name.split(separator: ",").first.map { $0.trimmingCharacters(in: .whitespaces) } ?? place.name
+    /// A stable per-place tilt (±5°) so a row of stamps looks hand-stuck.
+    private var tilt: Double { Double(sceneSeed % 11) - 5 }
+
+    /// This stamp's size against the 150pt drawing every metric below is tuned for.
+    private var scale: CGFloat { size / 150 }
+
+    /// The stamp: paper disc, double ring, curved wording, a centred emblem, and two
+    /// small diamonds where the top and bottom arcs meet.
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(paper)
+                .overlay(Circle().strokeBorder(ink, lineWidth: 2.5 * scale))
+                .overlay(Circle().inset(by: 25 * scale).strokeBorder(ink.opacity(0.9), lineWidth: scale))
+                .shadow(color: Theme.elevatedShadow, radius: 6 * scale, x: 0, y: 4 * scale)
+
+            PlaceSceneView(theme: theme, landmark: landmark, tint: ink, paper: paper, seed: sceneSeed)
+                .frame(width: 82 * scale, height: 82 * scale)
+                .clipShape(Circle())
+
+            StampArcText(text: categoryText, color: ink, fontSize: 9.5 * scale,
+                         atBottom: false, letterSpacing: 2.2 * scale)
+            StampArcText(text: place.shortName.uppercased(), color: ink, fontSize: 10.5 * scale,
+                         atBottom: true, letterSpacing: 2.2 * scale)
+
+            // Small diamonds at 3 and 9 o'clock separating the two runs of text.
+            ForEach([1.0, -1.0], id: \.self) { side in
+                Rectangle()
+                    .fill(ink)
+                    .frame(width: 4 * scale, height: 4 * scale)
+                    .rotationEffect(.degrees(45))
+                    .offset(x: side * 61.5 * scale)
+            }
+        }
+        .frame(width: size, height: size)
+        .rotationEffect(.degrees(tilt))
+        // The stamp's wording is drawn glyph-by-glyph into a Canvas, so VoiceOver
+        // saw nothing of the category it prints around the rim.
+        .accessibilityElement()
+        .accessibilityLabel(Text(verbatim: "\(categoryText), \(place.shortName)"))
     }
+}
+
+/// A visited place on the profile's "Where I've been" rail: its stamp, the full place
+/// name, and the month the trip there was.
+struct VisitedPlaceCard: View {
+    let place: VisitedPlace
 
     private var monthYear: String? {
         place.date?.formatted(.dateTime.month(.wide).year())
     }
 
-    /// A stable per-place tilt (±5°) so the rail looks hand-stuck.
-    private var tilt: Double { Double(sceneSeed % 11) - 5 }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            badge
-                .rotationEffect(.degrees(tilt))
+            PlaceStampBadge(place: place)
                 .frame(width: 168, height: 176)
-                // The stamp's wording is drawn glyph-by-glyph into a Canvas, so VoiceOver
-                // saw nothing of the category it prints around the rim.
-                .accessibilityElement()
-                .accessibilityLabel(Text(verbatim: "\(categoryText), \(shortName)"))
 
             Text(verbatim: place.name)
                 .font(.app(.subheadline, .semibold))
@@ -1736,35 +1788,6 @@ struct VisitedPlaceCard: View {
         }
         .frame(width: 168, alignment: .leading)
     }
-
-    /// The stamp: paper disc, double ring, curved wording, a centred emblem, and two
-    /// small diamonds where the top and bottom arcs meet.
-    private var badge: some View {
-        ZStack {
-            Circle()
-                .fill(paper)
-                .overlay(Circle().strokeBorder(ink, lineWidth: 2.5))
-                .overlay(Circle().inset(by: 25).strokeBorder(ink.opacity(0.9), lineWidth: 1))
-                .shadow(color: Theme.elevatedShadow, radius: 6, x: 0, y: 4)
-
-            PlaceSceneView(theme: theme, landmark: landmark, tint: ink, paper: paper, seed: sceneSeed)
-                .frame(width: 82, height: 82)
-                .clipShape(Circle())
-
-            StampArcText(text: categoryText, color: ink, fontSize: 9.5, atBottom: false)
-            StampArcText(text: shortName.uppercased(), color: ink, fontSize: 10.5, atBottom: true)
-
-            // Small diamonds at 3 and 9 o'clock separating the two runs of text.
-            ForEach([1.0, -1.0], id: \.self) { side in
-                Rectangle()
-                    .fill(ink)
-                    .frame(width: 4, height: 4)
-                    .rotationEffect(.degrees(45))
-                    .offset(x: side * 61.5)
-            }
-        }
-        .frame(width: 150, height: 150)
-    }
 }
 
 /// Wraps a rendered share card so it can drive an `.sheet(item:)` presentation.
@@ -1773,73 +1796,310 @@ struct ShareCardItem: Identifiable {
     let image: Image
 }
 
-/// The profile rendered as a picture: a travel card someone can post anywhere,
-/// unlike the `tripsplit://` link, which only does anything for people who already
-/// have the app.
+/// The profile rendered as a picture: a passport page someone can post anywhere, unlike
+/// the `tripsplit://` link, which only does anything for people who already have the app.
+/// Wordmark, portrait, the four counts, the user's own travel stamps and a perforated
+/// footer, on the theme's accent gradient.
 ///
-/// Deliberately built from gradients and solid fills — `ImageRenderer` cannot
-/// rasterize glass or material backgrounds, which come out empty.
+/// Deliberately built from gradients, shapes and `Canvas` — `ImageRenderer` cannot
+/// rasterize glass, materials or blurs, which come out empty. Nothing is shrunk with
+/// `scaleEffect` either: a scaled view keeps its *unscaled* layout footprint, which is
+/// what made the old card's stamps overlap the stats strip.
 struct ProfileShareCard: View {
     let name: String
     let imageData: Data?
     let stats: ProfileStats
+    /// Every visited place: the first three are stamped, the rest still count toward the
+    /// flag row and the "+n more" line.
     let places: [VisitedPlace]
+
+    /// The card's fixed width; every metric below is tuned against it. `ImageRenderer`
+    /// rasterizes at 3x, so the shared picture is 1140px wide.
+    private let width: CGFloat = 380
+    /// The stamps' paper, so the portrait is printed on the same stock as they are.
+    private let paper = Color(hex: 0xFCFAF3)
 
     private var initials: String {
         String(name.split(separator: " ").prefix(2).compactMap(\.first)).uppercased()
     }
 
-    var body: some View {
-        VStack(spacing: 20) {
-            VStack(spacing: 12) {
-                ProfileAvatar(imageData: imageData, initials: initials, size: 88)
-                Text(verbatim: name)
-                    .font(.app(.title2, .bold))
-                    .foregroundStyle(.white)
-            }
+    private var stamped: [VisitedPlace] { Array(places.prefix(3)) }
 
-            HStack(spacing: 0) {
-                shareStat(value: "\(stats.countries)", label: "Countries")
-                shareStat(value: "\(stats.places)", label: "Places")
-                shareStat(value: "\(stats.trips)", label: "Trips")
-                shareStat(value: "\(stats.days)", label: "Days")
-            }
-            .padding(.vertical, 14)
-            .background(.white.opacity(0.12), in: .rect(cornerRadius: 18))
-
-            if !places.isEmpty {
-                HStack(spacing: 10) {
-                    ForEach(places) { place in
-                        VisitedPlaceCard(place: place)
-                            .scaleEffect(0.62, anchor: .top)
-                            .frame(width: 104, height: 122)
-                    }
-                }
-            }
-
-            Text(verbatim: "TripSplit")
-                .font(.app(.subheadline, .bold))
-                .foregroundStyle(.white.opacity(0.7))
+    /// Flags for the countries behind the places, in the order they were visited — a
+    /// passport page reads as one at a glance, before any of the numbers are.
+    private var flags: [String] {
+        var codes: [String] = []
+        for place in places {
+            guard let code = PlaceRegion.isoCode(forRegionIn: place.name),
+                  !codes.contains(code) else { continue }
+            codes.append(code)
         }
-        .padding(28)
-        .frame(width: 360)
-        .background {
-            LinearGradient(colors: [Theme.accent, Theme.accentSecondary],
-                           startPoint: .topLeading, endPoint: .bottomTrailing)
+        return codes.prefix(6).map { code in
+            String(String.UnicodeScalarView(code.unicodeScalars.compactMap {
+                Unicode.Scalar(127_397 + $0.value)
+            }))
         }
     }
 
-    private func shareStat(value: String, label: LocalizedStringKey) -> some View {
-        VStack(spacing: 3) {
-            Text(verbatim: value)
-                .font(.app(.title3, .bold))
+    /// A document number, in the spirit of a passport. Derived from the name (djb2, the
+    /// same stable hash the stamps use) so re-sharing produces the same card.
+    private var serial: String {
+        var hash: UInt64 = 5381
+        for scalar in name.unicodeScalars { hash = hash &* 33 &+ UInt64(scalar.value) }
+        return String(format: "%04d", hash % 10000)
+    }
+
+    var body: some View {
+        VStack(spacing: 22) {
+            header
+            hero
+            statsStrip
+            if !stamped.isEmpty { stampRow }
+            footer
+        }
+        .padding(.horizontal, 26)
+        .padding(.vertical, 24)
+        .frame(width: width)
+        .background { background }
+        // The hairline that turns a colored panel into a document page.
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .inset(by: 10)
+                .strokeBorder(.white.opacity(0.3), lineWidth: 1)
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Image("SplashLogo")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 20, height: 20)
+                .clipShape(.rect(cornerRadius: 6, style: .continuous))
+            Text(verbatim: "TripSplit")
+                .font(.app(.subheadline, .bold))
+                .foregroundStyle(.white)
+            Spacer()
+            Text("Travel passport")
+                .font(.app(.caption2, .semibold))
+                .textCase(.uppercase)
+                .tracking(1.4)
+                .foregroundStyle(.white.opacity(0.75))
+        }
+    }
+
+    private var hero: some View {
+        VStack(spacing: 14) {
+            portrait
+            Text(verbatim: name)
+                .font(.app(.title, .bold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.55)
+            subtitleChip
+        }
+    }
+
+    /// The photo, ringed the way a passport photo is framed. Drawn here rather than with
+    /// `ProfileAvatar` so the no-photo monogram falls back to stamp paper and the theme
+    /// accent, not that view's fixed indigo, which belongs to no other part of the card.
+    private var portrait: some View {
+        ZStack {
+            Circle()
+                .fill(.white.opacity(0.16))
+                .frame(width: 116, height: 116)
+            Circle()
+                .strokeBorder(.white.opacity(0.55), lineWidth: 2)
+                .frame(width: 106, height: 106)
+            Group {
+                if let imageData, let photo = UIImage(data: imageData) {
+                    Image(uiImage: photo)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    paper.overlay {
+                        Text(verbatim: initials)
+                            .font(.app(size: 34, weight: .bold))
+                            .foregroundStyle(Theme.accent)
+                    }
+                }
+            }
+            .frame(width: 94, height: 94)
+            .clipShape(.circle)
+        }
+    }
+
+    /// The countries as flags, or — when no place resolves to one — the month the card
+    /// was made, so the chip is never an empty pill.
+    private var subtitleChip: some View {
+        Group {
+            if flags.isEmpty {
+                Text(verbatim: Date.now.formatted(.dateTime.month(.wide).year()))
+                    .font(.app(.caption, .semibold))
+                    .foregroundStyle(.white.opacity(0.85))
+            } else {
+                HStack(spacing: 6) {
+                    ForEach(flags, id: \.self) { flag in
+                        Text(verbatim: flag).font(.app(size: 17))
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
+        .background(.white.opacity(0.18), in: .capsule)
+    }
+
+    private var statsStrip: some View {
+        HStack(spacing: 0) {
+            shareStat(stats.countries, "Countries")
+            statDivider
+            shareStat(stats.places, "Places")
+            statDivider
+            shareStat(stats.trips, "Trips")
+            statDivider
+            shareStat(stats.days, "Days")
+        }
+        .padding(.vertical, 16)
+        .background(.white.opacity(0.16), in: .rect(cornerRadius: 20))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .strokeBorder(.white.opacity(0.22), lineWidth: 1)
+        }
+    }
+
+    private var statDivider: some View {
+        Rectangle()
+            .fill(.white.opacity(0.22))
+            .frame(width: 1, height: 34)
+    }
+
+    private func shareStat(_ value: Int, _ label: LocalizedStringKey) -> some View {
+        VStack(spacing: 4) {
+            Text(verbatim: "\(value)")
+                .font(.app(.title2, .bold))
                 .foregroundStyle(.white)
                 .monospacedDigit()
             Text(label)
-                .font(.app(.caption2))
+                .font(.app(.caption2, .semibold))
+                .textCase(.uppercase)
+                .tracking(0.6)
                 .foregroundStyle(.white.opacity(0.75))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    /// Up to three stamps, captioned the way a passport page is annotated: the place
+    /// without its region, then when the trip was — or where it is, when it has no date.
+    private var stampRow: some View {
+        VStack(spacing: 10) {
+            HStack(alignment: .top, spacing: 8) {
+                ForEach(stamped) { place in
+                    VStack(spacing: 8) {
+                        PlaceStampBadge(place: place, size: 88)
+                        VStack(spacing: 2) {
+                            Text(verbatim: place.shortName)
+                                .font(.app(.caption, .semibold))
+                                .foregroundStyle(.white)
+                                .lineLimit(1)
+                                // Long park names ("Joshua Tree National Park") shrink to
+                                // fit their 104pt column rather than truncating.
+                                .minimumScaleFactor(0.6)
+                            Text(verbatim: caption(for: place))
+                                .font(.app(.caption2))
+                                .foregroundStyle(.white.opacity(0.7))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+            if places.count > stamped.count {
+                Text("+\(places.count - stamped.count) more")
+                    .font(.app(.caption2, .semibold))
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+        }
+    }
+
+    private func caption(for place: VisitedPlace) -> String {
+        if let date = place.date { return date.formatted(.dateTime.month(.abbreviated).year()) }
+        let region = PlaceRegion.regionWords(in: place.name).joined(separator: " ")
+        // A space, not "", so a captionless stamp still reserves the line and the row of
+        // stamps keeps one baseline.
+        return region.isEmpty ? " " : region
+    }
+
+    private var footer: some View {
+        VStack(spacing: 12) {
+            // A perforation, the way a ticket stub tears.
+            DashedRule()
+                .stroke(.white.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: [4, 5]))
+                .frame(height: 1)
+
+            HStack {
+                Text("Add me on TripSplit")
+                    .font(.app(.caption, .semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+                Spacer()
+                Text(verbatim: "NO. \(serial)")
+                    .font(.app(.caption2, .semibold))
+                    .monospacedDigit()
+                    .tracking(0.8)
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+        }
+    }
+
+    /// The theme gradient, a highlight behind the portrait, two outsized rings bleeding
+    /// off the corners and a faint dot grid for paper texture — printed-document depth
+    /// built only from what `ImageRenderer` can rasterize.
+    private var background: some View {
+        ZStack {
+            LinearGradient(colors: [Theme.accent, Theme.accentSecondary],
+                           startPoint: .topLeading, endPoint: .bottomTrailing)
+            RadialGradient(colors: [.white.opacity(0.28), .clear],
+                           center: UnitPoint(x: 0.5, y: 0.17), startRadius: 0, endRadius: 250)
+            LinearGradient(colors: [.clear, .black.opacity(0.2)],
+                           startPoint: .center, endPoint: .bottom)
+            Circle()
+                .strokeBorder(.white.opacity(0.1), lineWidth: 24)
+                .frame(width: 300, height: 300)
+                .offset(x: -160, y: -150)
+            Circle()
+                .strokeBorder(.white.opacity(0.08), lineWidth: 16)
+                .frame(width: 260, height: 260)
+                .offset(x: 165, y: 190)
+            dotGrid
+        }
+        .clipped()
+    }
+
+    private var dotGrid: some View {
+        Canvas { context, size in
+            let step: CGFloat = 15
+            let diameter: CGFloat = 1.8
+            for y in stride(from: step / 2, to: size.height, by: step) {
+                for x in stride(from: step / 2, to: size.width, by: step) {
+                    let dot = CGRect(x: x, y: y, width: diameter, height: diameter)
+                    context.fill(Path(ellipseIn: dot), with: .color(.white.opacity(0.07)))
+                }
+            }
+        }
+    }
+}
+
+/// A single horizontal rule, so it can be stroked with a dash pattern — stroking a
+/// `Rectangle` would dash all four sides.
+private struct DashedRule: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: 0, y: rect.midY))
+        path.addLine(to: CGPoint(x: rect.width, y: rect.midY))
+        return path
     }
 }
 

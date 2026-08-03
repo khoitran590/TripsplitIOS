@@ -71,6 +71,11 @@ fastlane/screenshots/**/*.png
 fastlane/test_output
 CLAUDE.md
 .agent/
-
+balance-card-ux-handoff.md
+explore-as-main-tab-redesign.md
+UX_UI_APP_STORE_READINESS.md
+SECURITY_APP_STORE_READINESS.md
+MapRoadmap.md
+REFACTOR_AND_PRODUCT_PLAN.md
 ## App secrets (local only, never commit)
 Tripsplit/Secrets.swift
