@@ -1,5 +1,96 @@
 import SwiftUI
 
+/// Advanced visual preferences live on one destination so the main Settings page
+/// stays task-oriented. Every preview uses semantic foregrounds and caps dock
+/// transparency at a level verified over map/photo content.
+struct AppearanceSettingsView: View {
+    @AppStorage("appearancePreference") private var appearance: AppearancePreference = .system
+    @AppStorage("navbarTransparency") private var dockTransparency = 0.0
+    @State private var themeManager = ThemeManager.shared
+    @State private var fontManager = FontManager.shared
+    @State private var showsFontPicker = false
+
+    var body: some View {
+        Form {
+            Section("Color mode") {
+                Picker("Appearance", selection: $appearance) {
+                    ForEach(AppearancePreference.allCases) { option in
+                        Label(option.label, systemImage: option.icon).tag(option)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
+            Section("Theme") {
+                ForEach(AppTheme.allCases) { theme in
+                    Button {
+                        withAnimation(.snappy) { themeManager.selection = theme }
+                    } label: {
+                        HStack(spacing: 12) {
+                            Circle()
+                                .fill(LinearGradient(colors: [theme.accent, theme.accentSecondary],
+                                                     startPoint: .topLeading, endPoint: .bottomTrailing))
+                                .frame(width: 36, height: 36)
+                            Text(verbatim: theme.label)
+                                .foregroundStyle(.primary)
+                            Spacer()
+                            if themeManager.selection == theme {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(Theme.accent)
+                            }
+                        }
+                        .frame(minHeight: 44)
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(themeManager.selection == theme ? .isSelected : [])
+                }
+            }
+
+            Section {
+                Button { showsFontPicker = true } label: {
+                    HStack {
+                        Label("Typeface", systemImage: "textformat")
+                        Spacer()
+                        Text(verbatim: fontManager.selection.label)
+                            .foregroundStyle(Theme.textSecondary)
+                        Image(systemName: "chevron.right")
+                            .foregroundStyle(.tertiary)
+                    }
+                    .foregroundStyle(.primary)
+                    .frame(minHeight: 44)
+                }
+            } header: {
+                Text("Text")
+            } footer: {
+                Text("Text follows the Dynamic Type size selected in iOS Settings.")
+            }
+
+            Section {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("Dock background transparency")
+                        Spacer()
+                        Text("\(Int((dockTransparency * 100).rounded()))%")
+                            .foregroundStyle(Theme.textSecondary)
+                            .monospacedDigit()
+                    }
+                    Slider(value: $dockTransparency, in: 0...0.55, step: 0.05)
+                        .accessibilityValue("\(Int((dockTransparency * 100).rounded())) percent")
+                }
+                .padding(.vertical, 4)
+            } header: {
+                Text("Dock")
+            } footer: {
+                Text("Reduce Transparency and Increase Contrast automatically use a solid dock background.")
+            }
+        }
+        .navigationTitle("Appearance")
+        .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showsFontPicker) { FontPickerView() }
+    }
+}
+
 struct PaymentPreferencesView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("defaultPaymentMethod") private var defaultMethod = PaymentMethod.cash.rawValue
@@ -112,29 +203,5 @@ struct FontPickerView: View {
             return .system(size: size, weight: weight)
         }
         return .custom(name, size: size)
-    }
-}
-
-struct NotificationPreferencesView: View {
-    @Environment(\.dismiss) private var dismiss
-    @AppStorage("notifyExpenseActivity") private var expenseActivity = true
-    @AppStorage("notifySettlementActivity") private var settlementActivity = true
-    @AppStorage("notifyTripInvites") private var tripInvites = true
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    Toggle("Expenses and comments", isOn: $expenseActivity)
-                    Toggle("Settlement updates", isOn: $settlementActivity)
-                    Toggle("Trip invitations", isOn: $tripInvites)
-                } footer: {
-                    Text("These preferences are saved on this device. Push delivery will become available after TripSplit's notification service is enabled.")
-                }
-            }
-            .navigationTitle("Notifications")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-        }
     }
 }

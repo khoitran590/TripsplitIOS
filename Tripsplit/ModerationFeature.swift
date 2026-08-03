@@ -140,7 +140,8 @@ struct CommunityStandardsView: View {
                 Text("Use Report on a post or comment to send it for private review. Blocking immediately hides that person's feed content and prevents direct feed interaction in either direction.")
             }
             Section("Review process") {
-                Text("Reports are prioritized by safety risk and retain a moderator audit trail. Content or accounts may be restricted or removed. Before public launch, TripSplit must publish a staffed support address and response-time commitment here.")
+                Text("Reports are prioritized by safety risk and retain a moderator audit trail. Content or accounts may be restricted or removed. Safety reports are reviewed within 24 hours; urgent threats receive priority.")
+                Link("Contact safety support", destination: URL(string: "mailto:support@tripsplit.app?subject=TripSplit%20Safety")!)
             }
         }
         .navigationTitle("Community Standards")

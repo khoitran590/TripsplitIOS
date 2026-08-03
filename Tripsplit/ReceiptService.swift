@@ -872,6 +872,26 @@ actor ReceiptStorage {
         return nil
     }
 
+    nonisolated static func userFacingUploadError(body: String, statusCode: Int) -> String {
+        let normalized = body.lowercased()
+        if normalized.contains("permission denied")
+            || normalized.contains("row-level security")
+            || normalized.contains("storage_attachments") {
+            return "Receipt storage is temporarily unavailable. Your scanned items are still here—retry in a moment."
+        }
+        if statusCode == 401 {
+            return "Your session could not authorize this upload. Sign in again and retry."
+        }
+        if statusCode == 404 || normalized.contains("bucket not found") {
+            return "Receipt storage is temporarily unavailable. Your scanned items are still here—try again later."
+        }
+        if statusCode >= 500 {
+            return "Receipt storage is temporarily unavailable. Your scanned items are still here—try again later."
+        }
+        return messageField(from: body).map { "Receipt upload failed: \($0)" }
+            ?? "Receipt upload failed (HTTP \(statusCode))."
+    }
+
     /// Uploads JPEG data at `path` (e.g. "<userID>/<expenseID>.jpg") and returns that
     /// storage `path` (not a URL — the bucket is private). Callers persist the path and
     /// later resolve a signed URL via `signedURL`. The user's token authorizes the write.
@@ -915,17 +935,8 @@ actor ReceiptStorage {
         }
         guard (200..<300).contains(http.statusCode) else {
             BackendSecurity.log("Receipt upload rejected", statusCode: http.statusCode)
-            // Surface the most common, actionable cause: the bucket hasn't been created.
-            // Supabase returns 404 with `{"error":"Bucket not found"}` in that case.
             let body = String(data: data, encoding: .utf8) ?? ""
-            if http.statusCode == 404 || body.localizedCaseInsensitiveContains("bucket not found") {
-                throw AuthError(message: "Receipt storage isn't set up — run the storage section of supabase_schema.sql to create the \"receipts\" bucket.")
-            }
-            // Include the server's explanation (e.g. an RLS / policy message) so the
-            // failure is diagnosable instead of an opaque status code.
-            let detail = ReceiptStorage.messageField(from: body)
-            throw AuthError(message: detail.map { "Receipt upload failed: \($0)" }
-                ?? "Receipt upload failed (HTTP \(http.statusCode)).",
+            throw AuthError(message: Self.userFacingUploadError(body: body, statusCode: http.statusCode),
                 statusCode: http.statusCode)
         }
         do {
@@ -970,8 +981,8 @@ actor ReceiptStorage {
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             let status = (response as? HTTPURLResponse)?.statusCode ?? -1
-            let message = ReceiptStorage.messageField(from: String(data: data, encoding: .utf8) ?? "")
-            throw AuthError(message: message ?? "The upload could not be authorized.", statusCode: status)
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw AuthError(message: Self.userFacingUploadError(body: body, statusCode: status), statusCode: status)
         }
     }
 

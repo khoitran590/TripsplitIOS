@@ -17,6 +17,9 @@ struct AddExpenseView: View {
     var prefillTitle: String? = nil
     var prefillAmount: Double? = nil
     var prefillLocation: ExpenseLocation? = nil
+    /// Opens a new expense with the full group split configuration expanded. Used by
+    /// the Trips quick action so "Split expense" always creates a persistent record.
+    var startWithFullSplit = false
 
     @State private var title = ""
     @State private var amountText = ""
@@ -26,6 +29,9 @@ struct AddExpenseView: View {
     @State private var isSelectingLocation = false
     @StateObject private var locationCompleter = StopPlaceCompleter()
     @FocusState private var locationFocused: Bool
+    @FocusState private var focusedField: ExpenseField?
+
+    private enum ExpenseField: Hashable { case title, amount }
 
     // Split configuration (mirrors the capstone's per-method split: equal/all,
     // equal/selected, single-payer, percentage, by-amount).
@@ -143,6 +149,10 @@ struct AddExpenseView: View {
                         Button("Save") { Task { await save() } }
                             .disabled(!(trip.map(canSave) ?? false))
                     }
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { focusedField = nil; locationFocused = false }
                 }
             }
             .onAppear(perform: configureDefaults)
@@ -511,20 +521,36 @@ struct AddExpenseView: View {
 
     private func amountCard(_ trip: Trip) -> some View {
         TripCard(title: "Expense", icon: "dollarsign.circle.fill") {
-            TextField("Title (e.g. Dinner)", text: $title)
-                .font(.app(.subheadline, .medium))
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Title")
+                    .font(.app(.caption, .semibold))
+                    .foregroundStyle(Theme.textSecondary)
+                TextField("Dinner", text: $title)
+                    .font(.app(.subheadline, .medium))
+                    .textContentType(.none)
+                    .submitLabel(.next)
+                    .focused($focusedField, equals: .title)
+                    .onSubmit { focusedField = .amount }
+                    .padding(.horizontal, 14).padding(.vertical, 12)
+                    .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Amount")
+                    .font(.app(.caption, .semibold))
+                    .foregroundStyle(Theme.textSecondary)
+                HStack(spacing: 6) {
+                    Text(currencySymbol(trip.currencyCode)).foregroundStyle(Theme.textSecondary)
+                    TextField("0.00", text: $amountText)
+                        .keyboardType(.decimalPad)
+                        .focused($focusedField, equals: .amount)
+                        .disabled(!items.isEmpty)
+                        .accessibilityLabel("Amount in \(trip.currencyCode)")
+                }
+                .font(.app(.title3, .semibold))
                 .padding(.horizontal, 14).padding(.vertical, 12)
                 .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
-
-            HStack(spacing: 2) {
-                Text(currencySymbol(trip.currencyCode)).foregroundStyle(.secondary)
-                TextField("0.00", text: $amountText)
-                    .keyboardType(.decimalPad)
-                    .disabled(!items.isEmpty)
             }
-            .font(.app(.title3, .semibold))
-            .padding(.horizontal, 14).padding(.vertical, 12)
-            .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
 
             if !items.isEmpty {
                 Text("Total is calculated from the items, tax, and tip below.")
@@ -835,11 +861,11 @@ struct AddExpenseView: View {
         Button(action: action) {
             Text(label)
                 .font(.app(.subheadline, .semibold))
-                .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+                .foregroundStyle(selected ? AnyShapeStyle(Theme.onAccent) : AnyShapeStyle(.primary))
                 .padding(.horizontal, 14).padding(.vertical, 9)
         }
         .buttonStyle(.plain)
-        .glassEffect(selected ? .regular.tint(color).interactive() : .regular.interactive(), in: .capsule)
+        .glassEffect(selected ? .regular.tint(Theme.accent).interactive() : .regular.interactive(), in: .capsule)
     }
 
     // MARK: Per-item split
@@ -1023,10 +1049,11 @@ struct AddExpenseView: View {
                 || editing.shares.keys.contains(where: { $0 != me })
             return
         }
-        // Default: the user only covers their own share, paid by themselves.
+        // Default: the user only covers their own share, paid by themselves. The
+        // explicit Split Expense shortcut opts into the saved group-split flow.
         selectedPayerID = store.currentUser.id
-        payForOthers = false
-        method = .noSplit
+        payForOthers = startWithFullSplit
+        method = startWithFullSplit ? .equalAll : .noSplit
         noSplitAssignee = store.currentUser.id
         if selected.isEmpty { selected = Set(trip.members.map(\.id)) }
         if let prefillTitle { title = prefillTitle }

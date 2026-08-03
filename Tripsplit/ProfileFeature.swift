@@ -258,7 +258,7 @@ struct ProfileScreen: View {
                     .padding(.horizontal, 32)
                 }
                 .sheet(isPresented: $showSignIn) {
-                    SettingsScreen()
+                    AuthenticationSheet(reason: "Sign in to create your profile and share trips with friends.")
                 }
             }
         }
@@ -351,6 +351,7 @@ struct ProfileDetailView: View {
     @State private var shareCard: ShareCardItem?
     @State private var geocoder = VisitedPlaceGeocoder.shared
     @AppStorage("displayCurrency") private var displayCurrency = "USD"
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     /// The user's own list first, then any trip locations not already in it.
     /// A trip's start (or end) date is attached so the cards can show when they went.
@@ -517,6 +518,13 @@ struct ProfileDetailView: View {
     @ViewBuilder
     private var shareMenu: some View {
         Menu {
+            if let token = sharedProfileToken {
+                Button {
+                    viewingProfile = SharedProfileLink(token: token)
+                } label: {
+                    Label("Preview shared profile", systemImage: "eye")
+                }
+            }
             if let url = friends.shareURL() {
                 ShareLink(item: url, subject: Text(verbatim: store.currentUser.name),
                           message: Text("Add me on TripSplit")) {
@@ -532,6 +540,12 @@ struct ProfileDetailView: View {
             Image(systemName: "square.and.arrow.up")
         }
         .accessibilityLabel("Share profile")
+    }
+
+    private var sharedProfileToken: String? {
+        guard let url = friends.shareURL(),
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        return components.queryItems?.first { $0.name == "token" }?.value
     }
 
     /// Rasterizes the profile into a shareable image. Rendered at 3x so it stays sharp
@@ -628,13 +642,16 @@ struct ProfileDetailView: View {
     }
 
     private func statStrip(_ stats: ProfileStats) -> some View {
-        HStack(spacing: 0) {
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(spacing: 12))
+            : AnyLayout(HStackLayout(spacing: 0))
+        return layout {
             statColumn(value: "\(stats.countries)", label: "Countries")
-            stripDivider
+            if !dynamicTypeSize.isAccessibilitySize { stripDivider }
             statColumn(value: "\(stats.places)", label: "Places")
-            stripDivider
+            if !dynamicTypeSize.isAccessibilitySize { stripDivider }
             statColumn(value: "\(stats.trips)", label: "Trips")
-            stripDivider
+            if !dynamicTypeSize.isAccessibilitySize { stripDivider }
             statColumn(value: "\(stats.days)", label: "Days away")
         }
     }
@@ -643,11 +660,14 @@ struct ProfileDetailView: View {
     /// keeps the same shape as the counts above it — the Trips tab owns the full balance
     /// card (budgets, per-trip breakdown); this is the standing only.
     private func moneyStrip(_ stats: ProfileStats) -> some View {
-        HStack(spacing: 0) {
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(spacing: 12))
+            : AnyLayout(HStackLayout(spacing: 0))
+        return layout {
             moneyColumn(label: "Spent", amount: stats.spent, color: .primary)
-            stripDivider
+            if !dynamicTypeSize.isAccessibilitySize { stripDivider }
             moneyColumn(label: "You're owed", amount: stats.owed, color: Theme.positive)
-            stripDivider
+            if !dynamicTypeSize.isAccessibilitySize { stripDivider }
             moneyColumn(label: "You owe", amount: stats.owe, color: Theme.negative)
         }
     }
@@ -664,8 +684,7 @@ struct ProfileDetailView: View {
             Text(label)
                 .font(.app(.caption2))
                 .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
+                .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
@@ -677,13 +696,11 @@ struct ProfileDetailView: View {
                 .font(.app(.headline))
                 .foregroundStyle(color)
                 .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
+                .multilineTextAlignment(.center)
             Text(label)
                 .font(.app(.caption2))
                 .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
+                .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
@@ -798,9 +815,14 @@ struct ProfileDetailView: View {
                 .font(.app(.title3, .bold))
 
             if visitedPlaces.isEmpty {
-                Text("Add places you've visited from Edit, or set a location on your trips.")
-                    .font(.app(.subheadline))
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Add places you've visited or set a location on your trips.")
+                        .font(.app(.subheadline))
+                        .foregroundStyle(Theme.textSecondary)
+                    Button("Add visited places") { showEditor = true }
+                        .font(.app(.subheadline, .semibold))
+                        .frame(minHeight: 44)
+                }
             } else {
                 // Full-bleed horizontal rail of passport-style cards (negative padding
                 // cancels the parent's inset so the row runs edge to edge like a gallery).

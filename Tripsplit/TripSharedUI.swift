@@ -2,6 +2,57 @@ import SwiftUI
 import ImageIO
 import UIKit
 
+// MARK: - Shared system feedback
+
+struct AppLoadingStateView: View {
+    let title: LocalizedStringKey
+    var message: LocalizedStringKey?
+
+    var body: some View {
+        VStack(spacing: 10) {
+            ProgressView()
+            Text(title).font(.app(.subheadline, .semibold))
+            if let message {
+                Text(message)
+                    .font(.app(.caption))
+                    .foregroundStyle(Theme.textSecondary)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 28)
+        .readableSurface(cornerRadius: Theme.cardRadius)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+struct AppErrorStateView: View {
+    let title: LocalizedStringKey
+    let message: String
+    var retry: (() -> Void)?
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(Theme.negative)
+            Text(title).font(.app(.subheadline, .semibold))
+            Text(verbatim: message)
+                .font(.app(.caption))
+                .foregroundStyle(Theme.textSecondary)
+                .multilineTextAlignment(.center)
+            if let retry {
+                Button("Try again", action: retry)
+                    .font(.app(.subheadline, .semibold))
+                    .frame(minHeight: 44)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(16)
+        .readableSurface(cornerRadius: 16)
+        .accessibilityElement(children: .contain)
+    }
+}
+
 /// Prepares user-picked images for upload/display without keeping full-resolution originals
 /// around in SwiftUI state. ImageIO thumbnails avoid a large decode for camera-roll photos.
 enum UploadImagePreparation {
@@ -206,7 +257,9 @@ struct SwipeToDeleteRow<Content: View>: View {
     }
 }
 
-/// A standard Liquid Glass card with a labeled header, used across the trip screens.
+/// A standard readable card with a labeled header, used across the trip screens.
+/// Glass is reserved for short-lived chrome; financial and form content uses an
+/// opaque semantic surface so it remains legible in every theme and accessibility mode.
 struct TripCard<Content: View>: View {
     let title: LocalizedStringKey
     let icon: String
@@ -225,7 +278,7 @@ struct TripCard<Content: View>: View {
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular, in: .rect(cornerRadius: 24))
+        .readableSurface(cornerRadius: Theme.cardRadius)
     }
 }
 
@@ -357,7 +410,24 @@ struct AvatarView: View {
     }
 }
 
-/// Formats a value with a currency code's symbol, e.g. `€12.50`.
+/// Formats a value with the user's grouping and decimal separators while keeping
+/// the trip's currency. Zero-decimal currencies do not show artificial cents.
 func money(_ value: Double, _ code: String) -> String {
-    "\(currencySymbol(code))\(String(format: "%.2f", value))"
+    let formatter = NumberFormatter()
+    formatter.numberStyle = .currency
+    formatter.locale = .current
+    formatter.currencyCode = code
+    formatter.currencySymbol = currencySymbol(code)
+    formatter.usesGroupingSeparator = true
+
+    if ["JPY", "KRW", "VND"].contains(code) {
+        formatter.minimumFractionDigits = 0
+        formatter.maximumFractionDigits = 0
+    } else {
+        formatter.minimumFractionDigits = 2
+        formatter.maximumFractionDigits = 2
+    }
+
+    return formatter.string(from: NSNumber(value: value))
+        ?? "\(currencySymbol(code))\(value.formatted(.number.precision(.fractionLength(0...2))))"
 }

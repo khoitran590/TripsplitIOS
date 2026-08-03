@@ -129,7 +129,7 @@ struct SplitView: View {
                                 Text(LocalizedStringKey(option.shortLabel))
                             }
                             .font(.app(.subheadline, .semibold))
-                            .foregroundStyle(method == option ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+                            .foregroundStyle(method == option ? AnyShapeStyle(Theme.onAccent) : AnyShapeStyle(.primary))
                             .padding(.horizontal, 14)
                             .padding(.vertical, 9)
                         }
@@ -235,7 +235,7 @@ struct SplitView: View {
 
             let settlements = SplitEngine.settleUp(net: result.net, people: people)
             if result.isValid && !settlements.isEmpty {
-                Text("Settle up")
+                Text("Payments")
                     .font(.app(.subheadline, .semibold))
                     .foregroundStyle(.secondary)
                 ForEach(settlements) { settlement in
@@ -297,7 +297,7 @@ struct SplitView: View {
         Button(action: action) {
             Text(title)
                 .font(.app(.subheadline, .semibold))
-                .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+                .foregroundStyle(selected ? AnyShapeStyle(Theme.onAccent) : AnyShapeStyle(.primary))
                 .padding(.horizontal, 14)
                 .padding(.vertical, 9)
         }
@@ -476,7 +476,7 @@ struct SettleView: View {
                     .padding(.bottom, 24)
                 }
             }
-            .navigationTitle("Settle Up")
+            .navigationTitle("Record Payment")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -510,13 +510,13 @@ struct SettleView: View {
                 Spacer()
                 amountColumn(
                     title: "Remaining", value: remaining,
-                    color: remaining <= 0.005 ? Color(hex: 0x10B981) : Color(hex: 0xEF4444)
+                    color: remaining <= 0.005 ? Theme.positive : Theme.negative
                 )
             }
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular, in: .rect(cornerRadius: 24))
+        .readableSurface(cornerRadius: Theme.cardRadius)
     }
 
     private var recordCard: some View {
@@ -555,7 +555,7 @@ struct SettleView: View {
                                 Text(LocalizedStringKey(option.rawValue))
                             }
                             .font(.app(.subheadline, .semibold))
-                            .foregroundStyle(method == option ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+                            .foregroundStyle(method == option ? AnyShapeStyle(Theme.onAccent) : AnyShapeStyle(.primary))
                             .padding(.horizontal, 14)
                             .padding(.vertical, 9)
                         }
@@ -570,19 +570,19 @@ struct SettleView: View {
 
             HStack(spacing: 10) {
                 settleButton(
-                    title: "Settle Input", icon: "arrow.left.arrow.right",
-                    tint: Color(hex: 0x10B981), enabled: canSettleInput
+                    title: "Record Amount", icon: "arrow.left.arrow.right",
+                    tint: Theme.positiveFill, enabled: canSettleInput
                 ) { record(amount: enteredAmount) }
 
                 settleButton(
-                    title: "Settle Full", icon: "checkmark.circle.fill",
+                    title: "Record Full", icon: "checkmark.circle.fill",
                     tint: Color(hex: 0x3B82F6), enabled: remaining > 0.005
                 ) { record(amount: remaining) }
             }
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular, in: .rect(cornerRadius: 24))
+        .readableSurface(cornerRadius: Theme.cardRadius)
     }
 
     private var historyCard: some View {
@@ -693,9 +693,9 @@ struct SettleView: View {
 
     private func statusBadge(_ status: SettlementStatus) -> some View {
         let (text, color): (String, Color) = switch status {
-        case .pending: ("Pending", Color(hex: 0xF59E0B))
-        case .confirmed: ("Confirmed", Color(hex: 0x10B981))
-        case .rejected: ("Declined", Color(hex: 0xEF4444))
+        case .pending: ("Pending", Theme.warning)
+        case .confirmed: ("Confirmed", Theme.positive)
+        case .rejected: ("Declined", Theme.negative)
         }
         return Text(LocalizedStringKey(text))
             .font(.app(.caption2, .bold))

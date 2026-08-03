@@ -9,6 +9,7 @@ struct HomeScreen: View {
     @Environment(AuthStore.self) private var auth
     @State private var showAddTrip = false
     @State private var showSignInAlert = false
+    @State private var resumeAddTripAfterSignIn = false
     @State private var selectedTrip: Trip?
 
     /// The quick action a user tapped, awaiting a trip choice.
@@ -69,7 +70,7 @@ struct HomeScreen: View {
             TripDetailView(tripID: trip.id)
         }
         .sheet(item: $splitTrip) { trip in
-            SplitView(people: trip.members, currencyCode: trip.currencyCode)
+            AddExpenseView(tripID: trip.id, startWithFullSplit: true)
         }
         .sheet(item: $expenseTrip) { trip in
             AddExpenseView(tripID: trip.id)
@@ -77,7 +78,7 @@ struct HomeScreen: View {
         .sheet(isPresented: $showTripPicker, onDismiss: routePendingAction) {
             TripPickerSheet(
                 trips: store.myTrips,
-                prompt: pendingAction == .split ? "Split a bill within which trip?" : "Add an expense to which trip?"
+                prompt: pendingAction == .split ? "Split an expense in which trip?" : "Add an expense to which trip?"
             ) { trip in
                 pendingTrip = trip
                 showTripPicker = false
@@ -98,7 +99,19 @@ struct HomeScreen: View {
         } message: {
             Text(tripToDelete.map { "“\($0.name)” and its expenses will be removed from your synced trips." } ?? "")
         }
-        .signInRequiredAlert(isPresented: $showSignInAlert)
+        .sheet(isPresented: $showSignInAlert) {
+            AuthenticationSheet(reason: "Sign in to create trips and save shared expenses.")
+        }
+        .onChange(of: auth.isAuthenticated) { _, signedIn in
+            guard signedIn else { return }
+            if resumeAddTripAfterSignIn {
+                resumeAddTripAfterSignIn = false
+                showAddTrip = true
+            } else if pendingAction != nil {
+                if store.myTrips.isEmpty { showAddTrip = true }
+                else { showTripPicker = true }
+            }
+        }
         .task {
             // Load USD exchange rates so the balance card can normalize every trip's currency.
             await store.refreshRates()
@@ -107,6 +120,7 @@ struct HomeScreen: View {
 
     /// Starts a quick action by asking which trip to use (or prompting to create one).
     private func startQuickAction(_ action: QuickAction) {
+        pendingAction = action
         guard auth.isAuthenticated else {
             showSignInAlert = true
             return
@@ -115,11 +129,19 @@ struct HomeScreen: View {
             showAddTrip = true
             return
         }
-        pendingAction = action
         showTripPicker = true
     }
 
-    /// After the trip-picker sheet dismisses, opens the chosen trip's split or add-expense
+    private func requestAddTrip() {
+        guard auth.isAuthenticated else {
+            resumeAddTripAfterSignIn = true
+            showSignInAlert = true
+            return
+        }
+        showAddTrip = true
+    }
+
+    /// After the trip-picker sheet dismisses, opens the chosen trip's saved split or add-expense
     /// sheet. Routing here (rather than while the picker is still up) avoids presenting two
     /// sheets at once, which SwiftUI drops.
     private func routePendingAction() {
@@ -135,12 +157,12 @@ struct HomeScreen: View {
     private var tripsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Your Trips")
+                Text("Upcoming & Active")
                     .font(.app(.headline))
                     .padding(.leading, 4)
                 Spacer()
                 Button {
-                    if auth.isAuthenticated { showAddTrip = true } else { showSignInAlert = true }
+                    requestAddTrip()
                 } label: {
                     Label("Add Trip", systemImage: "plus")
                         .font(.app(.subheadline, .semibold))
@@ -156,16 +178,11 @@ struct HomeScreen: View {
             if store.myTrips.isEmpty {
                 if store.cloudLoadState == .loading && auth.isAuthenticated {
                     VStack(spacing: 12) {
-                        ProgressView()
-                        Text("Loading your trips…")
-                            .font(.app(.subheadline, .medium))
-                        Text("Syncing the latest plans and expenses.")
-                            .font(.app(.caption))
-                            .foregroundStyle(.secondary)
+                        AppLoadingStateView(
+                            title: "Loading your trips…",
+                            message: "Syncing the latest plans and expenses."
+                        )
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 32)
-                    .glassEffect(.regular, in: .rect(cornerRadius: 20))
                 } else {
                     if case .failed(let message) = store.cloudLoadState {
                         cloudLoadFailure(message)
@@ -262,7 +279,7 @@ struct HomeScreen: View {
             .padding(.top, 4)
 
             Button {
-                if auth.isAuthenticated { showAddTrip = true } else { showSignInAlert = true }
+                requestAddTrip()
             } label: {
                 Label("Create empty trip", systemImage: "plus")
                     .font(.app(.subheadline, .semibold))
@@ -323,7 +340,7 @@ struct HomeScreen: View {
         // the header keeps the balance card + actions + trips above the fold.
         HStack(spacing: 12) {
             QuickActionButton(
-                title: "Split",
+                title: "Split Expense",
                 icon: "divide.circle.fill",
                 colors: [Color(hex: 0x818CF8), Color(hex: 0x4F46E5)]
             ) { startQuickAction(.split) }
@@ -910,7 +927,7 @@ struct BalanceCard: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular, in: .rect(cornerRadius: 34))
+        .readableSurface(cornerRadius: 24, elevated: true)
     }
 
     private func statGrid(
@@ -986,7 +1003,7 @@ struct BalanceCard: View {
             if totals.youOwe > 0 {
                 Text("You owe").foregroundStyle(.secondary)
                 Text(verbatim: summaryMoney(totals.youOwe, displayCurrency))
-                    .foregroundStyle(Color(hex: 0xDC2626))
+                    .foregroundStyle(Theme.negative)
             }
             if totals.youOwe > 0 && totals.owedToYou > 0 {
                 Text(verbatim: "·").foregroundStyle(.tertiary)
@@ -994,10 +1011,10 @@ struct BalanceCard: View {
             if totals.owedToYou > 0 {
                 Text("Owed to you").foregroundStyle(.secondary)
                 Text(verbatim: summaryMoney(totals.owedToYou, displayCurrency))
-                    .foregroundStyle(Color(hex: 0x16A34A))
+                    .foregroundStyle(Theme.positive)
             }
             Spacer(minLength: 6)
-            Button("Settle", action: startSettleFlow)
+            Button("Record payment", action: startSettleFlow)
                 .font(.app(.caption, .semibold))
                 .buttonStyle(.bordered)
                 .tint(Theme.accent)

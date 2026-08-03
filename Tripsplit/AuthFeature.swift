@@ -482,7 +482,13 @@ final class AuthStore {
     var email: String? { session?.email }
 
     init() {
-        if let saved = AuthSessionStore.load() {
+        if AppStoreDemoData.isEnabled {
+            session = AuthSession(
+                accessToken: AppStoreDemoData.localAccessToken,
+                refreshToken: "local-demo-only",
+                email: "reviewer@tripsplit.app"
+            )
+        } else if let saved = AuthSessionStore.load() {
             session = saved
         } else if let data = UserDefaults.standard.data(forKey: storageKey),
                   let saved = try? JSONDecoder().decode(AuthSession.self, from: data) {
@@ -611,8 +617,8 @@ struct AuthView: View {
 
         var action: String {
             switch self {
-            case .signIn: "Login"
-            case .signUp: "Sign up"
+            case .signIn: "Sign in"
+            case .signUp: "Create account"
             case .forgot: "Send reset link"
             }
         }
@@ -621,6 +627,7 @@ struct AuthView: View {
     @State private var mode: Mode = .signIn
     @State private var email = ""
     @State private var password = ""
+    @State private var showsPassword = false
     @State private var errorMessage: String?
     @State private var infoMessage: String?
     @State private var isWorking = false
@@ -629,6 +636,9 @@ struct AuthView: View {
     /// value to Supabase so GoTrue can verify the identity token's `nonce` claim.
     @State private var appleNonce = ""
     @Environment(\.colorScheme) private var colorScheme
+    @FocusState private var focusedField: AuthField?
+
+    private enum AuthField: Hashable { case email, password }
 
     private var canSubmit: Bool {
         guard !email.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
@@ -682,23 +692,52 @@ struct AuthView: View {
             }
             .padding(.bottom, 8)
 
-            field(placeholder: "name@company.com", text: $email, isSecure: false)
-                .textContentType(.emailAddress)
-                .keyboardType(.emailAddress)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Email")
+                    .font(.app(.caption, .semibold))
+                    .foregroundStyle(Theme.textSecondary)
+                field(placeholder: "name@example.com", text: $email, isSecure: false)
+                    .textContentType(.emailAddress)
+                    .keyboardType(.emailAddress)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .submitLabel(mode == .forgot ? .go : .next)
+                    .focused($focusedField, equals: .email)
+                    .onSubmit { mode == .forgot ? submit() : (focusedField = .password) }
+            }
 
             if mode != .forgot {
-                field(placeholder: mode == .signUp ? "Create a password" : "Enter your password",
-                      text: $password, isSecure: true)
-                    .textContentType(mode == .signUp ? .newPassword : .password)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Password")
+                        .font(.app(.caption, .semibold))
+                        .foregroundStyle(Theme.textSecondary)
+                    field(placeholder: mode == .signUp ? "At least 8 characters" : "Enter your password",
+                          text: $password, isSecure: !showsPassword)
+                        .textContentType(mode == .signUp ? .newPassword : .password)
+                        .submitLabel(.go)
+                        .focused($focusedField, equals: .password)
+                        .onSubmit { if canSubmit { submit() } }
+                    Button { showsPassword.toggle() } label: {
+                        Label(showsPassword ? "Hide password" : "Show password",
+                              systemImage: showsPassword ? "eye.slash" : "eye")
+                            .font(.app(.caption, .semibold))
+                            .frame(minHeight: 44)
+                    }
+                    .buttonStyle(.plain)
+                    if mode == .signUp {
+                        Label("Use 8+ characters with uppercase, lowercase, and a number.",
+                              systemImage: BackendSecurity.isStrongPassword(password) ? "checkmark.circle.fill" : "info.circle")
+                            .font(.app(.caption))
+                            .foregroundStyle(BackendSecurity.isStrongPassword(password) ? Theme.positive : Theme.textSecondary)
+                    }
+                }
             }
 
             if let infoMessage {
-                banner(infoMessage, icon: "checkmark.circle.fill", color: Color(hex: 0x10B981))
+                banner(infoMessage, icon: "checkmark.circle.fill", color: Theme.positive)
             }
             if let errorMessage {
-                banner(errorMessage, icon: "exclamationmark.triangle.fill", color: Color(hex: 0xEF4444))
+                banner(errorMessage, icon: "exclamationmark.triangle.fill", color: Theme.negative)
             }
 
             primaryButton
@@ -751,16 +790,16 @@ struct AuthView: View {
     private var primaryButton: some View {
         Button(action: submit) {
             HStack(spacing: 8) {
-                if isWorking { ProgressView().tint(.white) }
+                if isWorking { ProgressView().tint(Theme.onAccent) }
                 Text(LocalizedStringKey(isWorking ? "Please wait…" : mode.action))
                     .font(.app(.headline))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Theme.onAccent)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 15)
         }
         .buttonStyle(.plain)
-        .glassEffect(.regular.tint(Color(hex: 0x4F46E5)).interactive(), in: .rect(cornerRadius: 14))
+        .glassEffect(.regular.tint(Theme.accent).interactive(), in: .rect(cornerRadius: 14))
         .disabled(!canSubmit || isWorking)
         .opacity(canSubmit && !isWorking ? 1 : 0.5)
     }
@@ -836,7 +875,7 @@ struct AuthView: View {
         }
     }
 
-    /// "Don't have an account? Sign up" / "Already have an account? Login".
+    /// Consistent account vocabulary across every authentication mode.
     @ViewBuilder
     private var switchModeFooter: some View {
         switch mode {
@@ -844,7 +883,7 @@ struct AuthView: View {
             HStack(spacing: 5) {
                 Text("Don't have an account?")
                     .foregroundStyle(.secondary)
-                Button("Sign up") { switchMode(.signUp) }
+                Button("Create account") { switchMode(.signUp) }
                     .fontWeight(.semibold)
             }
             .font(.app(.subheadline))
@@ -852,12 +891,12 @@ struct AuthView: View {
             HStack(spacing: 5) {
                 Text("Already have an account?")
                     .foregroundStyle(.secondary)
-                Button("Login") { switchMode(.signIn) }
+                Button("Sign in") { switchMode(.signIn) }
                     .fontWeight(.semibold)
             }
             .font(.app(.subheadline))
         case .forgot:
-            Button("Back to login") { switchMode(.signIn) }
+            Button("Back to sign in") { switchMode(.signIn) }
                 .font(.app(.subheadline))
         }
     }
@@ -902,6 +941,43 @@ struct AuthView: View {
                 errorMessage = (error as? AuthError)?.message ?? error.localizedDescription
             }
             isWorking = false
+        }
+    }
+}
+
+/// One reusable, contextual account surface for every gated action. Presenters can
+/// supply the reason the sheet appeared; successful authentication dismisses it and
+/// lets the presenting screen replay its pending intent.
+struct AuthenticationSheet: View {
+    var reason: LocalizedStringKey = "Sign in to continue."
+
+    @Environment(AuthStore.self) private var auth
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                AppBackground()
+                VStack(spacing: 0) {
+                    Label(reason, systemImage: "lock.open.fill")
+                        .font(.app(.subheadline, .medium))
+                        .foregroundStyle(Theme.textSecondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+                        .padding(.top, 8)
+                    AuthView()
+                }
+            }
+            .navigationTitle("Account")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Not now") { dismiss() }
+                }
+            }
+        }
+        .onChange(of: auth.isAuthenticated) { _, signedIn in
+            if signedIn { dismiss() }
         }
     }
 }
@@ -998,7 +1074,7 @@ extension View {
         alert("Sign In Required", isPresented: isPresented) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("Sign in from the Settings tab to create trips, add expenses, and edit trips.")
+            Text("Sign in from the Profile tab to create trips, add expenses, and edit trips.")
         }
     }
 }

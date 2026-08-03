@@ -9,7 +9,7 @@ alter table public.trip_invitations
 
 alter table public.trip_invitations add column if not exists token_hash bytea;
 update public.trip_invitations
-set token_hash = digest(token, 'sha256')
+set token_hash = extensions.digest(token, 'sha256')
 where token_hash is null;
 alter table public.trip_invitations alter column token_hash set not null;
 create unique index if not exists trip_invitations_token_hash_idx
@@ -29,7 +29,7 @@ as $$
 declare
     v_email text := lower(btrim(p_email));
     v_id uuid;
-    v_raw_token text := encode(gen_random_bytes(24), 'hex');
+    v_raw_token text := encode(extensions.gen_random_bytes(24), 'hex');
 begin
     if auth.uid() is null then raise exception 'You must be signed in.' using errcode = '42501'; end if;
     if v_email is null or v_email !~* '^[A-Z0-9._%+-]+@[A-Z0-9.-]+[.][A-Z]{2,}$'
@@ -47,8 +47,8 @@ begin
     insert into public.trip_invitations
         (trip_id, email, token, token_hash, invited_by, status, expires_at)
     values (
-        p_trip_id, v_email, encode(digest(v_raw_token, 'sha256'), 'hex'),
-        digest(v_raw_token, 'sha256'), auth.uid(), 'pending', now() + interval '72 hours'
+        p_trip_id, v_email, encode(extensions.digest(v_raw_token, 'sha256'), 'hex'),
+        extensions.digest(v_raw_token, 'sha256'), auth.uid(), 'pending', now() + interval '72 hours'
     ) returning id into v_id;
 
     -- Deliberately generic: never reveal registration state or add membership before the
@@ -77,7 +77,7 @@ as $$
 declare
     v_email text := lower(btrim(p_email));
     v_id uuid;
-    v_raw_token text := encode(gen_random_bytes(24), 'hex');
+    v_raw_token text := encode(extensions.gen_random_bytes(24), 'hex');
     v_target_id uuid;
 begin
     if auth.role() is distinct from 'service_role' then
@@ -107,8 +107,8 @@ begin
     insert into public.trip_invitations
         (trip_id, email, token, token_hash, invited_by, status, expires_at)
     values (
-        p_trip_id, v_email, encode(digest(v_raw_token, 'sha256'), 'hex'),
-        digest(v_raw_token, 'sha256'), p_actor_id, 'pending', now() + interval '72 hours'
+        p_trip_id, v_email, encode(extensions.digest(v_raw_token, 'sha256'), 'hex'),
+        extensions.digest(v_raw_token, 'sha256'), p_actor_id, 'pending', now() + interval '72 hours'
     ) returning id into v_id;
 
     return query
@@ -135,7 +135,7 @@ set search_path = public, pg_temp
 as $$
 declare
     v_id uuid;
-    v_raw_token text := encode(gen_random_bytes(24), 'hex');
+    v_raw_token text := encode(extensions.gen_random_bytes(24), 'hex');
 begin
     if auth.uid() is null then raise exception 'You must be signed in.' using errcode = '42501'; end if;
     if not public.is_trip_owner(p_trip_id, auth.uid()) then
@@ -148,8 +148,8 @@ begin
     insert into public.trip_invitations
         (trip_id, email, token, token_hash, invited_by, status, expires_at)
     values (
-        p_trip_id, null, encode(digest(v_raw_token, 'sha256'), 'hex'),
-        digest(v_raw_token, 'sha256'), auth.uid(), 'pending', now() + interval '72 hours'
+        p_trip_id, null, encode(extensions.digest(v_raw_token, 'sha256'), 'hex'),
+        extensions.digest(v_raw_token, 'sha256'), auth.uid(), 'pending', now() + interval '72 hours'
     ) returning id into v_id;
     return query select v_id, v_raw_token;
 end;
@@ -174,7 +174,7 @@ begin
     from public.trip_invitations i
     join public.trips t on t.id = i.trip_id
     left join public.profiles p on p.user_id = i.invited_by
-    where i.token_hash = digest(p_token, 'sha256')
+    where i.token_hash = extensions.digest(p_token, 'sha256')
       and i.status = 'pending' and i.expires_at > now()
       and not public.has_block_between(auth.uid(), i.invited_by)
       and (i.email is null or lower(i.email) = (
@@ -201,7 +201,7 @@ begin
         raise exception 'This invitation link is invalid or has expired.' using errcode = '22023';
     end if;
     select * into v_invitation from public.trip_invitations i
-    where i.token_hash = digest(p_token, 'sha256')
+    where i.token_hash = extensions.digest(p_token, 'sha256')
       and i.status = 'pending' and i.expires_at > now()
     for update;
     if not found or public.has_block_between(auth.uid(), v_invitation.invited_by) then
@@ -240,7 +240,7 @@ begin
         raise exception 'This invitation link is invalid or has expired.' using errcode = '22023';
     end if;
     select * into v_invitation from public.trip_invitations i
-     where i.token_hash = digest(p_token, 'sha256')
+     where i.token_hash = extensions.digest(p_token, 'sha256')
        and i.status = 'pending' and i.expires_at > now()
      for update;
     if not found then raise exception 'This invitation link is invalid or has expired.' using errcode = 'P0002'; end if;

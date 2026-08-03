@@ -5,7 +5,7 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select plan(27);
+select plan(28);
 
 select has_table('public', 'financial_audit_events', 'financial audit table exists');
 select has_table('public', 'storage_attachments', 'storage attachment ACL table exists');
@@ -41,7 +41,9 @@ select is((select count(*)::integer from pg_policies
 select has_function('public', 'prepare_account_deletion', array['uuid', 'text'],
                     'account-deletion preparation RPC exists');
 select has_function('public', 'register_storage_attachment', array['text', 'text', 'uuid', 'uuid'],
-                    'attachment registration RPC exists');
+    'attachment registration RPC exists');
+select has_function('public', 'can_read_storage_attachment', array['text', 'text'],
+    'storage policy reads private attachment metadata through a security boundary');
 select has_function('public', 'set_ai_consent', array['text', 'text', 'boolean'],
                     'purpose-specific AI consent RPC exists');
 select has_function('public', 'report_content', array['text', 'uuid', 'text', 'text'],

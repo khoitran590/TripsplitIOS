@@ -1,5 +1,6 @@
 import XCTest
 import SwiftUI
+import UIKit
 @testable import Tripsplit
 
 @MainActor
@@ -7,6 +8,49 @@ final class TripsplitAppTests: XCTestCase {
     private let alice = Person(id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!, name: "Alice", color: .red)
     private let bob = Person(id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!, name: "Bob", color: .blue)
     private let chris = Person(id: UUID(uuidString: "00000000-0000-0000-0000-000000000003")!, name: "Chris", color: .green)
+
+    func testSemanticTextColorsMeetContrastInLightAndDark() {
+        let light = UITraitCollection(userInterfaceStyle: .light)
+        let dark = UITraitCollection(userInterfaceStyle: .dark)
+        for color in [Theme.positive, Theme.negative, Theme.warning] {
+            XCTAssertGreaterThanOrEqual(contrast(color, against: .white, traits: light), 4.5)
+            XCTAssertGreaterThanOrEqual(contrast(color, against: Theme.surface, traits: dark), 4.5)
+        }
+    }
+
+    func testEveryThemeAccentHasReadableSelectedForeground() {
+        for theme in AppTheme.allCases {
+            XCTAssertGreaterThanOrEqual(
+                contrast(theme.accent, against: Theme.onAccent, traits: .init(userInterfaceStyle: .light)),
+                4.5,
+                "Light accent contrast failed for \(theme.label)"
+            )
+            XCTAssertGreaterThanOrEqual(
+                contrast(theme.accent, against: Theme.onAccent, traits: .init(userInterfaceStyle: .dark)),
+                4.5,
+                "Dark accent contrast failed for \(theme.label)"
+            )
+        }
+    }
+
+    private func contrast(_ first: Color, against second: Color, traits: UITraitCollection) -> Double {
+        let a = relativeLuminance(UIColor(first).resolvedColor(with: traits))
+        let b = relativeLuminance(UIColor(second).resolvedColor(with: traits))
+        return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+    }
+
+    private func relativeLuminance(_ color: UIColor) -> Double {
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+        color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        func linear(_ component: CGFloat) -> Double {
+            let value = Double(component)
+            return value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+    }
 
     func testBackendRedirectOriginAllowlist() {
         XCTAssertTrue(BackendSecurity.isTrustedBackendURL(URL(string: SupabaseConfig.url + "/rest/v1/trips")))
@@ -224,6 +268,40 @@ final class TripsplitAppTests: XCTestCase {
             headerFields: ["Retry-After": "17"]
         ))
         XCTAssertEqual(AIRateLimitResponse.retryDelay(data: Data("{}".utf8), response: legacyHeaderOnly), 17)
+    }
+
+    func testMissingAIConsentRPCUsesSafeFallbackMessage() {
+        let response = Data(#"{"code":"PGRST202","message":"Could not find the function public.set_ai_consent(p_consent_version, p_granted, p_purpose) in the schema cache"}"#.utf8)
+
+        let receiptMessage = AIConsentService.userFacingErrorMessage(
+            data: response,
+            statusCode: 404,
+            purpose: .receiptProcessing
+        )
+        XCTAssertEqual(
+            receiptMessage,
+            "Cloud AI is temporarily unavailable. Choose Use On-Device Scan below and try again later."
+        )
+        XCTAssertFalse(receiptMessage.contains("schema cache"))
+
+        let itineraryMessage = AIConsentService.userFacingErrorMessage(
+            data: response,
+            statusCode: 404,
+            purpose: .itineraryGeneration
+        )
+        XCTAssertTrue(itineraryMessage.contains("Continue Without AI"))
+    }
+
+    func testStoragePolicyFailureDoesNotExposeSchemaDetails() {
+        let response = #"{"statusCode":"403","message":"permission denied for table storage_attachments"}"#
+        let message = ReceiptStorage.userFacingUploadError(body: response, statusCode: 403)
+
+        XCTAssertEqual(
+            message,
+            "Receipt storage is temporarily unavailable. Your scanned items are still here—retry in a moment."
+        )
+        XCTAssertFalse(message.contains("storage_attachments"))
+        XCTAssertFalse(message.contains("permission denied"))
     }
 
     func testTripShareSummaryUsesReadableExpenseAndSplitBlocks() {

@@ -15,14 +15,13 @@ struct SettingsScreen: View {
 
     @State private var showPersonalInfo = false
     @State private var showChangePassword = false
-    @State private var showLanguagePicker = false
     @State private var showProfilePage = false
     @State private var showPaymentSettings = false
-    @State private var showNotificationSettings = false
     @State private var showDeleteAccount = false
     @State private var showPrivacyChoices = false
     @State private var showPrivacyPolicy = false
     @State private var showCommunityStandards = false
+    @State private var showAppearanceSettings = false
     @State private var isSigningOut = false
     @AppStorage("appearancePreference") private var appearance: AppearancePreference = .system
     @AppStorage("displayCurrency") private var displayCurrency = "USD"
@@ -77,7 +76,7 @@ struct SettingsScreen: View {
                 exploreCard
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Settings")
+                    Text("Account")
                         .font(.app(.title2, .bold))
                         .padding(.bottom, 8)
 
@@ -92,20 +91,16 @@ struct SettingsScreen: View {
                                      value: auth.email, iconColor: Theme.positive) {
                         showChangePassword = true
                     }
-                    PlainSettingsRow(icon: "creditcard.fill", title: "Payments",
-                                     iconColor: Color(hex: 0x8B5CF6)) {
-                        showPaymentSettings = true
-                    }
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Preferences")
+                    Text("Money")
                         .font(.app(.title2, .bold))
                         .padding(.bottom, 8)
 
-                    PlainSettingsRow(icon: "bell.fill", title: "Notifications",
-                                     iconColor: Theme.warning) {
-                        showNotificationSettings = true
+                    PlainSettingsRow(icon: "creditcard.fill", title: "Payment records",
+                                     iconColor: Color(hex: 0x8B5CF6)) {
+                        showPaymentSettings = true
                     }
                     Menu {
                         Picker("Home currency", selection: $displayCurrency) {
@@ -116,29 +111,25 @@ struct SettingsScreen: View {
                                          value: displayCurrency, iconColor: Theme.positive)
                     }
                     .buttonStyle(.plain)
-                    Menu {
-                        Picker("Appearance", selection: $appearance) {
-                            ForEach(AppearancePreference.allCases) { option in
-                                Label(option.label, systemImage: option.icon).tag(option)
-                            }
-                        }
-                    } label: {
-                        PlainSettingsRow(icon: "circle.lefthalf.filled", title: "Appearance",
-                                         value: appearance.label,
-                                         iconColor: Color(hex: 0xEC4899))
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Appearance")
+                        .font(.app(.title2, .bold))
+                        .padding(.bottom, 8)
+
+                    PlainSettingsRow(icon: "paintpalette.fill", title: "Appearance & theme",
+                                     value: appearance.label,
+                                     iconColor: Color(hex: 0xEC4899)) {
+                        showAppearanceSettings = true
                     }
-                    .buttonStyle(.plain)
-                    navbarTransparencyPicker
-                    PlainSettingsRow(icon: "globe", title: "Language",
-                                     value: localization.language.endonym,
-                                     iconColor: Color(hex: 0x3B82F6)) {
-                        showLanguagePicker = true
-                    }
-                    PlainSettingsRow(icon: "textformat", title: "Change fonts",
-                                     value: fontManager.selection.label,
-                                     iconColor: Color(hex: 0x8B5CF6)) {
-                        showFontPicker = true
-                    }
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Privacy & Safety")
+                        .font(.app(.title2, .bold))
+                        .padding(.bottom, 8)
+
                     PlainSettingsRow(icon: "hand.raised.fill", title: "Privacy & AI",
                                      iconColor: Color(hex: 0x0EA5E9)) {
                         showPrivacyChoices = true
@@ -147,7 +138,6 @@ struct SettingsScreen: View {
                                      iconColor: Color(hex: 0x10B981)) {
                         showCommunityStandards = true
                     }
-                    themePicker
                 }
 
                 PlainSettingsRow(icon: "rectangle.portrait.and.arrow.right", title: "Sign Out",
@@ -178,23 +168,20 @@ struct SettingsScreen: View {
         .navigationDestination(isPresented: $showProfilePage) {
             ProfileDetailView()
         }
+        .navigationDestination(isPresented: $showAppearanceSettings) {
+            AppearanceSettingsView()
+        }
         .sheet(isPresented: $showPersonalInfo) {
             EditProfileView()
         }
         .sheet(isPresented: $showChangePassword) {
             ChangePasswordView()
         }
-        .sheet(isPresented: $showLanguagePicker) {
-            LanguagePickerView()
-        }
         .sheet(isPresented: $showFontPicker) {
             FontPickerView()
         }
         .sheet(isPresented: $showPaymentSettings) {
             PaymentPreferencesView()
-        }
-        .sheet(isPresented: $showNotificationSettings) {
-            NotificationPreferencesView()
         }
         .sheet(isPresented: $showDeleteAccount) {
             DeleteAccountView()
@@ -219,7 +206,7 @@ struct SettingsScreen: View {
                 SettingsIconBadge(icon: "rectangle.bottomthird.inset.filled",
                                   color: Color(hex: 0x06B6D4))
 
-                Text("Navbar transparency")
+                Text("Dock background transparency")
                     .font(.app(.body))
 
                 Spacer()
@@ -230,9 +217,9 @@ struct SettingsScreen: View {
                     .monospacedDigit()
             }
 
-            Slider(value: $navbarTransparency, in: 0...0.9, step: 0.05)
+            Slider(value: $navbarTransparency, in: 0...0.55, step: 0.05)
                 .tint(Theme.accent)
-                .accessibilityLabel("Navbar transparency")
+                .accessibilityLabel("Dock background transparency")
                 .accessibilityValue("\(Int((navbarTransparency * 100).rounded())) percent")
 
             HStack {
@@ -311,7 +298,7 @@ struct SettingsScreen: View {
                         if isSelected {
                             Image(systemName: "checkmark")
                                 .font(.app(.subheadline, .bold))
-                                .foregroundStyle(.white)
+                                .foregroundStyle(Theme.onAccent)
                         }
                     }
                     .overlay {
@@ -614,15 +601,5 @@ private enum ProfileImageCache {
         guard let image = UIImage(data: data) else { return nil }
         cache.setObject(image, forKey: key)
         return image
-    }
-}
-
-/// A simple empty-state screen used by the not-yet-built tabs.
-struct PlaceholderScreen: View {
-    let title: String
-    let systemImage: String
-
-    var body: some View {
-        ContentUnavailableView(title, systemImage: systemImage, description: Text("Coming soon"))
     }
 }

@@ -8,11 +8,16 @@ import UIKit
 struct FloatingDock: View {
     @Binding var selectedTab: DockTab
     @AppStorage("navbarTransparency") private var navbarTransparency = 0.0
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     /// Keep the stored preference defensive in case an older/newer build writes a
     /// value outside the range exposed by Settings.
     private var backgroundVisibility: Double {
-        1 - min(max(navbarTransparency, 0), 0.9)
+        if reduceTransparency || colorSchemeContrast == .increased { return 1 }
+        return 1 - min(max(navbarTransparency, 0), 0.55)
     }
 
     var body: some View {
@@ -21,23 +26,19 @@ struct FloatingDock: View {
                 let isActive = tab == selectedTab
 
                 Button { select(tab) } label: {
-                    HStack(spacing: isActive ? 8 : 0) {
+                    VStack(spacing: 2) {
                         Image(systemName: tab.systemImage)
-                            .font(.app(size: 19, weight: .semibold))
-                            .frame(width: 22)
-                        if isActive {
-                            Text(LocalizedStringKey(tab.rawValue))
-                                .font(.app(.caption, .semibold))
-                                .lineLimit(1)
-                                .fixedSize()
-                                .transition(.opacity.combined(with: .move(edge: .leading)))
-                        }
+                            .font(.app(.body, .semibold))
+                        Text(LocalizedStringKey(tab.rawValue))
+                            .font(.app(.caption2, isActive ? .bold : .medium))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
                     }
                     .foregroundStyle(
                         isActive ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.secondary)
                     )
                     .frame(minWidth: 44, minHeight: 44)
-                    .padding(.horizontal, isActive ? 13 : 4)
+                    .padding(.horizontal, dynamicTypeSize.isAccessibilitySize ? 4 : 8)
                     .background(
                         isActive ? Theme.accent.opacity(0.13) : Color.clear,
                         in: .capsule
@@ -65,7 +66,7 @@ struct FloatingDock: View {
         }
         .shadow(color: .black.opacity(0.14 * backgroundVisibility), radius: 14, y: 6)
         .frame(maxWidth: .infinity)
-        .animation(.spring(response: 0.38, dampingFraction: 0.82), value: selectedTab)
+        .animation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(response: 0.38, dampingFraction: 0.82), value: selectedTab)
         .animation(.snappy, value: navbarTransparency)
         // Make the whole bottom strip swipeable, not just the capsule itself, so a
         // thumb swipe anywhere along the dock changes tabs — while staying confined
@@ -105,7 +106,7 @@ struct FloatingDock: View {
     private func select(_ tab: DockTab) {
         guard tab != selectedTab else { return }
         UISelectionFeedbackGenerator().selectionChanged()
-        withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+        withAnimation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(response: 0.38, dampingFraction: 0.82)) {
             selectedTab = tab
         }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()

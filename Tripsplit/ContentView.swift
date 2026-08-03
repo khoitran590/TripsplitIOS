@@ -174,10 +174,9 @@ struct ContentView: View {
         }
         .animation(.snappy, value: onboarding.welcomeBackName)
         .onChange(of: selectedTab) { _, tab in visitedTabs.insert(tab) }
-        // Sign-in happens in the profile sheet (it hosts `AuthView` when signed out);
-        // once authentication succeeds, keep discovery as the app's front door.
+        // Keep the user on the tab that requested authentication so the presenting
+        // screen can replay the original intent after the sheet closes.
         .onChange(of: auth.isAuthenticated) { _, isAuthenticated in
-            if isAuthenticated { selectedTab = .explore }
             // Redeem an invitation link that was opened before the user signed in.
             if isAuthenticated, let url = pendingInviteURL {
                 pendingInviteURL = nil
@@ -237,6 +236,12 @@ struct ContentView: View {
             showProfileSetup = onboarding.visibleStep == .profileSetup
         }
         .task(id: auth.session?.accessToken) {
+            if AppStoreDemoData.isEnabled {
+                store.installAppStoreDemoData()
+                friends.store = store
+                onboarding.update(userID: AppStoreDemoData.userID, displayName: store.currentUser.name)
+                return
+            }
             // Keep the trip store's token + identity in sync with the auth session and
             // reload the user's trips from Supabase whenever they sign in (or back out).
             store.accessToken = auth.session?.accessToken

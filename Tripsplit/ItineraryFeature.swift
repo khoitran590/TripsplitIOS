@@ -1274,15 +1274,15 @@ struct ItineraryDetailView: View {
                                 .font(.app(.subheadline, .semibold))
                             if let date = dayDate(trip, index: index) {
                                 Text(verbatim: date.formatted(.dateTime.month(.abbreviated).day()))
-                                    .font(.app(size: 10, weight: .medium))
+                                    .font(.app(.caption2, .medium))
                                     .opacity(0.8)
                             } else if !itinerary.days[index].stops.isEmpty {
                                 Text("\(itinerary.days[index].stops.count) stop\(itinerary.days[index].stops.count == 1 ? "" : "s")")
-                                    .font(.app(size: 10, weight: .medium))
+                                    .font(.app(.caption2, .medium))
                                     .opacity(0.8)
                             }
                         }
-                        .foregroundStyle(isOn ? .white : .primary)
+                        .foregroundStyle(isOn ? Theme.onAccent : .primary)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
                     }

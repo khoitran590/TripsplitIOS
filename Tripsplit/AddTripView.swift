@@ -24,6 +24,9 @@ struct AddTripView: View {
     @State private var cropCandidate: CoverCropCandidate?
     @State private var isSaving = false
     @State private var errorMessage: String?
+    @FocusState private var focusedField: TripField?
+
+    private enum TripField: Hashable { case name, budget, member }
 
     private var canCreate: Bool {
         !name.trimmingCharacters(in: .whitespaces).isEmpty && !isSaving
@@ -136,8 +139,11 @@ struct AddTripView: View {
         TripCard(title: "Where to?", icon: "mappin.and.ellipse") {
             HStack(spacing: 10) {
                 Image(systemName: "suitcase.fill").foregroundStyle(.secondary)
-                TextField("Trip name (e.g. Summer in Tokyo)", text: $name)
+                TextField("Summer in Tokyo", text: $name)
                     .font(.app(.body, .semibold))
+                    .accessibilityLabel("Trip name")
+                    .submitLabel(.next)
+                    .focused($focusedField, equals: .name)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
@@ -215,6 +221,8 @@ struct AddTripView: View {
                 Text(currencySymbol(currency)).foregroundStyle(.secondary)
                 TextField("0.00", text: $budgetText)
                     .keyboardType(.decimalPad)
+                    .focused($focusedField, equals: .budget)
+                    .accessibilityLabel("Budget in \(currency)")
             }
             .font(.app(.title3, .semibold))
             .padding(.horizontal, 14)
@@ -244,6 +252,7 @@ struct AddTripView: View {
             HStack(spacing: 10) {
                 TextField("Add tripmate name", text: $memberName)
                     .submitLabel(.done)
+                    .focused($focusedField, equals: .member)
                     .onSubmit { addMember() }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
@@ -252,7 +261,7 @@ struct AddTripView: View {
                     Image(systemName: "plus")
                         .font(.app(.subheadline, .bold))
                         .foregroundStyle(Theme.onAccent)
-                        .frame(width: 40, height: 40)
+                        .frame(width: 44, height: 44)
                 }
                 .buttonStyle(.plain)
                 .glassEffect(.regular.tint(Theme.accent).interactive(), in: .circle)

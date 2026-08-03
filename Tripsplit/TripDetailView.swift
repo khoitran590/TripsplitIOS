@@ -13,6 +13,7 @@ struct TripDetailView: View {
     @State private var showAddExpense = false
     @State private var showEditTrip = false
     @State private var showSignInAlert = false
+    @State private var protectedIntent: ProtectedIntent?
     @State private var scrollToSettle = false
     @State private var activeSettlement: Settlement?
     @State private var settlementToConfirm: Settlement?
@@ -40,6 +41,8 @@ struct TripDetailView: View {
     private enum TripDetailTab: String, CaseIterable {
         case overview, feed
     }
+
+    private enum ProtectedIntent { case addExpense, editTrip }
 
     private enum ExpenseDateWindow: String, CaseIterable, Identifiable {
         case all = "Any date", week = "Last 7 days", month = "Last 30 days"
@@ -122,7 +125,17 @@ struct TripDetailView: View {
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
-            .signInRequiredAlert(isPresented: $showSignInAlert)
+            .sheet(isPresented: $showSignInAlert) {
+                AuthenticationSheet(reason: "Sign in to update this shared trip.")
+            }
+            .onChange(of: auth.isAuthenticated) { _, signedIn in
+                guard signedIn, let intent = protectedIntent else { return }
+                protectedIntent = nil
+                switch intent {
+                case .addExpense: showAddExpense = true
+                case .editTrip: showEditTrip = true
+                }
+            }
             .sheet(isPresented: $showAddExpense) {
                 AddExpenseView(tripID: tripID)
             }
@@ -278,14 +291,14 @@ struct TripDetailView: View {
     private func heroActions(_ trip: Trip) -> some View {
         HStack(spacing: 10) {
             heroButton("Add Expense", icon: "plus") {
-                if auth.isAuthenticated { showAddExpense = true } else { showSignInAlert = true }
+                requireAuthentication(for: .addExpense)
             }
             if store.isCreator(of: trip) {
                 heroButton("Edit Trip", icon: "calendar") {
-                    if auth.isAuthenticated { showEditTrip = true } else { showSignInAlert = true }
+                    requireAuthentication(for: .editTrip)
                 }
             }
-            heroButton("Settle Up", icon: "person.2.fill") { scrollToSettle = true }
+            heroButton("Record Payment", icon: "person.2.fill") { scrollToSettle = true }
             ShareLink(item: TripExport.text(trip)) {
                 Image(systemName: "square.and.arrow.up")
                     .font(.app(.caption, .semibold))
@@ -332,7 +345,7 @@ struct TripDetailView: View {
                 Image(systemName: icon).font(.app(.caption, .semibold))
                 Text(title).font(.app(.subheadline, .semibold))
             }
-            .foregroundStyle(detailTab == tab ? Color.white : .secondary)
+            .foregroundStyle(detailTab == tab ? Theme.onAccent : .secondary)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)
             .background(
@@ -397,7 +410,7 @@ struct TripDetailView: View {
                 Spacer()
                 if store.isCreator(of: trip) {
                     Button {
-                        if auth.isAuthenticated { showEditTrip = true } else { showSignInAlert = true }
+                        requireAuthentication(for: .editTrip)
                     } label: {
                         Text("Edit Budget")
                             .font(.app(.caption, .semibold))
@@ -457,20 +470,32 @@ struct TripDetailView: View {
 
             let owed = trip.remainingOwed(for: me)
             HStack {
-                statColumn("You owe", money(owed.by, trip.currencyCode), Color(hex: 0xEF4444))
+                statColumn("You owe", money(owed.by, trip.currencyCode), Theme.negative)
                 Spacer()
-                statColumn("You're owed", money(owed.to, trip.currencyCode), Color(hex: 0x10B981))
+                statColumn("You're owed", money(owed.to, trip.currencyCode), Theme.positive)
             }
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular, in: .rect(cornerRadius: 24))
+        .readableSurface(cornerRadius: Theme.cardRadius)
+    }
+
+    private func requireAuthentication(for intent: ProtectedIntent) {
+        guard auth.isAuthenticated else {
+            protectedIntent = intent
+            showSignInAlert = true
+            return
+        }
+        switch intent {
+        case .addExpense: showAddExpense = true
+        case .editTrip: showEditTrip = true
+        }
     }
 
     private func budgetTile(_ label: LocalizedStringKey, _ value: String, _ color: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label)
-                .font(.app(size: 10, weight: .semibold)).tracking(0.5)
+                .font(.app(.caption2, .semibold)).tracking(0.5)
                 .textCase(.uppercase)
                 .foregroundStyle(.secondary)
             Text(value)
@@ -546,7 +571,7 @@ struct TripDetailView: View {
     private func settleCard(_ trip: Trip) -> some View {
         // Confirmed-paid transfers drop out of this card and reappear under History.
         let settlements = trip.settlements().filter { !store.isFullySettled(tripID: tripID, $0) }
-        return TripCard(title: "Settle Up", icon: "arrow.left.arrow.right.circle.fill") {
+        return TripCard(title: "Record Payments", icon: "arrow.left.arrow.right.circle.fill") {
             if settlements.isEmpty {
                 Text("All settled up — no transfers needed.")
                     .font(.app(.subheadline))
@@ -567,7 +592,7 @@ struct TripDetailView: View {
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel(Text("How settle up is calculated"))
+                    .accessibilityLabel(Text("How payments are calculated"))
                 }
                 let groups = creditorGroups(settlements)
                 ForEach(groups, id: \.creditor.id) { group in
@@ -759,7 +784,7 @@ struct TripDetailView: View {
                                 .lineLimit(1)
                             if member.id == trip.creatorID {
                                 Text("Organizer")
-                                    .font(.app(size: 9, weight: .semibold))
+                                    .font(.app(.caption2, .semibold))
                                     .foregroundStyle(Theme.accent)
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 2)

@@ -386,12 +386,13 @@ enum AppTheme: String, CaseIterable, Identifiable {
 /// and follow the chosen theme in both light and dark mode.
 struct AppBackground: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         let theme = ThemeManager.shared.selection
         // Kept faint so glass materials layered on top refract a hint of the
         // theme instead of a saturated blob.
-        let glowOpacity = colorScheme == .dark ? 0.08 : 0.10
+        let glowOpacity = reduceTransparency ? 0 : (colorScheme == .dark ? 0.08 : 0.10)
         LinearGradient(colors: theme.homeGradient, startPoint: .top, endPoint: .bottom)
             .overlay(alignment: .topLeading) {
                 glow(theme.accent, opacity: glowOpacity)
@@ -462,6 +463,9 @@ enum Theme {
     static let surfaceSubtle = Color(light: 0xF5F7F9, dark: 0x18191C)
     static let separator = Color(light: 0xC9D1D9, dark: 0x3C4046)
     static let elevatedShadow = Color(light: 0x1F2937, dark: 0x000000).opacity(0.12)
+    /// Readable secondary copy over the app's decorative backgrounds. Unlike the
+    /// system tertiary hierarchy, this token remains suitable for normal body text.
+    static let textSecondary = Color(light: 0x4B5563, dark: 0xC6CBD2)
 
     /// Accent used for primary actions and creator badges (follows the chosen theme).
     static var accent: Color { ThemeManager.shared.selection.accent }
@@ -472,11 +476,21 @@ enum Theme {
     /// Text and icons placed directly on the theme accent.
     static let onAccent = Color(light: 0xFFFFFF, dark: 0x101216)
 
-    /// Positive (you're owed / settled) and negative (you owe) semantic colors.
-    static let positive = Color(hex: 0x10B981)
-    static let negative = Color(hex: 0xEF4444)
-    /// Caution (budget nearing its limit) semantic color.
-    static let warning = Color(hex: 0xF59E0B)
+    /// Semantic colors are intentionally adaptive: the darker light-mode values
+    /// remain readable as small text on white, while their lifted dark-mode values
+    /// stay distinct from raised dark surfaces.
+    static let positive = Color(light: 0x047857, dark: 0x6EE7B7)
+    static let negative = Color(light: 0xB91C1C, dark: 0xFCA5A5)
+    static let warning = Color(light: 0x92400E, dark: 0xFCD34D)
+
+    /// Non-text fills may retain brighter brand-like status hues. Pair them with
+    /// these foregrounds instead of forcing white text.
+    static let positiveFill = Color(light: 0x10B981, dark: 0x34D399)
+    static let negativeFill = Color(light: 0xEF4444, dark: 0xF87171)
+    static let warningFill = Color(light: 0xF59E0B, dark: 0xFBBF24)
+    static let onPositiveFill = Color(light: 0x052E22, dark: 0x052E22)
+    static let onNegativeFill = Color(light: 0xFFFFFF, dark: 0x3F0808)
+    static let onWarningFill = Color(light: 0x3B1D04, dark: 0x3B1D04)
 }
 
 // MARK: - Readable surfaces
@@ -486,10 +500,28 @@ extension View {
     /// intentionally more opaque than decorative glass and keeps a visible edge in
     /// light mode, where translucent cards otherwise disappear into the backdrop.
     func readableSurface(cornerRadius: CGFloat = 20, elevated: Bool = false) -> some View {
-        background(Theme.surface.opacity(0.92), in: .rect(cornerRadius: cornerRadius))
+        modifier(ReadableSurfaceModifier(cornerRadius: cornerRadius, elevated: elevated))
+    }
+}
+
+private struct ReadableSurfaceModifier: ViewModifier {
+    let cornerRadius: CGFloat
+    let elevated: Bool
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    func body(content: Content) -> some View {
+        content
+            .background(
+                Theme.surface.opacity(reduceTransparency ? 1 : 0.96),
+                in: .rect(cornerRadius: cornerRadius)
+            )
             .overlay {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(Theme.separator.opacity(0.85), lineWidth: 1)
+                    .strokeBorder(
+                        Theme.separator.opacity(colorSchemeContrast == .increased ? 1 : 0.85),
+                        lineWidth: colorSchemeContrast == .increased ? 2 : 1
+                    )
             }
             .shadow(
                 color: elevated ? Theme.elevatedShadow : .clear,

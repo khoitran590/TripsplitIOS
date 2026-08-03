@@ -76,8 +76,14 @@ final class OnboardingCoordinator {
     private func start(userID: UUID, displayName: String) {
         let name = displayName.trimmingCharacters(in: .whitespaces)
         guard isOnboarded(userID) else {
-            // New here: name first (it's how trip mates see them), then the tour.
-            step = name.isEmpty ? .profileSetup : .exploreTour
+            // New here: ask only for the identity tripmates need. Feature education
+            // stays contextual in Explore, Map, and expense screens.
+            if name.isEmpty {
+                step = .profileSetup
+            } else {
+                markOnboarded(userID)
+                step = nil
+            }
             return
         }
         if !name.isEmpty { greet(name) }
@@ -88,12 +94,7 @@ final class OnboardingCoordinator {
     func profileSetupFinished() {
         guard step == .profileSetup else { return }
         step = nil
-        guard let currentUserID, !isOnboarded(currentUserID) else { return }
-        // Let the sheet finish dismissing before the walkthrough takes the screen.
-        Task {
-            try? await Task.sleep(for: .seconds(0.35))
-            if step == nil { step = .exploreTour }
-        }
+        if let currentUserID { markOnboarded(currentUserID) }
     }
 
     /// Called when the Explore walkthrough closes — including when the user opens it
@@ -138,68 +139,67 @@ enum WelcomeIntent {
     case browse
 }
 
-/// First-launch welcome flow: three swipeable value pages ending in a sign-in
-/// invitation. Shown to signed-out first launches only — `RootView` skips it both
-/// for accounts with a stored session and once `hasSeenWelcome` is set.
+/// A single optional value screen. Feature education is presented contextually on
+/// the related screen instead of making a first-time visitor complete a carousel.
 struct WelcomeView: View {
     /// Called when the user finishes or skips the flow.
     var onFinish: (WelcomeIntent) -> Void
 
-    @State private var page = 0
-
-    private struct Page {
-        let systemImage: String
-        let eyebrow: LocalizedStringKey
-        let title: LocalizedStringKey
-        let subtitle: LocalizedStringKey
-    }
-
-    private let pages: [Page] = [
-        Page(systemImage: "sparkles", eyebrow: "DISCOVER",
-             title: "Discover trips worth taking",
-             subtitle: "Browse photo-rich guides, local favorites, and practical plans for your next destination."),
-        Page(systemImage: "map.fill", eyebrow: "PLAN",
-             title: "Plan days together",
-             subtitle: "Shape an itinerary, map every stop, and invite friends to build the trip with you."),
-        Page(systemImage: "person.2.fill", eyebrow: "SPLIT",
-             title: "Split costs without the spreadsheet",
-             subtitle: "Track shared expenses, scan receipts, and settle fairly when the spending starts."),
-    ]
-
-    private var isLastPage: Bool { page == pages.count - 1 }
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
             AppBackground()
 
-            VStack(spacing: 0) {
+            VStack(spacing: dynamicTypeSize.isAccessibilitySize ? 12 : 20) {
                 HStack {
                     Spacer()
-                    Button("Skip") { onFinish(.browse) }
+                    Button("Browse now") { onFinish(.browse) }
                         .font(.app(.subheadline, .semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.textSecondary)
                         .frame(minWidth: 44, minHeight: 44)
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 8)
 
-                TabView(selection: $page) {
-                    ForEach(pages.indices, id: \.self) { index in
-                        pageView(pages[index], index: index)
-                            .tag(index)
-                    }
-                }
-                .tabViewStyle(.page(indexDisplayMode: .never))
+                ScrollView {
+                    VStack(spacing: dynamicTypeSize.isAccessibilitySize ? 18 : 28) {
+                        ZStack {
+                            Circle()
+                                .fill(Theme.accent.opacity(0.12))
+                                .frame(width: dynamicTypeSize.isAccessibilitySize ? 116 : 150,
+                                       height: dynamicTypeSize.isAccessibilitySize ? 116 : 150)
+                            Image(systemName: "person.2.badge.gearshape.fill")
+                                .font(.app(.largeTitle, .semibold))
+                                .foregroundStyle(
+                                    LinearGradient(colors: [Theme.accent, Theme.accentSecondary],
+                                                   startPoint: .topLeading, endPoint: .bottomTrailing)
+                                )
+                                .symbolEffect(.appear, options: reduceMotion ? .nonRepeating : .default)
+                                .accessibilityHidden(true)
+                        }
 
-                HStack(spacing: 7) {
-                    ForEach(pages.indices, id: \.self) { index in
-                        Capsule()
-                            .fill(index == page ? Theme.accent : Color.secondary.opacity(0.25))
-                            .frame(width: index == page ? 24 : 7, height: 7)
+                        VStack(spacing: 12) {
+                            Text("PLAN · SPLIT · SETTLE")
+                                .font(.app(.caption, .bold))
+                                .tracking(1.4)
+                                .foregroundStyle(Theme.accent)
+                            Text("Trips are better together")
+                                .font(.app(.largeTitle, .bold))
+                                .multilineTextAlignment(.center)
+                            Text("Discover a destination, build the plan with friends, and keep every shared expense fair in one place.")
+                                .font(.app(.body))
+                                .foregroundStyle(Theme.textSecondary)
+                                .multilineTextAlignment(.center)
+                                .lineSpacing(3)
+                        }
+                        .padding(.horizontal, 28)
+                        .accessibilityElement(children: .combine)
                     }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, dynamicTypeSize.isAccessibilitySize ? 8 : 24)
                 }
-                .animation(.snappy, value: page)
-                .padding(.bottom, 22)
 
                 actions
                     .padding(.horizontal, 24)
@@ -208,19 +208,10 @@ struct WelcomeView: View {
         }
     }
 
-    /// The last page trades "Continue" for the two ways into the app, so the flow
-    /// ends on a decision instead of dropping the user somewhere unexplained.
-    @ViewBuilder
     private var actions: some View {
-        VStack(spacing: 6) {
-            Button {
-                if isLastPage {
-                    onFinish(.signIn)
-                } else {
-                    withAnimation(.snappy) { page += 1 }
-                }
-            } label: {
-                Text(isLastPage ? "Create an account" : "Continue")
+        VStack(spacing: 8) {
+            Button { onFinish(.signIn) } label: {
+                Text("Create an account")
                     .font(.app(.headline))
                     .foregroundStyle(Theme.onAccent)
                     .frame(maxWidth: .infinity, minHeight: 54)
@@ -228,63 +219,15 @@ struct WelcomeView: View {
             .buttonStyle(.plain)
             .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
 
-            if isLastPage {
-                Button {
-                    onFinish(.browse)
-                } label: {
-                    Text("Look around first")
-                        .font(.app(.subheadline, .semibold))
-                        .foregroundStyle(.primary)
-                        .frame(maxWidth: .infinity, minHeight: 48)
-                }
-                .buttonStyle(.plain)
-                .accessibilityHint("Opens the app signed out. You can sign in later from the Profile tab.")
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            Button { onFinish(.browse) } label: {
+                Text("Browse without an account")
+                    .font(.app(.subheadline, .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity, minHeight: 48)
             }
+            .buttonStyle(.plain)
+            .accessibilityHint("Opens Explore signed out. Account-only actions will offer sign in when needed.")
         }
-        .animation(.snappy, value: isLastPage)
-    }
-
-    private func pageView(_ item: Page, index: Int) -> some View {
-        ScrollView {
-            VStack(spacing: 28) {
-                ZStack {
-                    Circle()
-                        .fill(Theme.accent.opacity(0.12))
-                        .frame(width: 160, height: 160)
-                    Circle()
-                        .stroke(Theme.accent.opacity(0.18), lineWidth: 1)
-                        .frame(width: 196, height: 196)
-                    Image(systemName: item.systemImage)
-                        .font(.app(size: 64, weight: .medium))
-                        .foregroundStyle(
-                            LinearGradient(colors: [Theme.accent, Theme.accentSecondary],
-                                           startPoint: .topLeading, endPoint: .bottomTrailing)
-                        )
-                        .symbolEffect(.bounce, value: page == index)
-                        .accessibilityHidden(true)
-                }
-
-                VStack(spacing: 12) {
-                    Text(item.eyebrow)
-                        .font(.app(.caption, .bold))
-                        .tracking(1.8)
-                        .foregroundStyle(Theme.accent)
-                    Text(item.title)
-                        .font(.app(.largeTitle, .bold))
-                        .multilineTextAlignment(.center)
-                    Text(item.subtitle)
-                        .font(.app(.body))
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .lineSpacing(3)
-                }
-                .padding(.horizontal, 30)
-                .accessibilityElement(children: .combine)
-            }
-            .padding(.vertical, 20)
-        }
-        .scrollBounceBehavior(.basedOnSize)
     }
 }
 

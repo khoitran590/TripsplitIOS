@@ -58,6 +58,36 @@ enum AIConsentPreferences {
 actor AIConsentService {
     static let shared = AIConsentService()
 
+    nonisolated static func userFacingErrorMessage(
+        data: Data,
+        statusCode: Int,
+        purpose: AIConsentPurpose
+    ) -> String {
+        let rawResponse = String(data: data, encoding: .utf8) ?? ""
+        let normalized = rawResponse.lowercased()
+
+        if statusCode == 404
+            || normalized.contains("pgrst202")
+            || normalized.contains("schema cache")
+            || normalized.contains("could not find the function") {
+            let fallback = purpose == .receiptProcessing
+                ? "Use On-Device Scan"
+                : "Continue Without AI"
+            return "Cloud AI is temporarily unavailable. Choose \(fallback) below and try again later."
+        }
+
+        if statusCode == 401 || statusCode == 403 {
+            return "Your session could not authorize this privacy choice. Sign in again and retry."
+        }
+
+        if statusCode >= 500 {
+            return "Cloud AI is temporarily unavailable. Your data was not sent. Try again later."
+        }
+
+        return ReceiptStorage.messageField(from: rawResponse)
+            ?? "Your privacy choice could not be saved. Your data was not sent."
+    }
+
     func setConsent(_ granted: Bool, purpose: AIConsentPurpose, accessToken: String) async throws {
         guard let url = URL(string: "\(SupabaseConfig.url)/rest/v1/rpc/set_ai_consent") else {
             throw AuthError(message: "Supabase isn't configured.")
@@ -75,8 +105,10 @@ actor AIConsentService {
         let (data, response) = try await BackendSecurity.secureSession.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             let status = (response as? HTTPURLResponse)?.statusCode ?? -1
-            let detail = ReceiptStorage.messageField(from: String(data: data, encoding: .utf8) ?? "")
-            throw AuthError(message: detail ?? "Your privacy choice could not be saved.", statusCode: status)
+            throw AuthError(
+                message: Self.userFacingErrorMessage(data: data, statusCode: status, purpose: purpose),
+                statusCode: status
+            )
         }
     }
 }
@@ -187,7 +219,9 @@ struct PrivacyPolicyView: View {
                     policySection("Cloud providers", "TripSplit stores account and app data with Supabase. Cloud-assisted receipt scanning sends receipt images and recognized text to Google Cloud Vision and Google Gemini only after consent. AI itinerary planning sends the destination, dates, budget, and existing plan text to Google Gemini and may use Google Search grounding only after consent.")
                     policySection("Retention", "TripSplit retains cloud data while your account or shared records need it. The app's AI proxy does not intentionally persist prompts, receipt images, or provider responses in logs. Provider-side retention is governed by the production cloud agreements. Device caches are protected and removed at sign-out or account deletion.")
                     policySection("Your choices", "You can decline or revoke cloud AI, use manual and on-device alternatives, edit profile information, sign out, and permanently delete your account in Settings. Deletion removes owned trips and user-generated content; shared financial history may retain a pseudonymous participant record so other members' balances remain accurate.")
-                    policySection("Security and contact", "TripSplit uses HTTPS, private object storage, row-level authorization, Keychain session storage, and server-side provider credentials. Before public release, a support email and hosted copy of this policy must be added here and in App Store Connect.")
+                    policySection("Security and contact", "TripSplit uses HTTPS, private object storage, row-level authorization, Keychain session storage, and server-side provider credentials. Privacy questions can be sent to support@tripsplit.app.")
+                    Link("Email privacy support", destination: URL(string: "mailto:support@tripsplit.app?subject=TripSplit%20Privacy")!)
+                        .font(.app(.body, .semibold))
                 }
                 .padding(24)
             }

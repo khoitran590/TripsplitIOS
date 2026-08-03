@@ -48,12 +48,8 @@ enum AppLanguage: String, CaseIterable, Identifiable {
     /// Best match for the user's current device languages, used as the first-launch
     /// default before they've picked one explicitly.
     static var systemDefault: AppLanguage {
-        for preferred in Locale.preferredLanguages {
-            let lower = preferred.lowercased()
-            if lower.hasPrefix("zh") { return .chineseSimplified }
-            if lower.hasPrefix("es") { return .spanish }
-            if lower.hasPrefix("en") { return .english }
-        }
+        // The first App Store release is intentionally English-only until every
+        // primary, privacy, destructive, and error journey has reviewed translations.
         return .english
     }
 }
@@ -94,9 +90,9 @@ final class LocalizationManager {
     var locale: Locale { Locale(identifier: language.code) }
 
     private init() {
-        let saved = UserDefaults.standard.string(forKey: Self.storageKey)
-        language = saved.flatMap(AppLanguage.init(rawValue:)) ?? .systemDefault
+        language = .english
         Bundle.setLanguage(language.code)
+        persist()
     }
 
     private func persist() {
@@ -149,7 +145,7 @@ struct LanguagePickerView: View {
         NavigationStack {
             List {
                 Section {
-                    ForEach(AppLanguage.allCases) { language in
+                    ForEach([AppLanguage.english]) { language in
                         Button {
                             localization.language = language
                             dismiss()
@@ -177,7 +173,7 @@ struct LanguagePickerView: View {
                         .buttonStyle(.plain)
                     }
                 } footer: {
-                    Text("Some screens may still appear in English while translations are completed.")
+                    Text("Additional reviewed languages will be added in a future update.")
                 }
             }
             .navigationTitle("Language")

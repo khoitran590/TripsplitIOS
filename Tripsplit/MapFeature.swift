@@ -672,6 +672,8 @@ struct MapScreen: View {
     @State private var showsFocusDetail = false
     @State private var lastCenteredCoordinateKey: String?
     @State private var searchQuery = ""
+    @FocusState private var isSearchFocused: Bool
+    @State private var searchFeedback: String?
     @State private var showsSavedPlaces = false
     @State private var showsSavedList = false
     @State private var itineraryPlace: MapPlace?
@@ -1101,7 +1103,7 @@ struct MapScreen: View {
 
             searchBar
 
-            if searchQuery.isEmpty, !recentSearches.isEmpty {
+            if isSearchFocused, searchQuery.isEmpty, !recentSearches.isEmpty {
                 recentSearchChips
             }
 
@@ -1145,6 +1147,16 @@ struct MapScreen: View {
                 .padding(.vertical, 8)
                 .glassEffect(.regular, in: .capsule)
             }
+
+            if let searchFeedback {
+                Label(searchFeedback, systemImage: "wifi.exclamationmark")
+                    .font(.app(.caption, .medium))
+                    .foregroundStyle(Theme.negative)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .readableSurface(cornerRadius: 14)
+                    .accessibilityElement(children: .combine)
+            }
         }
         .padding(.horizontal)
         .padding(.top, 8)
@@ -1160,9 +1172,9 @@ struct MapScreen: View {
                 .font(.app(.subheadline))
             Button(action: clearCategory) {
                 Image(systemName: "xmark")
-                    .font(.app(size: 12, weight: .bold))
+                    .font(.app(.caption, .bold))
                     .foregroundStyle(.secondary)
-                    .frame(width: 26, height: 26)
+                    .frame(width: 44, height: 44)
                     .contentShape(.circle)
             }
             .buttonStyle(.plain)
@@ -1190,74 +1202,6 @@ struct MapScreen: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 Button {
-                    showsSpending.toggle()
-                    selectedPlaceID = nil
-                    if showsSpending { fitCamera(to: expensePins.map(\.coordinate)) }
-                } label: {
-                    Label("Spending", systemImage: showsSpending ? "dollarsign.circle.fill" : "dollarsign.circle")
-                        .font(.app(.subheadline, .medium))
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 9)
-                }
-                .buttonStyle(.plain)
-                .glassEffect(
-                    showsSpending ? .regular.tint(.orange).interactive() : .regular.interactive(),
-                    in: .capsule
-                )
-
-                Button {
-                    showsSavedPlaces.toggle()
-                    if showsSavedPlaces { fitSavedPlaces() }
-                } label: {
-                    Label("Saved", systemImage: showsSavedPlaces ? "bookmark.fill" : "bookmark")
-                        .font(.app(.subheadline, .medium))
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 9)
-                }
-                .buttonStyle(.plain)
-                .glassEffect(
-                    showsSavedPlaces ? .regular.tint(.accentColor).interactive() : .regular.interactive(),
-                    in: .capsule
-                )
-                .contextMenu {
-                    Button("View saved list", systemImage: "list.bullet") { showsSavedList = true }
-                }
-
-                if selectedTripID != nil {
-                    Button {
-                        showsTripPlaces.toggle()
-                        selectedPlaceID = nil
-                        if showsTripPlaces { fitCamera(to: sharedTripPlaces.map(\.coordinate)) }
-                    } label: {
-                        Label("Trip places", systemImage: showsTripPlaces ? "person.2.fill" : "person.2")
-                            .font(.app(.subheadline, .medium))
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 9)
-                    }
-                    .buttonStyle(.plain)
-                    .glassEffect(
-                        showsTripPlaces ? .regular.tint(.indigo).interactive() : .regular.interactive(),
-                        in: .capsule
-                    )
-
-                    Button {
-                        showsFeedPlaces.toggle()
-                        selectedPlaceID = nil
-                        Task { await refreshFeedPins() }
-                    } label: {
-                        Label("Feed", systemImage: showsFeedPlaces ? "photo.on.rectangle.angled" : "photo")
-                            .font(.app(.subheadline, .medium))
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 9)
-                    }
-                    .buttonStyle(.plain)
-                    .glassEffect(
-                        showsFeedPlaces ? .regular.tint(.teal).interactive() : .regular.interactive(),
-                        in: .capsule
-                    )
-                }
-
-                Button {
                     locationManager.locate()
                 } label: {
                     Label("Near me", systemImage: "location.fill")
@@ -1269,16 +1213,47 @@ struct MapScreen: View {
                 .glassEffect(.regular.interactive(), in: .capsule)
 
                 Menu {
-                    ForEach(TripMapStyle.allCases) { style in
+                    Button {
+                        showsSavedPlaces.toggle()
+                        if showsSavedPlaces { fitSavedPlaces() }
+                    } label: {
+                        Label("Saved places", systemImage: showsSavedPlaces ? "checkmark" : "bookmark")
+                    }
+                    Button("View saved list", systemImage: "list.bullet") { showsSavedList = true }
+                    Button {
+                        showsSpending.toggle()
+                        selectedPlaceID = nil
+                        if showsSpending { fitCamera(to: expensePins.map(\.coordinate)) }
+                    } label: {
+                        Label("Spending", systemImage: showsSpending ? "checkmark" : "dollarsign.circle")
+                    }
+                    if selectedTripID != nil {
                         Button {
-                            mapStyle = style
+                            showsTripPlaces.toggle()
+                            selectedPlaceID = nil
                         } label: {
-                            if mapStyle == style { Label(style.title, systemImage: "checkmark") }
-                            else { Label(style.title, systemImage: style.icon) }
+                            Label("Shared trip places", systemImage: showsTripPlaces ? "checkmark" : "person.2")
+                        }
+                        Button {
+                            showsFeedPlaces.toggle()
+                            selectedPlaceID = nil
+                            Task { await refreshFeedPins() }
+                        } label: {
+                            Label("Trip feed places", systemImage: showsFeedPlaces ? "checkmark" : "photo")
+                        }
+                    }
+                    Menu("Map style", systemImage: mapStyle.icon) {
+                        ForEach(TripMapStyle.allCases) { style in
+                            Button {
+                                mapStyle = style
+                            } label: {
+                                if mapStyle == style { Label(style.title, systemImage: "checkmark") }
+                                else { Label(style.title, systemImage: style.icon) }
+                            }
                         }
                     }
                 } label: {
-                    Label("Style", systemImage: mapStyle.icon)
+                    Label("Layers & Filters", systemImage: "line.3.horizontal.decrease.circle")
                         .font(.app(.subheadline, .medium))
                         .padding(.horizontal, 14)
                         .padding(.vertical, 9)
@@ -1450,8 +1425,9 @@ struct MapScreen: View {
                 .foregroundStyle(.secondary)
             TextField("Search places or addresses", text: $searchQuery)
                 .font(.app(.subheadline))
+                .focused($isSearchFocused)
                 .submitLabel(.search)
-                .onSubmit { startTextSearch() }
+                .onSubmit { isSearchFocused = false; startTextSearch() }
             if !searchQuery.isEmpty {
                 Button {
                     searchQuery = ""
@@ -1564,6 +1540,7 @@ struct MapScreen: View {
         let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return }
         isSearching = true
+        searchFeedback = nil
         selectedPlaceID = nil
         activeCategory = nil
         showsSearchThisArea = false
@@ -1571,7 +1548,15 @@ struct MapScreen: View {
         let request = MKLocalSearch.Request()
         request.naturalLanguageQuery = query
         if let visibleRegion { request.region = visibleRegion }
-        let items = (try? await MKLocalSearch(request: request).start())?.mapItems ?? []
+        let items: [MKMapItem]
+        do {
+            items = try await MKLocalSearch(request: request).start().mapItems
+        } catch {
+            guard !Task.isCancelled else { return }
+            isSearching = false
+            searchFeedback = "Couldn't search right now. Check your connection and try again."
+            return
+        }
         guard !Task.isCancelled,
               query == searchQuery.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
         places = items.prefix(30).map { MapPlace(mapItem: $0, category: .search) }
@@ -1590,6 +1575,8 @@ struct MapScreen: View {
                 center: first.coordinate,
                 span: MKCoordinateSpan(latitudeDelta: 0.035, longitudeDelta: 0.035)
             ))
+        } else {
+            searchFeedback = "No places matched “\(query)”. Try a broader name or move the map."
         }
     }
 
@@ -1608,11 +1595,20 @@ struct MapScreen: View {
         request.naturalLanguageQuery = openNowOnly ? "\(category.searchQuery) open now" : category.searchQuery
         request.region = region
         request.resultTypes = .pointOfInterest
-        let items = (try? await MKLocalSearch(request: request).start())?.mapItems ?? []
+        let items: [MKMapItem]
+        do {
+            items = try await MKLocalSearch(request: request).start().mapItems
+        } catch {
+            guard !Task.isCancelled else { return }
+            isSearching = false
+            searchFeedback = "Couldn't load nearby places. Check your connection and try again."
+            return
+        }
 
         guard !Task.isCancelled, category == activeCategory else { return }
         places = items.prefix(20).map { MapPlace(mapItem: $0, category: category) }
         isSearching = false
+        searchFeedback = places.isEmpty ? "No nearby \(category.title.lowercased()) matched this area." : nil
     }
 
     private func clearCategory() {
@@ -1624,6 +1620,7 @@ struct MapScreen: View {
         if selectedPlaceID != nil { selectedPlaceID = nil }
         if showsSearchThisArea { showsSearchThisArea = false }
         openNowOnly = false
+        searchFeedback = nil
     }
 
     private func rememberSearch(_ query: String) {
