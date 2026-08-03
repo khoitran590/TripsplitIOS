@@ -674,6 +674,7 @@ struct FriendsListView: View {
 struct SharedProfileView: View {
     @Environment(FriendsStore.self) private var friends
     @Environment(AuthStore.self) private var auth
+    @Environment(TripStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     let token: String
 
@@ -682,6 +683,9 @@ struct SharedProfileView: View {
     @State private var isLoading = true
     @State private var friendStatus = "none"
     @State private var actionBusy = false
+    @State private var reportTarget: ModerationTarget?
+    @State private var profileToBlock: PublicProfile?
+    @State private var safetyError: String?
 
     var body: some View {
         Group {
@@ -697,9 +701,66 @@ struct SharedProfileView: View {
         .navigationTitle("Profile")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            if let profile, !profile.isSelf {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button {
+                            reportTarget = ModerationTarget(
+                                contentType: "profile",
+                                contentID: profile.userID,
+                                authorID: profile.userID,
+                                label: "profile"
+                            )
+                        } label: {
+                            Label("Report Profile", systemImage: "exclamationmark.bubble")
+                        }
+                        Button(role: .destructive) { profileToBlock = profile } label: {
+                            Label("Block Account", systemImage: "person.crop.circle.badge.xmark")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .accessibilityLabel("Profile safety options")
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Done") { dismiss() }
             }
+        }
+        .sheet(item: $reportTarget) { target in
+            ReportContentView(target: target)
+        }
+        .confirmationDialog(
+            "Block this account?",
+            isPresented: Binding(
+                get: { profileToBlock != nil },
+                set: { if !$0 { profileToBlock = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Block Account", role: .destructive) {
+                guard let blocked = profileToBlock else { return }
+                profileToBlock = nil
+                Task {
+                    do {
+                        try await store.blockUser(blocked.userID)
+                        dismiss()
+                    } catch {
+                        safetyError = (error as? AuthError)?.message ?? "The account could not be blocked."
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("You will stop seeing each other's feed content and direct interactions.")
+        }
+        .alert("Safety action failed", isPresented: Binding(
+            get: { safetyError != nil },
+            set: { if !$0 { safetyError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(verbatim: safetyError ?? "")
         }
         .task(id: token) { await load() }
     }

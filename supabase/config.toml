@@ -10,3 +10,9 @@ verify_jwt = true
 
 [functions.suggest-itinerary]
 verify_jwt = true
+
+[functions.delete-account]
+verify_jwt = true
+
+[functions.send-invitation]
+verify_jwt = true

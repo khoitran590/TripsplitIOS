@@ -8,8 +8,8 @@
 // Security posture (mirrors parse-receipt):
 //  - Auth: platform `verify_jwt = true` AND an explicit `/auth/v1/user` check, so only a
 //    real signed-in user (not the anon key) is accepted.
-//  - Rate limit: 20 successful OCR calls per user per 60 seconds. Capacity is reserved
-//    atomically by a service-role-only RPC, then released on upstream/infra failure.
+//  - Rate limit: 20 paid provider attempts per user per 60 seconds. Capacity is reserved
+//    atomically by a service-role-only RPC and is not refunded for invalid/error output.
 //  - Input: JSON body must contain an image payload under the size cap.
 //  - Secret: the Vision key is read from env and never logged or returned.
 //  - No dependencies: plain fetch only, to minimize supply-chain surface.
@@ -28,6 +28,8 @@ const MAX_LINES = 400;             // Clamp a runaway response.
 const RATE_LIMIT = 20;             // Max scans ...
 const RATE_WINDOW_SECONDS = 60;    // ... per user per this window.
 const RATE_KIND = "ocr";
+const CONSENT_PURPOSE = "receipt_processing";
+const CONSENT_VERSION = "2026-08-02";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
@@ -45,6 +47,9 @@ Deno.serve(async (req) => {
   if (!token) return jsonResponse({ error: "Unauthorized" }, 401);
   const user = await getUser(token);
   if (!user) return jsonResponse({ error: "Unauthorized" }, 401);
+  if (!(await hasAIConsent(token, CONSENT_PURPOSE))) {
+    return jsonResponse({ error: "Current AI consent is required." }, 403);
+  }
 
   // 2. Validate input.
   let payload: { imageBase64?: unknown; mimeType?: unknown };
@@ -62,7 +67,8 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: "Receipt OCR is not configured." }, 503);
   }
 
-  // 4. Reserve capacity atomically; commit it only after Cloud Vision succeeds.
+  // 4. Reserve capacity atomically. Once Cloud Vision is called, the attempt is charged
+  // even if the provider returns an error or unusable output.
   let usage: UsageReservation;
   try {
     usage = await reserveUsage(user.id);
@@ -93,14 +99,14 @@ Deno.serve(async (req) => {
       },
     );
   } catch {
-    await completeUsage(usage.reservationId, false);
+    await completeUsage(usage.reservationId, true);
     logUsage("post_call_failure", 502);
     return jsonResponse({ error: "OCR service error" }, 502);
   }
   if (!visionResponse.ok) {
     // Log status only — never the upstream body (avoid leaking key-adjacent detail).
     console.error("Cloud Vision call failed:", visionResponse.status);
-    await completeUsage(usage.reservationId, false);
+    await completeUsage(usage.reservationId, true);
     logUsage("post_call_failure", 502);
     return jsonResponse({ error: "OCR service error" }, 502);
   }
@@ -109,7 +115,7 @@ Deno.serve(async (req) => {
   const annotation = visionJson?.responses?.[0];
   if (!annotation || annotation.error) {
     console.error("Cloud Vision annotation error:", annotation?.error?.code ?? "empty");
-    await completeUsage(usage.reservationId, false);
+    await completeUsage(usage.reservationId, true);
     logUsage("post_call_failure", 502);
     return jsonResponse({ error: "OCR service error" }, 502);
   }
@@ -123,6 +129,23 @@ Deno.serve(async (req) => {
   logUsage("success", 200, usage);
   return jsonResponse({ text: fullText.slice(0, 20_000), lines }, 200);
 });
+
+async function hasAIConsent(token: string, purpose: string): Promise<boolean> {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/has_ai_consent`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+      apikey: SUPABASE_ANON_KEY,
+    },
+    body: JSON.stringify({ p_purpose: purpose, p_consent_version: CONSENT_VERSION }),
+  });
+  if (!response.ok) {
+    console.error(JSON.stringify({ function: "ocr-receipt", outcome: "consent_check_failure", status: response.status }));
+    return false;
+  }
+  return (await response.json().catch(() => false)) === true;
+}
 
 // Cloud Vision returns each word as a separate annotation (element 0 is the whole-image
 // blob, the rest are words with pixel bounding boxes). Receipts print names and prices in

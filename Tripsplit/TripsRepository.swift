@@ -6,8 +6,7 @@ import Foundation
 /// tables. During the B10 compatibility window the database also rebuilds `trips.data`,
 /// allowing older clients to keep reading without making it the source of truth.
 ///
-/// Run `supabase_schema.sql` (at the repo root) once in the Supabase SQL editor to
-/// create the table and its row-level-security policy.
+/// Apply the ordered `supabase/migrations` history to create and secure the backend.
 actor TripsRepository {
     static let shared = TripsRepository()
 
@@ -19,6 +18,14 @@ actor TripsRepository {
     private var syncedSnapshots: [Trip.ID: Trip] = [:]
     private var snapshotUserID: UUID?
     private let cacheLifetime: TimeInterval = 60
+
+    /// Clears user-scoped snapshots when an account leaves the device. The actor is a
+    /// singleton, so in-memory data would otherwise survive even after UI state resets.
+    func clearCachedState() {
+        tripCache = nil
+        syncedSnapshots = [:]
+        snapshotUserID = nil
+    }
 
     private let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
@@ -41,6 +48,29 @@ actor TripsRepository {
             case memberUserID = "member_user_id"
             case invitationID = "invitation_id"
             case accepted
+        }
+    }
+
+    struct InvitationPreview: Decodable {
+        let tripName: String
+        let inviterName: String
+        let expiresAt: Date
+
+        enum CodingKeys: String, CodingKey {
+            case tripName = "trip_name"
+            case inviterName = "inviter_name"
+            case expiresAt = "expires_at"
+        }
+    }
+
+    struct PendingInvitation: Decodable, Identifiable {
+        let id: UUID
+        let email: String?
+        let expiresAt: Date
+
+        enum CodingKeys: String, CodingKey {
+            case id, email
+            case expiresAt = "expires_at"
         }
     }
 
@@ -157,25 +187,18 @@ actor TripsRepository {
         invalidateCache(accessToken: accessToken)
     }
 
-    func inviteMember(tripID: Trip.ID, email: String, accessToken: String) async throws -> InviteResult {
+    func inviteMember(tripID: Trip.ID, email: String, accessToken: String) async throws {
         let body = try JSONSerialization.data(withJSONObject: [
-            "p_trip_id": tripID.uuidString,
-            "p_email": email,
+            "tripID": tripID.uuidString,
+            "email": email,
         ])
-        let data = try await send(
+        _ = try await send(
             "POST",
-            "/rest/v1/rpc/invite_trip_member",
+            "/functions/v1/send-invitation",
             accessToken: accessToken,
-            body: body,
-            extraHeaders: ["Prefer": "return=representation"]
+            body: body
         )
-        if let rows = try? decoder.decode([InviteResult].self, from: data), let first = rows.first {
-            invalidateCache(accessToken: accessToken)
-            return first
-        }
-        let result = try decoder.decode(InviteResult.self, from: data)
         invalidateCache(accessToken: accessToken)
-        return result
     }
 
     func createInvitationLink(tripID: Trip.ID, accessToken: String) async throws -> String {
@@ -209,6 +232,77 @@ actor TripsRepository {
         let tripID = try decoder.decode(AcceptedInviteResult.self, from: data).tripID
         invalidateCache(accessToken: accessToken)
         return tripID
+    }
+
+    func declineInvitation(token: String, accessToken: String) async throws {
+        let body = try JSONSerialization.data(withJSONObject: ["p_token": token])
+        _ = try await send(
+            "POST",
+            "/rest/v1/rpc/decline_trip_invitation",
+            accessToken: accessToken,
+            body: body
+        )
+    }
+
+    func pendingInvitations(tripID: Trip.ID, accessToken: String) async throws -> [PendingInvitation] {
+        let data = try await send(
+            "GET",
+            "/rest/v1/trip_invitations?trip_id=eq.\(tripID.uuidString)&status=eq.pending&select=id,email,expires_at&order=created_at.desc",
+            accessToken: accessToken
+        )
+        return try decoder.decode([PendingInvitation].self, from: data)
+    }
+
+    func revokeInvitation(id: UUID, accessToken: String) async throws {
+        let body = try JSONSerialization.data(withJSONObject: ["p_invitation_id": id.uuidString])
+        _ = try await send(
+            "POST",
+            "/rest/v1/rpc/revoke_trip_invitation",
+            accessToken: accessToken,
+            body: body
+        )
+        invalidateCache(accessToken: accessToken)
+    }
+
+    func previewInvitation(token: String, accessToken: String) async throws -> InvitationPreview {
+        let body = try JSONSerialization.data(withJSONObject: ["p_token": token])
+        let data = try await send(
+            "POST",
+            "/rest/v1/rpc/preview_trip_invitation",
+            accessToken: accessToken,
+            body: body,
+            extraHeaders: ["Prefer": "return=representation"]
+        )
+        if let rows = try? decoder.decode([InvitationPreview].self, from: data), let first = rows.first {
+            return first
+        }
+        return try decoder.decode(InvitationPreview.self, from: data)
+    }
+
+    func removeMember(tripID: Trip.ID, userID: UUID, accessToken: String) async throws {
+        let body = try JSONSerialization.data(withJSONObject: [
+            "p_trip_id": tripID.uuidString,
+            "p_user_id": userID.uuidString,
+        ])
+        _ = try await send(
+            "POST",
+            "/rest/v1/rpc/remove_trip_member",
+            accessToken: accessToken,
+            body: body
+        )
+        invalidateCache(accessToken: accessToken)
+    }
+
+    func leaveTrip(tripID: Trip.ID, accessToken: String) async throws {
+        let body = try JSONSerialization.data(withJSONObject: ["p_trip_id": tripID.uuidString])
+        _ = try await send(
+            "POST",
+            "/rest/v1/rpc/leave_trip",
+            accessToken: accessToken,
+            body: body
+        )
+        syncedSnapshots[tripID] = nil
+        invalidateCache(accessToken: accessToken)
     }
 
     private func invalidateCache(accessToken: String) {

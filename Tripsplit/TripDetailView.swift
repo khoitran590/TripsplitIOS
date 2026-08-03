@@ -24,6 +24,12 @@ struct TripDetailView: View {
     @State private var inviteLink: URL?
     @State private var isInviting = false
     @State private var isGeneratingLink = false
+    @State private var memberToRemove: Person?
+    @State private var showLeaveTripConfirmation = false
+    @State private var membershipMessage: String?
+    @State private var membershipActionBusy = false
+    @State private var pendingInvitations: [TripsRepository.PendingInvitation] = []
+    @State private var invitationToRevoke: TripsRepository.PendingInvitation?
     @State private var detailTab: TripDetailTab = .overview
     @State private var expenseSearch = ""
     @State private var expensePayerID: Person.ID?
@@ -151,6 +157,48 @@ struct TripDetailView: View {
                 Button("Cancel", role: .cancel) {}
             } message: { settlement in
                 Text("Did \(settlement.from.name) pay you back \(money(store.remaining(tripID: tripID, for: settlement), trip?.currencyCode ?? "USD"))?")
+            }
+            .confirmationDialog(
+                "Remove this member's access?",
+                isPresented: Binding(
+                    get: { memberToRemove != nil },
+                    set: { if !$0 { memberToRemove = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("Remove Access", role: .destructive) {
+                    guard let member = memberToRemove else { return }
+                    memberToRemove = nil
+                    removeMemberAccess(member)
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("They will immediately lose trip and media access. Their historical expense identity remains so balances stay accurate.")
+            }
+            .confirmationDialog(
+                "Leave this trip?",
+                isPresented: $showLeaveTripConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Leave Trip", role: .destructive) { leaveTrip() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("You will immediately lose access. Your historical expense identity remains for the other members' balances.")
+            }
+            .confirmationDialog(
+                "Revoke this invitation?",
+                isPresented: Binding(
+                    get: { invitationToRevoke != nil },
+                    set: { if !$0 { invitationToRevoke = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("Revoke Invitation", role: .destructive) {
+                    guard let invitation = invitationToRevoke else { return }
+                    invitationToRevoke = nil
+                    revokeInvitation(invitation)
+                }
+                Button("Cancel", role: .cancel) {}
             }
         }
     }
@@ -441,7 +489,6 @@ struct TripDetailView: View {
         )
     }
 
-    @ViewBuilder
     /// Personal "pay back" summary for the signed-in viewer: every settlement where
     /// they are the debtor, listed creditor-by-creditor so they can see at a glance
     /// whom to pay. Only account-backed members (the trip owner or invited users) can
@@ -720,6 +767,13 @@ struct TripDetailView: View {
                             }
                         }
                         .frame(width: 74)
+                        .contextMenu {
+                            if store.isCreator(of: trip), member.id != trip.creatorID {
+                                Button(role: .destructive) { memberToRemove = member } label: {
+                                    Label("Remove Access", systemImage: "person.crop.circle.badge.minus")
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -819,7 +873,109 @@ struct TripDetailView: View {
                         .padding(.vertical, 10)
                         .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
                     }
+
+                    if !pendingInvitations.isEmpty {
+                        Divider()
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Pending Invitations")
+                                .font(.app(.subheadline, .semibold))
+                            ForEach(pendingInvitations) { invitation in
+                                HStack(spacing: 8) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(verbatim: invitation.email ?? "Share link")
+                                            .font(.app(.caption, .semibold))
+                                        Text("Expires \(invitation.expiresAt.formatted(.relative(presentation: .named)))")
+                                            .font(.app(.caption2))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Button(role: .destructive) { invitationToRevoke = invitation } label: {
+                                        Image(systemName: "xmark.circle")
+                                            .frame(width: 36, height: 36)
+                                            .contentShape(.rect)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel("Revoke invitation")
+                                }
+                            }
+                        }
+                    }
                 }
+            } else {
+                Divider()
+                Button(role: .destructive) { showLeaveTripConfirmation = true } label: {
+                    Label("Leave Trip", systemImage: "rectangle.portrait.and.arrow.right")
+                        .font(.app(.subheadline, .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                }
+                .buttonStyle(.plain)
+                .disabled(membershipActionBusy)
+            }
+
+            if let membershipMessage {
+                Text(verbatim: membershipMessage)
+                    .font(.app(.caption))
+                    .foregroundStyle(
+                        membershipMessage.localizedCaseInsensitiveContains("removed")
+                        || membershipMessage.localizedCaseInsensitiveContains("revoked")
+                            ? Theme.positive : Theme.negative
+                    )
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .task(id: trip.id) {
+            if store.isCreator(of: trip) { await loadPendingInvitations() }
+        }
+    }
+
+    private func removeMemberAccess(_ member: Person) {
+        guard !membershipActionBusy else { return }
+        membershipActionBusy = true
+        membershipMessage = nil
+        Task {
+            do {
+                try await store.removeMemberAccess(member.id, from: tripID)
+                membershipMessage = "Access removed. Historical balances are unchanged."
+            } catch {
+                membershipMessage = (error as? AuthError)?.message ?? "Member access could not be removed."
+            }
+            membershipActionBusy = false
+        }
+    }
+
+    private func leaveTrip() {
+        guard !membershipActionBusy else { return }
+        membershipActionBusy = true
+        membershipMessage = nil
+        Task {
+            do {
+                try await store.leaveTrip(tripID)
+                dismiss()
+            } catch {
+                membershipMessage = (error as? AuthError)?.message ?? "The trip could not be left."
+                membershipActionBusy = false
+            }
+        }
+    }
+
+    private func loadPendingInvitations() async {
+        do {
+            pendingInvitations = try await store.pendingInvitations(for: tripID)
+        } catch {
+            // The core trip remains usable when this secondary owner-only list fails.
+            BackendSecurity.log("Pending invitations could not be loaded", error: error)
+        }
+    }
+
+    private func revokeInvitation(_ invitation: TripsRepository.PendingInvitation) {
+        Task {
+            do {
+                try await store.revokeInvitation(invitation.id)
+                pendingInvitations.removeAll { $0.id == invitation.id }
+                membershipMessage = "Invitation revoked."
+            } catch {
+                membershipMessage = (error as? AuthError)?.message ?? "The invitation could not be revoked."
             }
         }
     }
@@ -837,7 +993,8 @@ struct TripDetailView: View {
             do {
                 try await store.inviteMember(email: email, displayName: "", to: trip.id)
                 inviteEmail = ""
-                inviteMessage = String(localized: "Member invited and added to this trip.")
+                inviteMessage = String(localized: "Invitation pending. Membership starts only after the recipient accepts.")
+                await loadPendingInvitations()
             } catch {
                 inviteMessage = (error as? AuthError)?.message ?? error.localizedDescription
             }
@@ -852,6 +1009,7 @@ struct TripDetailView: View {
             do {
                 inviteLink = try await store.createInvitationLink(for: trip.id)
                 inviteMessage = String(localized: "Invitation link ready to share.")
+                await loadPendingInvitations()
             } catch {
                 inviteMessage = (error as? AuthError)?.message ?? error.localizedDescription
             }

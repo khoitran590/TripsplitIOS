@@ -8,6 +8,21 @@ final class TripsplitAppTests: XCTestCase {
     private let bob = Person(id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!, name: "Bob", color: .blue)
     private let chris = Person(id: UUID(uuidString: "00000000-0000-0000-0000-000000000003")!, name: "Chris", color: .green)
 
+    func testBackendRedirectOriginAllowlist() {
+        XCTAssertTrue(BackendSecurity.isTrustedBackendURL(URL(string: SupabaseConfig.url + "/rest/v1/trips")))
+        XCTAssertTrue(BackendSecurity.isTrustedBackendURL(URL(string: "https://ttgwzwvlochpvtxrxkoz.supabase.co:443/auth/v1/user")))
+        XCTAssertFalse(BackendSecurity.isTrustedBackendURL(URL(string: "https://attacker.example/steal")))
+        XCTAssertFalse(BackendSecurity.isTrustedBackendURL(URL(string: "http://ttgwzwvlochpvtxrxkoz.supabase.co/rest/v1/trips")))
+        XCTAssertFalse(BackendSecurity.isTrustedBackendURL(URL(string: "https://ttgwzwvlochpvtxrxkoz.supabase.co:444/rest/v1/trips")))
+        XCTAssertFalse(BackendSecurity.isTrustedBackendURL(URL(string: "not a URL")))
+        XCTAssertFalse(BackendSecurity.isTrustedBackendURL(nil))
+    }
+
+    func testAuthenticatedRedirectLimitIsBounded() {
+        XCTAssertGreaterThan(RedirectAuthPreserver.maximumRedirectCount, 0)
+        XCTAssertLessThanOrEqual(RedirectAuthPreserver.maximumRedirectCount, 5)
+    }
+
     func testEqualSharesReconcileToTheCent() {
         let shares = SplitEngine.equalShares(total: 10, count: 3)
         XCTAssertEqual(shares, [3.34, 3.33, 3.33])

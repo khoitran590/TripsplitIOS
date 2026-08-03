@@ -3,14 +3,14 @@
 // Why this exists: the app must NOT ship the Gemini API key. The client sends the receipt
 // image plus the signed-in user's Supabase JWT; this function authenticates the user,
 // reserves a feature-local quota slot, calls Gemini with the key held in a Supabase
-// secret, commits usage only on success, validates the
+// secret, commits usage once provider work is attempted, validates the
 // model output, and returns structured JSON.
 //
 // Security posture:
 //  - Auth: platform `verify_jwt = true` AND an explicit `/auth/v1/user` check, so only a
 //    real signed-in user (not the anon key) is accepted.
-//  - Rate limit: 15 successful parse calls per user per 60 seconds. Capacity is reserved
-//    atomically by a service-role-only RPC, then released on upstream/infra failure.
+//  - Rate limit: 15 paid provider attempts per user per 60 seconds. Capacity is reserved
+//    atomically by a service-role-only RPC and is not refunded for invalid/error output.
 //  - Input: JSON body must contain either an image payload or legacy OCR `text`, under caps.
 //  - Secret: the Gemini key is read from env and never logged or returned.
 //  - Output: the model's JSON is re-validated/normalized before it reaches the client.
@@ -26,9 +26,11 @@ const GEMINI_MODEL = Deno.env.get("GEMINI_MODEL") ?? "gemini-2.5-flash";
 const MAX_IMAGE_BYTES = 4_000_000;  // Keep JSON/base64 requests bounded.
 const MAX_TEXT_BYTES = 20_000;      // Legacy OCR text is small; reject oversized input.
 const MAX_ITEMS = 200;              // Clamp a runaway model response.
-const RATE_LIMIT = 15;              // Max successful parse calls ...
+const RATE_LIMIT = 15;              // Max paid provider attempts ...
 const RATE_WINDOW_SECONDS = 60;     // ... per user per this window.
 const RATE_KIND = "parse";
+const CONSENT_PURPOSE = "receipt_processing";
+const CONSENT_VERSION = "2026-08-02";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
@@ -46,6 +48,9 @@ Deno.serve(async (req) => {
   if (!token) return jsonResponse({ error: "Unauthorized" }, 401);
   const user = await getUser(token);
   if (!user) return jsonResponse({ error: "Unauthorized" }, 401);
+  if (!(await hasAIConsent(token, CONSENT_PURPOSE))) {
+    return jsonResponse({ error: "Current AI consent is required." }, 403);
+  }
 
   // 2. Validate input.
   let payload: { imageBase64?: unknown; mimeType?: unknown; text?: unknown };
@@ -69,7 +74,8 @@ Deno.serve(async (req) => {
   }
 
   // 4. Reserve this feature's capacity atomically. The reservation prevents concurrent
-  // requests from exceeding the bucket, but is deleted unless paid work succeeds.
+  // requests from exceeding the bucket. Once Gemini is called, the attempt is charged
+  // even when Gemini returns an error or unusable output.
   let usage: UsageReservation;
   try {
     usage = await reserveUsage(user.id);
@@ -94,7 +100,7 @@ Deno.serve(async (req) => {
     : [{ text: prompt }];
   let receipt = await callGemini(parts);
   if (!receipt) {
-    await completeUsage(usage.reservationId, false);
+    await completeUsage(usage.reservationId, true);
     logUsage("post_call_failure", 502);
     return jsonResponse({ error: "Parsing service error" }, 502);
   }
@@ -127,6 +133,23 @@ function isCollapsed(receipt: Record<string, unknown>): boolean {
   const line = items[0].price * items[0].quantity;
   const withTaxTip = line + (receipt.tax as number) + (receipt.tip as number);
   return Math.abs(line - total) < 0.02 || Math.abs(withTaxTip - total) < 0.02;
+}
+
+async function hasAIConsent(token: string, purpose: string): Promise<boolean> {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/has_ai_consent`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+      apikey: SUPABASE_ANON_KEY,
+    },
+    body: JSON.stringify({ p_purpose: purpose, p_consent_version: CONSENT_VERSION }),
+  });
+  if (!response.ok) {
+    console.error(JSON.stringify({ function: "parse-receipt", outcome: "consent_check_failure", status: response.status }));
+    return false;
+  }
+  return (await response.json().catch(() => false)) === true;
 }
 
 // Calls Gemini once and returns the normalized receipt, or null on any failure.

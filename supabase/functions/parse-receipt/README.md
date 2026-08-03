@@ -27,8 +27,8 @@ its local/heuristic parser if either online step fails.
    automatically — do not set or expose them in the app.
 
 3. **Apply the Track D migration.** Run
-   `supabase/migrations/20260717000000_track_d_ai_rate_limits.sql` in the SQL editor (or
-   re-run `supabase_schema.sql`, which is idempotent).
+   `supabase/migrations/20260717000000_track_d_ai_rate_limits.sql` through the versioned
+   migration workflow. Do not re-run the retired root `supabase_schema.sql`.
 
 4. **Deploy all three functions together** after the migration (`verify_jwt = true` is
    enforced via `supabase/config.toml`). The RPC signature and functions are a lockstep

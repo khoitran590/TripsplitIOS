@@ -49,6 +49,8 @@ struct AddExpenseView: View {
     @State private var taxText = ""
     @State private var tipText = ""
     @State private var uploadError: String?
+    @State private var showReceiptAIConsent = false
+    @State private var pendingConsentReceipt: (image: UIImage, originalData: Data?)?
     @State private var isSaving = false
     /// When false (default) the expense only covers the current user's share.
     /// Toggling true unlocks the full split-method picker and per-item configuration.
@@ -173,6 +175,19 @@ struct AddExpenseView: View {
                         currencyCode: trip.currencyCode,
                         currentUserID: store.currentUser.id
                     )
+                }
+            }
+            .sheet(isPresented: $showReceiptAIConsent) {
+                AIConsentDisclosureView(purpose: .receiptProcessing) { granted in
+                    guard let pending = pendingConsentReceipt else { return }
+                    pendingConsentReceipt = nil
+                    Task {
+                        await scanAndUploadReceipt(
+                            pending.image,
+                            originalData: pending.originalData,
+                            useCloudAI: granted
+                        )
+                    }
                 }
             }
         }
@@ -390,6 +405,21 @@ struct AddExpenseView: View {
     /// item list plus any detected tax/tip, and uploads the photo in the background.
     @MainActor
     private func processReceipt(_ image: UIImage, originalData: Data?) async {
+        let userID = store.currentUser.id
+        guard AIConsentPreferences.hasDecision(.receiptProcessing, userID: userID) else {
+            pendingConsentReceipt = (image, originalData)
+            showReceiptAIConsent = true
+            return
+        }
+        await scanAndUploadReceipt(
+            image,
+            originalData: originalData,
+            useCloudAI: AIConsentPreferences.isGranted(.receiptProcessing, userID: userID)
+        )
+    }
+
+    @MainActor
+    private func scanAndUploadReceipt(_ image: UIImage, originalData: Data?, useCloudAI: Bool) async {
         receiptImage = image
 
         // A freshly picked/replaced photo invalidates the previous scan and upload. Clear
@@ -401,7 +431,11 @@ struct AddExpenseView: View {
         usedRateLimitedReceiptFallback = false
 
         isScanning = true
-        let scan = await ReceiptScanner.scan(image, accessToken: store.accessToken)
+        let scan = await ReceiptScanner.scan(
+            image,
+            mode: useCloudAI ? .onlineBest : .offlineFast,
+            accessToken: useCloudAI ? store.accessToken : nil
+        )
         isScanning = false
         usedRateLimitedReceiptFallback = scan.aiRateLimitRetryAfterSeconds != nil
         if !scan.items.isEmpty {
@@ -461,7 +495,12 @@ struct AddExpenseView: View {
         isUploading = true
         uploadError = nil
         do {
-            receiptURL = try await store.uploadReceipt(jpeg, path: path)
+            receiptURL = try await store.uploadReceipt(
+                jpeg,
+                path: path,
+                tripID: tripID,
+                expenseID: expenseID
+            )
         } catch {
             uploadError = (error as? AuthError)?.message ?? "Receipt upload failed."
         }

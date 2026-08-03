@@ -365,17 +365,64 @@ extension TripStore {
         guard let accessToken = try await authorizedAccessToken() else {
             throw AuthError(message: "Sign in to view the trip feed.")
         }
-        let posts = try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
-            try await FeedRepository.shared.fetch(tripID: tripID, accessToken: token)
+        let (posts, blocked) = try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
+            async let posts = FeedRepository.shared.fetch(tripID: tripID, accessToken: token)
+            async let blocked = ModerationService.shared.blockedUserIDs(accessToken: token)
+            return try await (posts, blocked)
         }
-        feedPostsByTrip[tripID] = posts
+        blockedUserIDs = blocked
+        feedPostsByTrip[tripID] = posts.compactMap { filteredPost($0, blocked: blocked) }
+    }
+
+    private func filteredPost(_ post: FeedPost, blocked: Set<UUID>) -> FeedPost? {
+        guard !blocked.contains(post.authorID) else { return nil }
+        var visible = post
+        visible.comments.removeAll { blocked.contains($0.authorID) }
+        visible.reactions = visible.reactions.mapValues { $0.filter { !blocked.contains($0) } }
+        return visible
+    }
+
+    func reportContent(_ target: ModerationTarget, reason: ReportReason, details: String) async throws {
+        guard let accessToken = try await authorizedAccessToken() else {
+            throw AuthError(message: "Sign in to submit a report.")
+        }
+        try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
+            try await ModerationService.shared.report(target, reason: reason, details: details, accessToken: token)
+        }
+    }
+
+    func blockUser(_ userID: UUID) async throws {
+        guard let accessToken = try await authorizedAccessToken() else {
+            throw AuthError(message: "Sign in to block an account.")
+        }
+        try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
+            try await ModerationService.shared.setBlocked(true, userID: userID, accessToken: token)
+        }
+        blockedUserIDs.insert(userID)
+        for tripID in Array(feedPostsByTrip.keys) {
+            feedPostsByTrip[tripID] = feedPostsByTrip[tripID]?.compactMap {
+                filteredPost($0, blocked: blockedUserIDs)
+            }
+        }
     }
 
     /// Uploads one feed photo to the shared private `receipts` bucket and returns its
     /// storage path, namespaced under the uploader's lowercased user id for storage RLS.
-    func uploadFeedPhoto(_ jpeg: Data, postID: FeedPost.ID, index: Int) async throws -> String {
+    func uploadFeedPhoto(_ jpeg: Data, tripID: Trip.ID, postID: FeedPost.ID, index: Int) async throws -> String {
         let path = "\(currentUser.id.uuidString.lowercased())/feed-\(postID.uuidString.lowercased())-\(index).jpg"
-        return try await uploadReceipt(jpeg, path: path)
+        guard let accessToken = try await authorizedAccessToken() else {
+            throw AuthError(message: "Sign in to upload feed photos.")
+        }
+        return try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
+            try await ReceiptStorage.shared.upload(
+                jpeg,
+                path: path,
+                assetType: "feed_photo",
+                tripID: tripID,
+                recordID: postID,
+                accessToken: token
+            )
+        }
     }
 
     /// Inserts the post on the server first, then shows it — a post that failed to save
@@ -733,7 +780,12 @@ private struct FeedComposerCard: View {
                 return
             }
             do {
-                paths.append(try await store.uploadFeedPhoto(jpeg, postID: postID, index: index))
+                paths.append(try await store.uploadFeedPhoto(
+                    jpeg,
+                    tripID: tripID,
+                    postID: postID,
+                    index: index
+                ))
             } catch {
                 postError = (error as? AuthError)?.message ?? "Couldn't upload the photos. Check your connection and try again."
                 return
@@ -891,6 +943,9 @@ private struct FeedPostCard: View {
     @State private var editedLocation: String?
     @State private var editedExactLocation: ExpenseLocation?
     @State private var showEditLocationPicker = false
+    @State private var reportTarget: ModerationTarget?
+    @State private var blockUserID: UUID?
+    @State private var moderationError: String?
 
     private static let quickEmojis = ["👍", "❤️", "😂", "😮", "🎉", "🔥"]
 
@@ -922,6 +977,36 @@ private struct FeedPostCard: View {
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassEffect(.regular, in: .rect(cornerRadius: 24))
+        .sheet(item: $reportTarget) { target in
+            ReportContentView(target: target)
+        }
+        .confirmationDialog(
+            "Block this account?",
+            isPresented: Binding(
+                get: { blockUserID != nil },
+                set: { if !$0 { blockUserID = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Block Account", role: .destructive) {
+                guard let userID = blockUserID else { return }
+                blockUserID = nil
+                Task {
+                    do { try await store.blockUser(userID) }
+                    catch { moderationError = (error as? AuthError)?.message ?? "The account could not be blocked." }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Their feed posts and comments will be hidden immediately, and direct feed interaction will be disabled in both directions.")
+        }
+        .alert(
+            "Safety action failed",
+            isPresented: Binding(
+                get: { moderationError != nil },
+                set: { if !$0 { moderationError = nil } }
+            )
+        ) { Button("OK", role: .cancel) {} } message: { Text(verbatim: moderationError ?? "") }
     }
 
     private var header: some View {
@@ -940,8 +1025,8 @@ private struct FeedPostCard: View {
                 }
             }
             Spacer()
-            if let trip = store.trip(tripID), store.canDeleteFeedPost(post, in: trip) {
-                Menu {
+            Menu {
+                if let trip = store.trip(tripID) {
                     if post.authorID == store.currentUser.id {
                         Button {
                             editedPostText = post.text
@@ -952,18 +1037,32 @@ private struct FeedPostCard: View {
                             Label("Edit Post", systemImage: "pencil")
                         }
                     }
-                    Button(role: .destructive) {
-                        store.deleteFeedPost(post.id, in: tripID)
-                    } label: {
-                        Label("Delete Post", systemImage: "trash")
+                    if store.canDeleteFeedPost(post, in: trip) {
+                        Button(role: .destructive) {
+                            store.deleteFeedPost(post.id, in: tripID)
+                        } label: {
+                            Label("Delete Post", systemImage: "trash")
+                        }
                     }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.app(.subheadline, .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 30, height: 30)
-                        .contentShape(.rect)
                 }
+                if post.authorID != store.currentUser.id {
+                    Divider()
+                    Button {
+                        reportTarget = ModerationTarget(
+                            contentType: "post", contentID: post.id,
+                            authorID: post.authorID, label: "Post"
+                        )
+                    } label: { Label("Report Post", systemImage: "exclamationmark.bubble") }
+                    Button(role: .destructive) { blockUserID = post.authorID } label: {
+                        Label("Block Account", systemImage: "person.crop.circle.badge.xmark")
+                    }
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.app(.subheadline, .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 30, height: 30)
+                    .contentShape(.rect)
             }
         }
     }
@@ -1135,18 +1234,30 @@ private struct FeedPostCard: View {
                 }
             }
             Spacer(minLength: 0)
-            if comment.authorID == store.currentUser.id && editingCommentID != comment.id {
+            if editingCommentID != comment.id {
                 Menu {
-                    Button {
-                        editedCommentText = comment.text
-                        editingCommentID = comment.id
-                    } label: {
-                        Label("Edit Comment", systemImage: "pencil")
-                    }
-                    Button(role: .destructive) {
-                        store.deleteFeedComment(comment.id, from: post.id, in: tripID)
-                    } label: {
-                        Label("Delete Comment", systemImage: "trash")
+                    if comment.authorID == store.currentUser.id {
+                        Button {
+                            editedCommentText = comment.text
+                            editingCommentID = comment.id
+                        } label: {
+                            Label("Edit Comment", systemImage: "pencil")
+                        }
+                        Button(role: .destructive) {
+                            store.deleteFeedComment(comment.id, from: post.id, in: tripID)
+                        } label: {
+                            Label("Delete Comment", systemImage: "trash")
+                        }
+                    } else {
+                        Button {
+                            reportTarget = ModerationTarget(
+                                contentType: "comment", contentID: comment.id,
+                                authorID: comment.authorID, label: "Comment"
+                            )
+                        } label: { Label("Report Comment", systemImage: "exclamationmark.bubble") }
+                        Button(role: .destructive) { blockUserID = comment.authorID } label: {
+                            Label("Block Account", systemImage: "person.crop.circle.badge.xmark")
+                        }
                     }
                 } label: {
                     Image(systemName: "ellipsis")

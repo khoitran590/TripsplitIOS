@@ -3,7 +3,7 @@ import Foundation
 import ImageIO
 import SwiftUI
 import UIKit
-import Vision
+@preconcurrency import Vision
 import VisionKit
 
 // MARK: - Receipt AI parsing config
@@ -876,7 +876,14 @@ actor ReceiptStorage {
     /// storage `path` (not a URL — the bucket is private). Callers persist the path and
     /// later resolve a signed URL via `signedURL`. The user's token authorizes the write.
     @discardableResult
-    func upload(_ jpeg: Data, path: String, accessToken: String) async throws -> String {
+    func upload(
+        _ jpeg: Data,
+        path: String,
+        assetType: String,
+        tripID: UUID? = nil,
+        recordID: UUID? = nil,
+        accessToken: String
+    ) async throws -> String {
         guard jpeg.count <= 5_000_000 else {
             throw AuthError(message: "Receipt photos must be smaller than 5 MB.")
         }
@@ -921,14 +928,64 @@ actor ReceiptStorage {
                 ?? "Receipt upload failed (HTTP \(http.statusCode)).",
                 statusCode: http.statusCode)
         }
+        do {
+            try await registerAttachment(
+                path: path,
+                assetType: assetType,
+                tripID: tripID,
+                recordID: recordID,
+                accessToken: accessToken
+            )
+        } catch {
+            // An unregistered upload is deliberately unreadable to other accounts. Remove
+            // it best-effort so retries do not accumulate inaccessible orphan objects.
+            await deleteOwnedObject(path: path, accessToken: accessToken)
+            throw error
+        }
         // Uploads overwrite objects in place (x-upsert), so drop any cached copy of this
         // path — the uploader should see their new photo immediately, not the stale one.
         await ImageCache.shared.evict(path)
         return path
     }
 
+    private func registerAttachment(
+        path: String,
+        assetType: String,
+        tripID: UUID?,
+        recordID: UUID?,
+        accessToken: String
+    ) async throws {
+        guard let url = URL(string: "\(SupabaseConfig.url)/rest/v1/rpc/register_storage_attachment") else {
+            throw AuthError(message: "Supabase isn't configured.")
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(SupabaseConfig.anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var body: [String: Any] = ["p_path": path, "p_asset_type": assetType]
+        body["p_trip_id"] = tripID?.uuidString ?? NSNull()
+        body["p_record_id"] = recordID?.uuidString ?? NSNull()
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+            let message = ReceiptStorage.messageField(from: String(data: data, encoding: .utf8) ?? "")
+            throw AuthError(message: message ?? "The upload could not be authorized.", statusCode: status)
+        }
+    }
+
+    private func deleteOwnedObject(path: String, accessToken: String) async {
+        guard let url = URL(string: "\(SupabaseConfig.url)/storage/v1/object/\(bucket)/\(path)") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue(SupabaseConfig.anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        _ = try? await session.data(for: request)
+    }
+
     /// Creates a signed, time-limited URL for reading a private object at `path`. The
-    /// user's token must satisfy the bucket's SELECT policy (any authenticated user). The
+    /// user's token must satisfy the attachment-aware Storage SELECT policy. The
     /// URL expires after `expiresIn` seconds, so callers should cache it briefly and
     /// re-sign rather than persist it.
     func signedURL(path: String, expiresIn: Int = 3600, accessToken: String) async throws -> URL {
@@ -1025,6 +1082,10 @@ actor ImageCache {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         directory = caches.appendingPathComponent("StorageImages", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try? FileManager.default.setAttributes(
+            [.protectionKey: FileProtectionType.complete],
+            ofItemAtPath: directory.path
+        )
     }
 
     /// One flat file per object: paths reaching here already passed
@@ -1074,11 +1135,31 @@ actor ImageCache {
         let destination = fileURL(for: path)
         let previousBytes = Self.fileSize(at: destination)
         do {
-            try data.write(to: destination, options: .atomic)
+            try data.write(to: destination, options: [.atomic, .completeFileProtection])
+            try FileManager.default.setAttributes(
+                [.protectionKey: FileProtectionType.complete],
+                ofItemAtPath: destination.path
+            )
             diskBytes += data.count - previousBytes
             if diskBytes > diskLimit { pruneDisk(force: true) }
         } catch {}
         return image
+    }
+
+    /// Purges all private media when the account signs out or is deleted.
+    func removeAll() {
+        memory.removeAllObjects()
+        downloadTasks.values.forEach { $0.cancel() }
+        downloadTasks = [:]
+        refreshedPaths = []
+        try? FileManager.default.removeItem(at: directory)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try? FileManager.default.setAttributes(
+            [.protectionKey: FileProtectionType.complete],
+            ofItemAtPath: directory.path
+        )
+        didPruneDisk = true
+        diskBytes = 0
     }
 
     /// Drops a path's cached copies so the next view re-downloads the current object.

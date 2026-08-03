@@ -24,7 +24,15 @@ private actor TripsCacheWriter {
                 try? JSONEncoder().encode(trips)
             }.value
             guard !Task.isCancelled, revision == latestRevision, let data else { return }
-            try? data.write(to: url, options: .atomic)
+            do {
+                try data.write(to: url, options: [.atomic, .completeFileProtection])
+                try FileManager.default.setAttributes(
+                    [.protectionKey: FileProtectionType.complete],
+                    ofItemAtPath: url.path
+                )
+            } catch {
+                BackendSecurity.log("Protected trip cache write failed", error: error)
+            }
         }
     }
 
@@ -55,6 +63,7 @@ final class TripStore {
 
     var currentUser: Person
     var trips: [Trip]
+    var blockedUserIDs: Set<UUID> = []
 
     /// The signed-in user's profile photo, persisted across launches as JPEG data.
     var profileImageData: Data?
@@ -271,7 +280,13 @@ final class TripStore {
         guard let accessToken = try? await authorizedAccessToken() else { return false }
         let path = "\(currentUser.id.uuidString.lowercased())/profile.jpg"
         guard let url = try? await withFreshTokenIfNeeded(initialToken: accessToken, operation: { token in
-            try await ReceiptStorage.shared.upload(jpeg, path: path, accessToken: token)
+            try await ReceiptStorage.shared.upload(
+                jpeg,
+                path: path,
+                assetType: "avatar",
+                recordID: currentUser.id,
+                accessToken: token
+            )
         }) else { return false }
         currentUser.avatarURL = url
         userProfile.avatarPath = url
@@ -294,6 +309,34 @@ final class TripStore {
         currentUser.name = ""
         profileImageData = nil
         userProfile = UserProfile()
+    }
+
+    /// Removes every user-scoped local copy after sign-out or account deletion. Cloud
+    /// data remains authoritative; this prevents the next device user from recovering
+    /// trip/profile/media data from the prior account's caches.
+    func purgeLocalData(for userID: UUID) async {
+        cancelScheduledTripSaves()
+        cancelPendingCacheWrite()
+        UserDefaults.standard.removeObject(forKey: Self.profileKey(for: userID))
+        UserDefaults.standard.removeObject(forKey: Self.pendingDeletionsKey)
+        pendingDeletions = []
+        do {
+            let url = Self.tripsCacheURL(for: userID)
+            if FileManager.default.fileExists(atPath: url.path) {
+                try FileManager.default.removeItem(at: url)
+            }
+        } catch {
+            BackendSecurity.log("Trip cache purge failed", error: error)
+        }
+        await TripsRepository.shared.clearCachedState()
+        await ImageCache.shared.removeAll()
+        if currentUser.id == userID {
+            resetProfile()
+            feedPostsByTrip = [:]
+            blockedUserIDs = []
+            resetSignedImageURLs()
+            trips = []
+        }
     }
 
     /// Writes the full profile (name, photo, avatar path, birthday, bio, places) to
@@ -716,29 +759,19 @@ final class TripStore {
         persist(trips[index])
     }
 
-    func inviteMember(email: String, displayName: String?, to tripID: Trip.ID) async throws {
-        guard let index = trips.firstIndex(where: { $0.id == tripID }) else { return }
+    func inviteMember(email: String, displayName _: String?, to tripID: Trip.ID) async throws {
+        guard trips.contains(where: { $0.id == tripID }) else { return }
         let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !trimmedEmail.isEmpty else { return }
         guard let accessToken = try await authorizedAccessToken() else {
             throw AuthError(message: "Sign in to invite members.")
         }
 
-        let result = try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
+        _ = try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
             try await TripsRepository.shared.inviteMember(tripID: tripID, email: trimmedEmail, accessToken: token)
         }
-        guard result.accepted, let userID = result.memberUserID else {
-            throw AuthError(message: "No TripSplit account was found for \(trimmedEmail). Ask them to sign up first, then invite them again.")
-        }
-
-        if !trips[index].members.contains(where: { $0.id == userID }) {
-            let resolvedName = displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let fallbackName = trimmedEmail.split(separator: "@").first.map(String.init) ?? trimmedEmail
-            let color = Color(hex: memberPalette[max(trips[index].members.count - 1, 0) % memberPalette.count])
-            trips[index].members.append(Person(id: userID, name: resolvedName?.isEmpty == false ? resolvedName! : fallbackName, color: color))
-            trips[index].budgets[userID] = trips[index].budgets[userID] ?? 0
-            persist(trips[index])
-        }
+        // The response is intentionally generic and membership stays pending until the
+        // recipient explicitly accepts. Never expose whether the address has an account.
     }
 
     func createInvitationLink(for tripID: Trip.ID) async throws -> URL {
@@ -758,12 +791,34 @@ final class TripStore {
         return url
     }
 
+    func removeMemberAccess(_ userID: UUID, from tripID: Trip.ID) async throws {
+        guard let accessToken = try await authorizedAccessToken() else {
+            throw AuthError(message: "Sign in to manage trip access.")
+        }
+        try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
+            try await TripsRepository.shared.removeMember(
+                tripID: tripID,
+                userID: userID,
+                accessToken: token
+            )
+        }
+    }
+
+    func leaveTrip(_ tripID: Trip.ID) async throws {
+        guard let accessToken = try await authorizedAccessToken() else {
+            throw AuthError(message: "Sign in to leave this trip.")
+        }
+        try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
+            try await TripsRepository.shared.leaveTrip(tripID: tripID, accessToken: token)
+        }
+        cancelScheduledSave(for: tripID)
+        trips.removeAll { $0.id == tripID }
+        cacheTripsLocally()
+    }
+
     @discardableResult
     func acceptInvitationLink(_ url: URL) async throws -> Trip.ID? {
-        guard url.scheme == "tripsplit", url.host == "invite",
-              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              let token = components.queryItems?.first(where: { $0.name == "token" })?.value,
-              !token.isEmpty else { return nil }
+        guard let token = invitationToken(from: url) else { return nil }
         guard let accessToken = try await authorizedAccessToken() else {
             throw AuthError(message: "Sign in to accept this invitation.")
         }
@@ -778,6 +833,58 @@ final class TripStore {
             persist(trips[index])
         }
         return tripID
+    }
+
+    func previewInvitationLink(_ url: URL) async throws -> TripsRepository.InvitationPreview? {
+        guard let token = invitationToken(from: url) else { return nil }
+        guard let accessToken = try await authorizedAccessToken() else {
+            throw AuthError(message: "Sign in to view this invitation.")
+        }
+        return try await withFreshTokenIfNeeded(initialToken: accessToken) { accessToken in
+            try await TripsRepository.shared.previewInvitation(token: token, accessToken: accessToken)
+        }
+    }
+
+    func declineInvitationLink(_ url: URL) async throws {
+        guard let token = invitationToken(from: url) else {
+            throw AuthError(message: "This invitation link is invalid.")
+        }
+        guard let accessToken = try await authorizedAccessToken() else {
+            throw AuthError(message: "Sign in to decline this invitation.")
+        }
+        try await withFreshTokenIfNeeded(initialToken: accessToken) { accessToken in
+            try await TripsRepository.shared.declineInvitation(token: token, accessToken: accessToken)
+        }
+    }
+
+    func pendingInvitations(for tripID: Trip.ID) async throws -> [TripsRepository.PendingInvitation] {
+        guard let accessToken = try await authorizedAccessToken() else {
+            throw AuthError(message: "Sign in to manage invitations.")
+        }
+        return try await withFreshTokenIfNeeded(initialToken: accessToken) { accessToken in
+            try await TripsRepository.shared.pendingInvitations(tripID: tripID, accessToken: accessToken)
+        }
+    }
+
+    func revokeInvitation(_ invitationID: UUID) async throws {
+        guard let accessToken = try await authorizedAccessToken() else {
+            throw AuthError(message: "Sign in to manage invitations.")
+        }
+        try await withFreshTokenIfNeeded(initialToken: accessToken) { accessToken in
+            try await TripsRepository.shared.revokeInvitation(id: invitationID, accessToken: accessToken)
+        }
+    }
+
+    private func invitationToken(from url: URL) -> String? {
+        let isCustomFallback = url.scheme?.lowercased() == "tripsplit" && url.host?.lowercased() == "invite"
+        let isUniversalLink = url.scheme?.lowercased() == "https" && url.path == "/invite"
+        guard isCustomFallback || isUniversalLink,
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let token = components.queryItems?.first(where: { $0.name == "token" })?.value,
+              token.range(of: "^[a-f0-9]{36,64}$", options: .regularExpression) != nil else {
+            return nil
+        }
+        return token
     }
 
     /// Sets a member's budget on a trip and syncs the change.
@@ -850,6 +957,7 @@ final class TripStore {
             cancelPendingCacheWrite()
             resetProfile()
             feedPostsByTrip = [:]
+            blockedUserIDs = []
             resetSignedImageURLs()
             trips = []
             cloudLoadRevision += 1
@@ -862,6 +970,7 @@ final class TripStore {
             cancelScheduledTripSaves()
             cancelPendingCacheWrite()
             feedPostsByTrip = [:]
+            blockedUserIDs = []
             resetSignedImageURLs()
             cloudLoadRevision += 1
             cloudLoadState = .idle
@@ -1137,12 +1246,19 @@ final class TripStore {
         }
     }
 
-    func uploadReceipt(_ jpeg: Data, path: String) async throws -> String {
+    func uploadReceipt(_ jpeg: Data, path: String, tripID: Trip.ID, expenseID: Expense.ID) async throws -> String {
         guard let accessToken = try await authorizedAccessToken() else {
             throw AuthError(message: "Sign in to upload the receipt photo.")
         }
         return try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
-            try await ReceiptStorage.shared.upload(jpeg, path: path, accessToken: token)
+            try await ReceiptStorage.shared.upload(
+                jpeg,
+                path: path,
+                assetType: "receipt",
+                tripID: tripID,
+                recordID: expenseID,
+                accessToken: token
+            )
         }
     }
 
@@ -1151,7 +1267,19 @@ final class TripStore {
     /// storage RLS (which compares the leading folder to `auth.uid()`) accepts the write.
     func uploadTripCover(_ jpeg: Data, tripID: Trip.ID) async throws -> String {
         let path = "\(currentUser.id.uuidString.lowercased())/cover-\(tripID.uuidString.lowercased()).jpg"
-        return try await uploadReceipt(jpeg, path: path)
+        guard let accessToken = try await authorizedAccessToken() else {
+            throw AuthError(message: "Sign in to upload the trip cover.")
+        }
+        return try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
+            try await ReceiptStorage.shared.upload(
+                jpeg,
+                path: path,
+                assetType: "trip_cover",
+                tripID: tripID,
+                recordID: tripID,
+                accessToken: token
+            )
+        }
     }
 
     /// Signed image URLs keyed by storage path, with the time they should be refreshed

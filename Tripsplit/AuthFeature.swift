@@ -84,6 +84,29 @@ enum BackendSecurity {
         return path.range(of: #"^[a-f0-9-]+/[A-Za-z0-9._-]+\.(jpg|jpeg)$"#, options: [.regularExpression, .caseInsensitive]) != nil
     }
 
+    /// Authenticated requests and redirects are only allowed to use the configured
+    /// Supabase HTTPS origin. Comparing the effective port closes the subtle gap where
+    /// `https://host` and `https://host:444` otherwise look like the same backend.
+    nonisolated static func isTrustedBackendURL(_ url: URL?) -> Bool {
+        guard let url,
+              let expected = URL(string: SupabaseConfig.url),
+              url.scheme?.lowercased() == "https",
+              expected.scheme?.lowercased() == "https",
+              url.host?.lowercased() == expected.host?.lowercased() else {
+            return false
+        }
+        return effectivePort(for: url) == effectivePort(for: expected)
+    }
+
+    nonisolated private static func effectivePort(for url: URL) -> Int? {
+        if let port = url.port { return port }
+        switch url.scheme?.lowercased() {
+        case "https": return 443
+        case "http": return 80
+        default: return nil
+        }
+    }
+
     nonisolated static func log(_ message: String, statusCode: Int? = nil, error: Error? = nil) {
         if let statusCode {
             logger.error("\(message, privacy: .public) status=\(statusCode, privacy: .public)")
@@ -95,14 +118,15 @@ enum BackendSecurity {
     }
 }
 
-/// Re-attaches `Authorization`/`apikey` when `URLSession` follows an HTTP redirect.
-/// iOS strips these sensitive headers on redirects (always cross-origin, sometimes even
-/// same-origin), which would make a redirected Supabase write arrive unauthenticated —
-/// Postgres then runs it as the anon role and RLS rejects it with "new row violates
-/// row-level security policy" (the observed 403 on trip saves where `auth_user` is null
-/// even though reads authenticate fine). The redirect is also logged so we can confirm
-/// whether one is actually happening.
+/// Preserves credentials only for a tightly bounded same-origin Supabase redirect.
+/// Redirect destinations are untrusted input: forwarding a bearer token to a different
+/// scheme, host, or port would hand the user's session to that server.
 final class RedirectAuthPreserver: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    nonisolated static let maximumRedirectCount = 5
+
+    private let lock = NSLock()
+    private var redirectCounts: [Int: Int] = [:]
+
     func urlSession(
         _ session: URLSession,
         task: URLSessionTask,
@@ -110,14 +134,42 @@ final class RedirectAuthPreserver: NSObject, URLSessionTaskDelegate, @unchecked 
         newRequest request: URLRequest,
         completionHandler: @escaping (URLRequest?) -> Void
     ) {
+        guard BackendSecurity.isTrustedBackendURL(response.url),
+              BackendSecurity.isTrustedBackendURL(request.url),
+              claimRedirect(for: task.taskIdentifier) else {
+            clearRedirects(for: task.taskIdentifier)
+            BackendSecurity.log("Blocked an untrusted or excessive backend redirect", statusCode: response.statusCode)
+            completionHandler(nil)
+            return
+        }
+
         var updated = request
-        if let original = task.originalRequest {
+        if let original = task.currentRequest ?? task.originalRequest {
             for header in ["Authorization", "apikey"] where updated.value(forHTTPHeaderField: header) == nil {
                 updated.setValue(original.value(forHTTPHeaderField: header), forHTTPHeaderField: header)
             }
         }
-        BackendSecurity.log("Followed HTTP redirect (\(response.statusCode)) to \(response.value(forHTTPHeaderField: "Location") ?? "?"); re-attached auth headers")
+        // Do not log Location: signed URLs and invitation tokens may live in a query.
+        BackendSecurity.log("Followed a trusted backend redirect", statusCode: response.statusCode)
         completionHandler(updated)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        clearRedirects(for: task.taskIdentifier)
+    }
+
+    private func claimRedirect(for taskIdentifier: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let next = (redirectCounts[taskIdentifier] ?? 0) + 1
+        redirectCounts[taskIdentifier] = next
+        return next <= Self.maximumRedirectCount
+    }
+
+    private func clearRedirects(for taskIdentifier: Int) {
+        lock.lock()
+        redirectCounts[taskIdentifier] = nil
+        lock.unlock()
     }
 }
 
@@ -254,6 +306,18 @@ actor AuthService {
         _ = try await send("PUT", "/auth/v1/user", body: ["password": newPassword], accessToken: accessToken)
     }
 
+    /// Revokes refresh tokens server-side. Local state is cleared by `AuthStore` even
+    /// when this best-effort network request fails, so sign-out always completes.
+    func signOut(accessToken: String) async throws {
+        _ = try await send("POST", "/auth/v1/logout?scope=global", body: [:], accessToken: accessToken)
+    }
+
+    /// Starts the privileged deletion workflow. The Edge Function owns the service-role
+    /// credential and removes application data before deleting the Auth user.
+    func deleteAccount(accessToken: String) async throws {
+        _ = try await send("POST", "/functions/v1/delete-account", body: [:], accessToken: accessToken)
+    }
+
     private func validateCredentials(email: String, password: String) throws -> String {
         let email = try validateEmail(email)
         guard !password.isEmpty, password.count <= 256 else {
@@ -335,13 +399,24 @@ enum AuthSessionStore {
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data else { return nil }
-        return try? JSONDecoder().decode(AuthSession.self, from: data)
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        guard status == errSecSuccess, let data = item as? Data else {
+            if status != errSecItemNotFound {
+                BackendSecurity.log("Keychain session read failed", statusCode: Int(status))
+            }
+            return nil
+        }
+        guard let session = try? JSONDecoder().decode(AuthSession.self, from: data) else {
+            BackendSecurity.log("Discarded an invalid Keychain session")
+            delete()
+            return nil
+        }
+        return session
     }
 
-    static func save(_ session: AuthSession) {
-        guard let data = try? JSONEncoder().encode(session) else { return }
+    @discardableResult
+    static func save(_ session: AuthSession) -> Bool {
+        guard let data = try? JSONEncoder().encode(session) else { return false }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -349,24 +424,40 @@ enum AuthSessionStore {
         ]
         let attributes: [String: Any] = [
             kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
         ]
 
         let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
         if status == errSecItemNotFound {
             var add = query
             attributes.forEach { add[$0.key] = $0.value }
-            SecItemAdd(add as CFDictionary, nil)
+            let addStatus = SecItemAdd(add as CFDictionary, nil)
+            guard addStatus == errSecSuccess else {
+                BackendSecurity.log("Keychain session write failed", statusCode: Int(addStatus))
+                return false
+            }
+            return true
         }
+        guard status == errSecSuccess else {
+            BackendSecurity.log("Keychain session update failed", statusCode: Int(status))
+            return false
+        }
+        return true
     }
 
-    static func delete() {
+    @discardableResult
+    static func delete() -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-        SecItemDelete(query as CFDictionary)
+        let status = SecItemDelete(query as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            BackendSecurity.log("Keychain session deletion failed", statusCode: Int(status))
+            return false
+        }
+        return true
     }
 }
 
@@ -464,15 +555,39 @@ final class AuthStore {
         persist(verified)
     }
 
-    func signOut() {
-        session = nil
-        AuthSessionStore.delete()
-        UserDefaults.standard.removeObject(forKey: storageKey)
+    func signOut() async {
+        if let accessToken = session?.accessToken {
+            do {
+                try await AuthService.shared.signOut(accessToken: accessToken)
+            } catch {
+                BackendSecurity.log("Remote session revocation failed during sign-out", error: error)
+            }
+        }
+        clearLocalSession()
+    }
+
+    /// Requires the current password so deletion is backed by recent authentication.
+    /// The backend deletes the Auth user last; only then is the local session removed.
+    func deleteAccount(currentPassword: String) async throws {
+        guard let email = session?.email else {
+            throw AuthError(message: "You need to be signed in.")
+        }
+        let verified = try await AuthService.shared.signIn(email: email, password: currentPassword)
+        try await AuthService.shared.deleteAccount(accessToken: verified.accessToken)
+        clearLocalSession()
     }
 
     private func persist(_ session: AuthSession) {
         self.session = session
         AuthSessionStore.save(session)
+        UserDefaults.standard.removeObject(forKey: storageKey)
+    }
+
+    private func clearLocalSession() {
+        refreshTask?.cancel()
+        refreshTask = nil
+        session = nil
+        AuthSessionStore.delete()
         UserDefaults.standard.removeObject(forKey: storageKey)
     }
 }
@@ -509,6 +624,7 @@ struct AuthView: View {
     @State private var errorMessage: String?
     @State private var infoMessage: String?
     @State private var isWorking = false
+    @State private var showPrivacyPolicy = false
     /// Raw nonce for the in-flight Apple request; its SHA-256 goes to Apple, the raw
     /// value to Supabase so GoTrue can verify the identity token's `nonce` claim.
     @State private var appleNonce = ""
@@ -526,11 +642,16 @@ struct AuthView: View {
 
                 card
                     .animation(.snappy, value: mode)
+
+                Button("Privacy Policy") { showPrivacyPolicy = true }
+                    .font(.app(.footnote, .semibold))
+                    .foregroundStyle(.secondary)
             }
             .padding()
             .padding(.top, 24)
             .padding(.bottom, 80) // Clearance for the floating dock.
         }
+        .sheet(isPresented: $showPrivacyPolicy) { PrivacyPolicyView() }
     }
 
     /// The app mark above the card, mirroring the reference's "Product Inc." lockup.

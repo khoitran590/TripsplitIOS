@@ -8,8 +8,8 @@
 //
 // Security posture (mirrors parse-receipt):
 //  - Auth: platform `verify_jwt = true` AND an explicit `/auth/v1/user` check.
-//  - Rate limit: 10 successful itinerary generations per user per 300 seconds. Capacity
-//    is reserved atomically in its own bucket and released on upstream/infra failure.
+//  - Rate limit: 10 paid provider attempts per user per 300 seconds. Capacity is
+//    reserved atomically and is not refunded for invalid/error provider output.
 //  - Secret: the Gemini key is read from env and never logged or returned.
 //  - Output: the model's JSON is re-validated/normalized before it reaches the client.
 //  - No dependencies: plain fetch only.
@@ -29,6 +29,8 @@ const MAX_EXISTING_CHARS = 4_000;
 const RATE_LIMIT = 10; // Max plan generations ...
 const RATE_WINDOW_SECONDS = 300; // ... per user per this window.
 const RATE_KIND = "itinerary";
+const CONSENT_PURPOSE = "itinerary_generation";
+const CONSENT_VERSION = "2026-08-02";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
@@ -46,6 +48,9 @@ Deno.serve(async (req) => {
   if (!token) return jsonResponse({ error: "Unauthorized" }, 401);
   const user = await getUser(token);
   if (!user) return jsonResponse({ error: "Unauthorized" }, 401);
+  if (!(await hasAIConsent(token, CONSENT_PURPOSE))) {
+    return jsonResponse({ error: "Current AI consent is required." }, 403);
+  }
 
   // 2. Validate input.
   let payload: Record<string, unknown>;
@@ -70,7 +75,8 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: "AI suggestions are not configured." }, 503);
   }
 
-  // 4. Reserve this feature's capacity atomically; commit only after a valid plan exists.
+  // 4. Reserve this feature's capacity atomically. Once Gemini is called, the attempt
+  // remains charged even if every model variant returns invalid/error output.
   let usage: UsageReservation;
   try {
     usage = await reserveUsage(user.id);
@@ -103,7 +109,7 @@ Deno.serve(async (req) => {
     if (!plan) upstreamStatus = third.status;
   }
   if (!plan) {
-    await completeUsage(usage.reservationId, false);
+    await completeUsage(usage.reservationId, true);
     logUsage("post_call_failure", upstreamStatus === 429 ? 503 : 502);
     // Surface quota exhaustion distinctly — it's an account/billing condition the
     // owner must fix (or wait out), not a transient service bug.
@@ -127,6 +133,23 @@ async function getUser(token: string): Promise<{ id: string } | null> {
   if (!res.ok) return null;
   const user = await res.json().catch(() => null);
   return typeof user?.id === "string" ? { id: user.id } : null;
+}
+
+async function hasAIConsent(token: string, purpose: string): Promise<boolean> {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/has_ai_consent`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+      apikey: SUPABASE_ANON_KEY,
+    },
+    body: JSON.stringify({ p_purpose: purpose, p_consent_version: CONSENT_VERSION }),
+  });
+  if (!response.ok) {
+    console.error(JSON.stringify({ function: "suggest-itinerary", outcome: "consent_check_failure", status: response.status }));
+    return false;
+  }
+  return (await response.json().catch(() => false)) === true;
 }
 
 type UsageReservation = {

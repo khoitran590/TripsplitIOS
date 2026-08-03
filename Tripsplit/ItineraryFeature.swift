@@ -844,6 +844,7 @@ struct ItineraryDetailView: View {
     @State private var aiCooldownUntil: Date?
     @State private var aiCooldownNow = Date()
     @State private var showApplyConfirm = false
+    @State private var showItineraryAIConsent = false
     /// Which suggested days are expanded in the AI card.
     @State private var expandedSuggestionDays: Set<ItinerarySuggestionDay.ID> = []
     /// Long drafts (7+ days) start truncated to a few days so the card stays scrollable.
@@ -938,6 +939,17 @@ struct ItineraryDetailView: View {
         }
         .sheet(isPresented: $showTripDetails) {
             TripDetailView(tripID: tripID)
+        }
+        .sheet(isPresented: $showItineraryAIConsent) {
+            AIConsentDisclosureView(purpose: .itineraryGeneration) { granted in
+                guard granted,
+                      let currentTrip = store.trip(tripID),
+                      let currentItinerary = currentTrip.itinerary else {
+                    if !granted { aiMessage = "AI planning remains off. You can keep building the itinerary manually." }
+                    return
+                }
+                performGenerateSuggestion(currentTrip, currentItinerary)
+            }
         }
         .onChange(of: coverPick) { _, pick in
             guard let pick else { return }
@@ -1694,6 +1706,14 @@ struct ItineraryDetailView: View {
     }
 
     private func generateSuggestion(_ trip: Trip, _ itinerary: Itinerary) {
+        guard AIConsentPreferences.isGranted(.itineraryGeneration, userID: store.currentUser.id) else {
+            showItineraryAIConsent = true
+            return
+        }
+        performGenerateSuggestion(trip, itinerary)
+    }
+
+    private func performGenerateSuggestion(_ trip: Trip, _ itinerary: Itinerary) {
         guard !isGeneratingPlan, !isAICoolingDown else { return }
         aiMessage = nil
         isGeneratingPlan = true
@@ -1901,7 +1921,7 @@ struct ItineraryDetailView: View {
             do {
                 try await store.inviteMember(email: email, displayName: "", to: trip.id)
                 inviteEmail = ""
-                inviteMessage = String(localized: "Member invited and added to this itinerary.")
+                inviteMessage = String(localized: "Invitation pending. Membership starts only after the recipient accepts.")
             } catch {
                 inviteMessage = (error as? AuthError)?.message ?? error.localizedDescription
             }

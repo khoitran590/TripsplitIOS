@@ -19,6 +19,11 @@ struct SettingsScreen: View {
     @State private var showProfilePage = false
     @State private var showPaymentSettings = false
     @State private var showNotificationSettings = false
+    @State private var showDeleteAccount = false
+    @State private var showPrivacyChoices = false
+    @State private var showPrivacyPolicy = false
+    @State private var showCommunityStandards = false
+    @State private var isSigningOut = false
     @AppStorage("appearancePreference") private var appearance: AppearancePreference = .system
     @AppStorage("displayCurrency") private var displayCurrency = "USD"
     @AppStorage("navbarTransparency") private var navbarTransparency = 0.0
@@ -134,15 +139,36 @@ struct SettingsScreen: View {
                                      iconColor: Color(hex: 0x8B5CF6)) {
                         showFontPicker = true
                     }
+                    PlainSettingsRow(icon: "hand.raised.fill", title: "Privacy & AI",
+                                     iconColor: Color(hex: 0x0EA5E9)) {
+                        showPrivacyChoices = true
+                    }
+                    PlainSettingsRow(icon: "checkmark.shield.fill", title: "Community Standards",
+                                     iconColor: Color(hex: 0x10B981)) {
+                        showCommunityStandards = true
+                    }
                     themePicker
                 }
 
                 PlainSettingsRow(icon: "rectangle.portrait.and.arrow.right", title: "Sign Out",
                                  showsChevron: false, tint: Color(hex: 0xEF4444)) {
-                    store.resetProfile()
-                    auth.signOut()
+                    Task {
+                        guard !isSigningOut else { return }
+                        isSigningOut = true
+                        let userID = store.currentUser.id
+                        await auth.signOut()
+                        await store.purgeLocalData(for: userID)
+                        isSigningOut = false
+                    }
                 }
                 .padding(.top, 8)
+                .disabled(isSigningOut)
+
+                PlainSettingsRow(icon: "person.crop.circle.badge.xmark", title: "Delete Account",
+                                 showsChevron: false, tint: Color(hex: 0xEF4444)) {
+                    showDeleteAccount = true
+                }
+                .disabled(isSigningOut)
 
                 versionFooter
             }
@@ -169,6 +195,18 @@ struct SettingsScreen: View {
         }
         .sheet(isPresented: $showNotificationSettings) {
             NotificationPreferencesView()
+        }
+        .sheet(isPresented: $showDeleteAccount) {
+            DeleteAccountView()
+        }
+        .sheet(isPresented: $showPrivacyChoices) {
+            NavigationStack { AIPrivacyChoicesView() }
+        }
+        .sheet(isPresented: $showPrivacyPolicy) {
+            PrivacyPolicyView()
+        }
+        .sheet(isPresented: $showCommunityStandards) {
+            NavigationStack { CommunityStandardsView() }
         }
     }
 
@@ -351,12 +389,101 @@ struct SettingsScreen: View {
             Text("Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1") (\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"))")
                 .font(.app(.caption))
                 .foregroundStyle(.tertiary)
-            Text("Terms & Privacy")
+            Button("Privacy Policy") { showPrivacyPolicy = true }
                 .font(.app(.caption))
                 .foregroundStyle(.tertiary)
+                .buttonStyle(.plain)
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 16)
+    }
+}
+
+/// App Review requires account deletion to begin in the app. The password prompt gives
+/// the destructive request a recent-authentication check; the service-role workflow is
+/// kept entirely in the authenticated `delete-account` Edge Function.
+private struct DeleteAccountView: View {
+    @Environment(AuthStore.self) private var auth
+    @Environment(TripStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var password = ""
+    @State private var isDeleting = false
+    @State private var showFinalConfirmation = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("What will be deleted") {
+                    Text("Your profile, posts, comments, uploaded media, friendships, invitations, and trips you organize will be permanently deleted. You will immediately lose access to shared trips. Financial records that other members rely on may be retained in anonymized form.")
+                        .font(.app(.footnote))
+                }
+
+                Section("Confirm your identity") {
+                    SecureField("Current password", text: $password)
+                        .textContentType(.password)
+                    if let errorMessage {
+                        Text(verbatim: errorMessage)
+                            .font(.app(.footnote))
+                            .foregroundStyle(Theme.negative)
+                    }
+                }
+
+                Section {
+                    Button("Delete Account", role: .destructive) {
+                        showFinalConfirmation = true
+                    }
+                    .disabled(password.isEmpty || isDeleting)
+                } footer: {
+                    Text("This action cannot be undone.")
+                }
+            }
+            .navigationTitle("Delete Account")
+            .navigationBarTitleDisplayMode(.inline)
+            .disabled(isDeleting)
+            .overlay {
+                if isDeleting {
+                    ProgressView("Deleting account…")
+                        .padding()
+                        .background(.regularMaterial, in: .rect(cornerRadius: 14))
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                        .disabled(isDeleting)
+                }
+            }
+            .confirmationDialog(
+                "Permanently delete your account?",
+                isPresented: $showFinalConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Delete My Account", role: .destructive) { deleteAccount() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Your account and non-retained data will be permanently removed.")
+            }
+        }
+        .interactiveDismissDisabled(isDeleting)
+    }
+
+    private func deleteAccount() {
+        guard !isDeleting else { return }
+        isDeleting = true
+        errorMessage = nil
+        let userID = store.currentUser.id
+        Task {
+            do {
+                try await auth.deleteAccount(currentPassword: password)
+                await store.purgeLocalData(for: userID)
+                dismiss()
+            } catch {
+                errorMessage = (error as? AuthError)?.message ?? "Account deletion failed. Your account is still active; please try again."
+            }
+            isDeleting = false
+        }
     }
 }
 

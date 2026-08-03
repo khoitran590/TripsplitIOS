@@ -1,6 +1,11 @@
 import SwiftUI
 import UIKit
 
+private struct PendingTripInvitation {
+    let url: URL
+    let preview: TripsRepository.InvitationPreview
+}
+
 @main struct MyApp: App {
     // Covers/avatars/receipts/feed photos load through `ImageCache` (memory + disk,
     // keyed by stable storage path), which replaced the old oversized URLCache: that
@@ -129,6 +134,7 @@ struct ContentView: View {
     @State private var pendingInviteURL: URL?
     @State private var showInviteSignInAlert = false
     @State private var inviteErrorMessage: String?
+    @State private var invitationToConfirm: PendingTripInvitation?
 
     var body: some View {
         ZStack {
@@ -175,7 +181,7 @@ struct ContentView: View {
             // Redeem an invitation link that was opened before the user signed in.
             if isAuthenticated, let url = pendingInviteURL {
                 pendingInviteURL = nil
-                Task { await acceptInvite(url) }
+                Task { await prepareInvite(url) }
             }
         }
         // Tapping a place inside a curated Explore trip asks the Map tab to focus it;
@@ -270,7 +276,7 @@ struct ContentView: View {
                !token.isEmpty {
                 sharedProfile = SharedProfileLink(token: token)
             } else if auth.isAuthenticated {
-                Task { await acceptInvite(url) }
+                Task { await prepareInvite(url) }
             } else {
                 // Hold the link and point the user at sign-in; redeemed automatically
                 // in `onChange(of: auth.isAuthenticated)` once they're in.
@@ -281,9 +287,33 @@ struct ContentView: View {
         .alert("Sign In to Join the Trip", isPresented: $showInviteSignInAlert) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("Sign in (or create an account) from the Profile tab — your invitation will be accepted automatically.")
+            Text("Sign in (or create an account) from the Profile tab. TripSplit will show who invited you and ask before joining.")
         }
-        .alert("Couldn't Accept Invitation", isPresented: Binding(
+        .confirmationDialog(
+            invitationToConfirm.map { "Join \($0.preview.tripName)?" } ?? "Join trip?",
+            isPresented: Binding(
+                get: { invitationToConfirm != nil },
+                set: { if !$0 { invitationToConfirm = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Join Trip") {
+                guard let pending = invitationToConfirm else { return }
+                invitationToConfirm = nil
+                Task { await acceptInvite(pending.url) }
+            }
+            Button("Decline Invitation", role: .destructive) {
+                guard let pending = invitationToConfirm else { return }
+                invitationToConfirm = nil
+                Task { await declineInvite(pending.url) }
+            }
+            Button("Cancel", role: .cancel) { invitationToConfirm = nil }
+        } message: {
+            if let pending = invitationToConfirm {
+                Text("Invited by \(pending.preview.inviterName). This invitation expires \(pending.preview.expiresAt.formatted(.relative(presentation: .named))).")
+            }
+        }
+        .alert("Invitation Action Failed", isPresented: Binding(
             get: { inviteErrorMessage != nil },
             set: { if !$0 { inviteErrorMessage = nil } }
         )) {
@@ -300,6 +330,25 @@ struct ContentView: View {
                 // the user on Explore made a successful deep link look like a no-op.
                 selectedTab = .trips
             }
+        } catch {
+            inviteErrorMessage = (error as? AuthError)?.message ?? error.localizedDescription
+        }
+    }
+
+    private func declineInvite(_ url: URL) async {
+        do {
+            try await store.declineInvitationLink(url)
+        } catch {
+            inviteErrorMessage = (error as? AuthError)?.message ?? error.localizedDescription
+        }
+    }
+
+    private func prepareInvite(_ url: URL) async {
+        do {
+            guard let preview = try await store.previewInvitationLink(url) else {
+                throw AuthError(message: "This invitation link is invalid.")
+            }
+            invitationToConfirm = PendingTripInvitation(url: url, preview: preview)
         } catch {
             inviteErrorMessage = (error as? AuthError)?.message ?? error.localizedDescription
         }
