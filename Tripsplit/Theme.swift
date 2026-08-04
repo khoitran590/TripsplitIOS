@@ -259,7 +259,7 @@ extension Font {
 /// home-screen backdrop for *both* light and dark appearances, so switching the
 /// system scheme never changes the chosen theme — only how bright it renders.
 enum AppTheme: String, CaseIterable, Identifiable {
-    case classic, matcha, butter, chocolate, gothic, y2k, paper, pop
+    case classic, matcha, butter, chocolate, gothic, y2k, paper, pop, colonnade
 
     var id: Self { self }
 
@@ -274,6 +274,7 @@ enum AppTheme: String, CaseIterable, Identifiable {
         case .y2k: "Y2K"
         case .paper: "Paper"
         case .pop: "Pop"
+        case .colonnade: "Colonnade"
         }
     }
 
@@ -295,6 +296,9 @@ enum AppTheme: String, CaseIterable, Identifiable {
         // Pop: saturated indigo, lifted to periwinkle in dark mode so it stays
         // legible on near-black.
         case .pop: Color(light: 0x4F46E5, dark: 0x818CF8)
+        // Colonnade: slate ink, with bronze as its companion — the swatch reads
+        // stone → metal rather than as a second blue theme.
+        case .colonnade: Color(light: 0x2F4858, dark: 0x9FBDCE)
         }
     }
 
@@ -312,6 +316,8 @@ enum AppTheme: String, CaseIterable, Identifiable {
         case .paper: Color(light: 0x746B5C, dark: 0xC7BDAE)
         // Teal companion (brightened in dark mode to match the lifted indigo).
         case .pop: Color(light: 0x14B8A6, dark: 0x2DD4BF)
+        // Aged bronze against the slate.
+        case .colonnade: Color(light: 0x8A6A4B, dark: 0xC9A882)
         }
     }
 
@@ -374,6 +380,52 @@ enum AppTheme: String, CaseIterable, Identifiable {
                 Color(light: 0xF0F3EE, dark: 0x0F0E1C),
                 Color(light: 0xFAFBF7, dark: 0x0A0A0D),
             ]
+        case .colonnade:
+            // Travertine (light) / basalt (dark). The base stop is deliberately
+            // warm rather than the shared near-neutral: a cool base under a
+            // travertine field reads as two different papers.
+            [
+                Color(light: 0xF1EEE7, dark: 0x171614),
+                Color(light: 0xF8F6F1, dark: 0x121110),
+                Color(light: 0xFCFBF8, dark: 0x0A0A09),
+            ]
+        }
+    }
+}
+
+// MARK: - Ruled themes
+
+/// Colonnade asks for a layout the palette alone can't express: no cards, full-bleed
+/// hairlines, a wider content column, and tracked-caps labels. Views branch on this
+/// style rather than on the theme's name, so the eight card themes are untouched and
+/// a future ruled theme inherits the whole layout by returning `.ruled` here.
+extension AppTheme {
+    enum SurfaceStyle { case card, ruled }
+
+    var surfaceStyle: SurfaceStyle { self == .colonnade ? .ruled : .card }
+
+    /// Hairline color for this theme; `nil` uses the shared cool-neutral separator.
+    /// The shared one reads blue against travertine, which is the whole reason this exists.
+    var ruleOverride: Color? {
+        switch self {
+        case .colonnade: Color(light: 0xD3CDC0, dark: 0x37342E)
+        default: nil
+        }
+    }
+
+    /// Card fill for this theme; `nil` uses the shared surface.
+    var surfaceOverride: Color? {
+        switch self {
+        case .colonnade: Color(light: 0xFFFFFF, dark: 0x1D1C1A)
+        default: nil
+        }
+    }
+
+    /// Text-field fill for this theme; `nil` uses the shared cool-neutral field.
+    var fieldOverride: Color? {
+        switch self {
+        case .colonnade: Color(light: 0xEDE9E0, dark: 0x2A2724)
+        default: nil
         }
     }
 }
@@ -454,14 +506,23 @@ enum Theme {
     }
 
     /// Fill for text fields and inline controls inside cards.
-    static let fieldBackground = Color(light: 0xE9EEF3, dark: 0x2C2C2E)
+    static var fieldBackground: Color {
+        ThemeManager.shared.selection.fieldOverride ?? Color(light: 0xE9EEF3, dark: 0x2C2C2E)
+    }
 
     /// Opaque-enough surfaces for content that must remain readable over the themed
     /// backdrop. Liquid Glass can still sit above these, but pale themes no longer
     /// wash cards and adjacent sections into one continuous field.
-    static let surface = Color(light: 0xFFFFFF, dark: 0x202124)
+    ///
+    /// `surface` and `separator` resolve through the theme so a warm palette isn't
+    /// ruled in cool grey; themes that don't override them get the shared neutrals.
+    static var surface: Color {
+        ThemeManager.shared.selection.surfaceOverride ?? Color(light: 0xFFFFFF, dark: 0x202124)
+    }
     static let surfaceSubtle = Color(light: 0xF5F7F9, dark: 0x18191C)
-    static let separator = Color(light: 0xC9D1D9, dark: 0x3C4046)
+    static var separator: Color {
+        ThemeManager.shared.selection.ruleOverride ?? Color(light: 0xC9D1D9, dark: 0x3C4046)
+    }
     static let elevatedShadow = Color(light: 0x1F2937, dark: 0x000000).opacity(0.12)
     /// Readable secondary copy over the app's decorative backgrounds. Unlike the
     /// system tertiary hierarchy, this token remains suitable for normal body text.
@@ -491,6 +552,131 @@ enum Theme {
     static let onPositiveFill = Color(light: 0x052E22, dark: 0x052E22)
     static let onNegativeFill = Color(light: 0xFFFFFF, dark: 0x3F0808)
     static let onWarningFill = Color(light: 0x3B1D04, dark: 0x3B1D04)
+
+    /// True when the active theme bounds content with rules instead of cards.
+    static var isRuled: Bool { ThemeManager.shared.selection.surfaceStyle == .ruled }
+
+    /// The ruled style's content margin — wider than the default, which is what gives
+    /// its full-bleed hairlines something to run past.
+    static let ruledInset: CGFloat = 26
+
+    /// Horizontal inset for the home screen's content column. `nil` on card themes so
+    /// they keep SwiftUI's default padding rather than a hard-coded stand-in for it.
+    static var contentInset: CGFloat? { isRuled ? ruledInset : nil }
+
+    /// Hairline weight and color, doubled and opaque under Increased Contrast to match
+    /// what `readableSurface` already does to its border.
+    static func ruleWidth(_ contrast: ColorSchemeContrast) -> CGFloat {
+        contrast == .increased ? 2 : 1
+    }
+    static func ruleColor(_ contrast: ColorSchemeContrast) -> Color {
+        separator.opacity(contrast == .increased ? 1 : 0.9)
+    }
+}
+
+// MARK: - Ruled layout
+
+extension View {
+    /// Panel treatment for the home screen: a readable card on card themes, bare
+    /// content under a full-bleed hairline on ruled ones.
+    @ViewBuilder
+    func homePanel(cornerRadius: CGFloat = 20, elevated: Bool = false) -> some View {
+        if Theme.isRuled {
+            modifier(RuledSectionModifier())
+        } else {
+            readableSurface(cornerRadius: cornerRadius, elevated: elevated)
+        }
+    }
+
+    /// The same switch for panels whose card form is Liquid Glass rather than a readable
+    /// surface, so card themes keep exactly the material they had.
+    @ViewBuilder
+    func homeGlassPanel(cornerRadius: CGFloat = 20) -> some View {
+        if Theme.isRuled {
+            modifier(RuledSectionModifier())
+        } else {
+            glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
+        }
+    }
+
+    /// A ruled boundary for content that has no card form at all (the quick actions).
+    /// Identity on card themes, where the cards themselves separate the sections.
+    @ViewBuilder
+    func ruledSection() -> some View {
+        if Theme.isRuled {
+            modifier(RuledSectionModifier())
+        } else {
+            self
+        }
+    }
+
+    /// Padding a panel applies for itself on card themes. The ruled style takes its
+    /// horizontal margin from the content column and its rhythm from the rules, so it
+    /// drops the panel's own inset rather than nesting one inside the other.
+    func panelPadding(horizontal: CGFloat, vertical: CGFloat) -> some View {
+        padding(.horizontal, Theme.isRuled ? 0 : horizontal)
+            .padding(.vertical, Theme.isRuled ? 0 : vertical)
+    }
+}
+
+/// Bounds content with a hairline that bleeds past the content column to the screen
+/// edges — what makes the ruled style read as ruled rather than as a bordered list.
+private struct RuledSectionModifier: ViewModifier {
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.vertical, 14)
+            .overlay(alignment: .top) {
+                Rectangle()
+                    .fill(Theme.ruleColor(colorSchemeContrast))
+                    .frame(height: Theme.ruleWidth(colorSchemeContrast))
+                    // Negative inset cancels the content column's margin exactly, so the
+                    // rule spans the full width wherever the panel sits in the stack.
+                    .padding(.horizontal, -Theme.ruledInset)
+            }
+    }
+}
+
+extension View {
+    /// Small-label styling. Ruled themes set it inscriptionally — tracked caps, the
+    /// look Colonnade is built on; card themes keep the tighter track they already had.
+    func inscription() -> some View { modifier(InscriptionModifier()) }
+
+    /// Home section heading: an inscription on ruled themes, the existing headline
+    /// everywhere else.
+    @ViewBuilder
+    func homeSectionHeading() -> some View {
+        if Theme.isRuled {
+            inscription().foregroundStyle(Theme.textSecondary)
+        } else {
+            font(.app(.headline))
+        }
+    }
+}
+
+private struct InscriptionModifier: ViewModifier {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.locale) private var locale
+
+    /// Uppercasing does nothing for CJK and wide tracking only breaks its spacing, so
+    /// those locales keep the label's own case and the tighter track.
+    private var isCJK: Bool {
+        ["zh", "ja", "ko"].contains(locale.language.languageCode?.identifier ?? "")
+    }
+
+    func body(content: Content) -> some View {
+        let inscribed = Theme.isRuled && !isCJK
+        // `tracking` is absolute — it does not grow with the type — so the spacing that
+        // reads as air at default sizes reads as gaps at accessibility ones.
+        let tracking: CGFloat = inscribed
+            ? (dynamicTypeSize.isAccessibilitySize ? 1.2 : 2.2)
+            : 0.5
+        content
+            .font(.app(.caption2, .semibold))
+            .textCase(inscribed ? .uppercase : nil)
+            .tracking(tracking)
+    }
 }
 
 // MARK: - Readable surfaces

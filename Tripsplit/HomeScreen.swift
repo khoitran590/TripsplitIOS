@@ -7,6 +7,7 @@ struct HomeScreen: View {
     var onBrowseIdeas: () -> Void = {}
     @Environment(TripStore.self) private var store
     @Environment(AuthStore.self) private var auth
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @State private var showAddTrip = false
     @State private var showSignInAlert = false
     @State private var resumeAddTripAfterSignIn = false
@@ -39,7 +40,9 @@ struct HomeScreen: View {
     private var homeContent: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+                // Ruled themes get their rhythm from each section's own rule and padding,
+                // so the stack itself stops adding gaps between them.
+                VStack(alignment: .leading, spacing: Theme.isRuled ? 0 : 20) {
                     syncBanner
                         .transition(.move(edge: .top).combined(with: .opacity))
                         .animation(.snappy, value: store.syncState)
@@ -48,7 +51,7 @@ struct HomeScreen: View {
                     tripsSection
                     recentTransactions
                 }
-                .padding(.horizontal)
+                .padding(.horizontal, Theme.contentInset)
                 .padding(.bottom, 110)
             }
             .background { AppBackground() }
@@ -158,8 +161,8 @@ struct HomeScreen: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Upcoming & Active")
-                    .font(.app(.headline))
-                    .padding(.leading, 4)
+                    .homeSectionHeading()
+                    .padding(.leading, Theme.isRuled ? 0 : 4)
                 Spacer()
                 Button {
                     requestAddTrip()
@@ -198,7 +201,7 @@ struct HomeScreen: View {
                                     .frame(width: 300)
                             }
                             .buttonStyle(.plain)
-                            .contentShape(.contextMenuPreview, .rect(cornerRadius: 24))
+                            .contentShape(.contextMenuPreview, .rect(cornerRadius: Theme.isRuled ? 0 : 24))
                             .contextMenu {
                                 Button {
                                     withAnimation(.snappy) {
@@ -251,6 +254,7 @@ struct HomeScreen: View {
                 .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 16))
             }
         }
+        .ruledSection()
     }
 
     private var emptyTripsCard: some View {
@@ -288,8 +292,8 @@ struct HomeScreen: View {
             .buttonStyle(.plain)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 28)
-        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+        .padding(.vertical, Theme.isRuled ? 14 : 28)
+        .homeGlassPanel()
     }
 
     private func cloudLoadFailure(_ message: String) -> some View {
@@ -311,8 +315,8 @@ struct HomeScreen: View {
             .buttonStyle(.bordered)
             .tint(Theme.accent)
         }
-        .padding(14)
-        .glassEffect(.regular, in: .rect(cornerRadius: 16))
+        .panelPadding(horizontal: 14, vertical: 14)
+        .homeGlassPanel(cornerRadius: 16)
     }
 
     /// Surfaces cloud-sync status so a failed save isn't silent: a spinner while saving
@@ -328,8 +332,8 @@ struct HomeScreen: View {
                 Text("Saving to cloud…").font(.app(.caption, .medium)).foregroundStyle(.secondary)
                 Spacer()
             }
-            .padding(.horizontal, 14).padding(.vertical, 10)
-            .glassEffect(.regular, in: .rect(cornerRadius: 14))
+            .panelPadding(horizontal: 14, vertical: 10)
+            .homeGlassPanel(cornerRadius: 14)
         case .failed:
             SyncFailureBanner()
         }
@@ -338,12 +342,20 @@ struct HomeScreen: View {
     private var quickActions: some View {
         // No section header: two labeled buttons explain themselves, and dropping
         // the header keeps the balance card + actions + trips above the fold.
-        HStack(spacing: 12) {
+        HStack(spacing: Theme.isRuled ? 0 : 12) {
             QuickActionButton(
                 title: "Split Expense",
                 icon: "divide.circle.fill",
                 colors: [Color(hex: 0x818CF8), Color(hex: 0x4F46E5)]
             ) { startQuickAction(.split) }
+
+            // Ruled style divides the two actions with a hairline instead of a gap,
+            // since neither button carries a capsule of its own.
+            if Theme.isRuled {
+                Rectangle()
+                    .fill(Theme.ruleColor(colorSchemeContrast))
+                    .frame(width: Theme.ruleWidth(colorSchemeContrast), height: 26)
+            }
 
             QuickActionButton(
                 title: "Add Expense",
@@ -351,6 +363,7 @@ struct HomeScreen: View {
                 colors: [Color(hex: 0x34D399), Color(hex: 0x059669)]
             ) { startQuickAction(.addExpense) }
         }
+        .ruledSection()
     }
 
     /// Every expense across the user's trips, newest first, as transaction rows.
@@ -409,8 +422,8 @@ struct HomeScreen: View {
         return VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Recent Transactions")
-                    .font(.app(.headline))
-                    .padding(.leading, 4)
+                    .homeSectionHeading()
+                    .padding(.leading, Theme.isRuled ? 0 : 4)
                 Spacer()
                 if isSelectingTransactions {
                     Button(selectedTransactionIDs.count == visibleDeletableTransactions.count ? "Deselect All" : "Select All") {
@@ -460,12 +473,12 @@ struct HomeScreen: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 28)
-                .glassEffect(.regular, in: .rect(cornerRadius: 20))
+                .padding(.vertical, Theme.isRuled ? 14 : 28)
+                .homeGlassPanel()
             } else {
                 GlassEffectContainer(spacing: 12) {
                     // Lazy so expanding a large trip only builds the rows scrolled into view.
-                    LazyVStack(spacing: 12) {
+                    LazyVStack(spacing: Theme.isRuled ? 0 : 12) {
                         ForEach(groups) { group in
                             tripGroupCard(group)
                         }
@@ -527,13 +540,26 @@ struct HomeScreen: View {
             if isExpanded {
                 VStack(spacing: 0) {
                     ForEach(group.transactions) { transaction in
-                        Divider().padding(.leading, 14)
+                        rowDivider
                         transactionRow(transaction)
                     }
                 }
             }
         }
-        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+        .homeGlassPanel()
+    }
+
+    /// Separator between an expanded trip's rows. The stock `Divider` is the system
+    /// separator, which is the cool grey the ruled style exists to avoid.
+    @ViewBuilder
+    private var rowDivider: some View {
+        if Theme.isRuled {
+            Rectangle()
+                .fill(Theme.ruleColor(colorSchemeContrast))
+                .frame(height: Theme.ruleWidth(colorSchemeContrast))
+        } else {
+            Divider().padding(.leading, 14)
+        }
     }
 
     private func groupHeaderButton(_ group: TripTransactionGroup, isExpanded: Bool) -> some View {
@@ -566,7 +592,8 @@ struct HomeScreen: View {
                         .foregroundStyle(.secondary)
                         .rotationEffect(.degrees(isExpanded ? 180 : 0))
                 }
-                .padding(14)
+                .padding(.horizontal, Theme.isRuled ? 0 : 14)
+                .padding(.vertical, 14)
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
@@ -659,6 +686,10 @@ struct BalanceCard: View {
     @State private var selectedTrip: Trip?
     @State private var editTrip: Trip?
     @State private var isRefreshingRates = false
+    /// The ruled style prints one large, light numeral instead of a bold largeTitle.
+    /// Scaled rather than fixed so the screen's most important figure still tracks
+    /// Dynamic Type.
+    @ScaledMetric(relativeTo: .largeTitle) private var ruledHeroSize: CGFloat = 56
 
     private enum PickerPurpose {
         case budget, settle
@@ -668,7 +699,8 @@ struct BalanceCard: View {
         Group {
             if !store.myTrips.isEmpty {
                 budgetFace
-                    .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+                    // No card, no shadow: the ruled style is flat by construction.
+                    .shadow(color: .black.opacity(Theme.isRuled ? 0 : 0.15), radius: 8, y: 4)
             }
         }
         .sheet(isPresented: $showConverter) {
@@ -798,10 +830,20 @@ struct BalanceCard: View {
                     HStack(alignment: .bottom, spacing: 12) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(verbatim: heroValue)
-                                .font(.app(.largeTitle, .bold))
+                                .font(Theme.isRuled
+                                    ? .app(size: ruledHeroSize, weight: .medium)
+                                    : .app(.largeTitle, .bold))
                                 .foregroundStyle(isOver ? statusColor : .primary)
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.72)
+                            if Theme.isRuled {
+                                // The one saturated element on a ruled screen — a plain
+                                // fill, so it reads as ink on stone rather than as a glow.
+                                Rectangle()
+                                    .fill(Theme.accent)
+                                    .frame(width: 44, height: 2)
+                                    .padding(.bottom, 2)
+                            }
                             HStack(spacing: 5) {
                                 Text(LocalizedStringKey(heroLabel))
                                 Text(verbatim: "·")
@@ -925,9 +967,9 @@ struct BalanceCard: View {
                 }
             }
         }
-        .padding(16)
+        .panelPadding(horizontal: 16, vertical: 16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .readableSurface(cornerRadius: 24, elevated: true)
+        .homePanel(cornerRadius: 24, elevated: true)
     }
 
     private func statGrid(
@@ -966,7 +1008,7 @@ struct BalanceCard: View {
     private func statBox(label: String, value: String, valueColor: Color, background: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(LocalizedStringKey(label))
-                .font(.app(.caption2, .semibold)).tracking(0.5)
+                .inscription()
                 .foregroundStyle(.secondary)
                 .lineLimit(1).minimumScaleFactor(0.8)
             Text(verbatim: value)
@@ -1265,6 +1307,7 @@ private struct BudgetByTripSheet: View {
 struct TripRow: View {
     let trip: Trip
     let currentUserID: Person.ID
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
     // Budget health (per the signed-in user's own budget on this trip). Computed once at
     // init: `spent(for:)` walks every expense, and the card reads these values from half a
@@ -1311,21 +1354,27 @@ struct TripRow: View {
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.regularMaterial)
+            // The ruled style has no material anywhere, which also makes it Reduce
+            // Transparency-correct without a second code path.
+            .background(Theme.isRuled ? AnyShapeStyle(Theme.surface) : AnyShapeStyle(.regularMaterial))
         }
-        .clipShape(.rect(cornerRadius: 24))
+        .clipShape(.rect(cornerRadius: Theme.isRuled ? 0 : 24))
         .overlay(
-            RoundedRectangle(cornerRadius: 24)
-                .strokeBorder(.white.opacity(0.12), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: Theme.isRuled ? 0 : 24)
+                .strokeBorder(
+                    Theme.isRuled ? Theme.ruleColor(colorSchemeContrast) : .white.opacity(0.12),
+                    lineWidth: Theme.isRuled ? Theme.ruleWidth(colorSchemeContrast) : 0.5
+                )
         )
-        .shadow(color: .black.opacity(0.18), radius: 10, y: 5)
+        .shadow(color: .black.opacity(Theme.isRuled ? 0 : 0.18), radius: 10, y: 5)
     }
 
     // MARK: Cover
 
     private var cover: some View {
         TripCoverView(trip: trip)
-            .frame(height: 130)
+            // A framed band rather than the card's hero photo.
+            .frame(height: Theme.isRuled ? 112 : 130)
             .frame(maxWidth: .infinity)
             .clipped()
             .overlay {
@@ -1402,7 +1451,7 @@ struct TripRow: View {
     private func statBox(label: String, value: String, valueColor: Color, background: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(LocalizedStringKey(label))
-                .font(.app(.caption2, .semibold)).tracking(0.5)
+                .inscription()
                 .foregroundStyle(.secondary)
             Text(value)
                 .font(.app(.subheadline, .bold)).foregroundStyle(valueColor)
@@ -1636,29 +1685,43 @@ struct QuickActionButton: View {
     let colors: [Color]
     let action: () -> Void
 
+    @ViewBuilder
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                Image(systemName: icon)
-                    .font(.app(.body, .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 34, height: 34)
-                    .background(
-                        LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing),
-                        in: .circle
-                    )
-                Text(title).font(.app(.subheadline, .semibold))
-                Spacer(minLength: 0)
+        if Theme.isRuled {
+            // No disc, no capsule: a tracked-caps row, sized to the mockup's 46pt —
+            // which also clears the 44pt minimum target.
+            Button(action: action) {
+                Text(title)
+                    .inscription()
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: 46)
+                    .contentShape(.rect)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 11)
-            // The label has transparent gaps (spacer, padding); without an explicit
-            // shape only the icon and text hit-test, leaving dead zones mid-button.
-            .contentShape(.capsule)
+            .buttonStyle(.plain)
+        } else {
+            Button(action: action) {
+                HStack(spacing: 10) {
+                    Image(systemName: icon)
+                        .font(.app(.body, .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 34, height: 34)
+                        .background(
+                            LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing),
+                            in: .circle
+                        )
+                    Text(title).font(.app(.subheadline, .semibold))
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+                // The label has transparent gaps (spacer, padding); without an explicit
+                // shape only the icon and text hit-test, leaving dead zones mid-button.
+                .contentShape(.capsule)
+            }
+            .buttonStyle(.plain)
+            .glassEffect(.regular.interactive(), in: .capsule)
         }
-        .buttonStyle(.plain)
-        .glassEffect(.regular.interactive(), in: .capsule)
     }
 }
 
