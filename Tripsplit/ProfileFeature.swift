@@ -265,6 +265,12 @@ struct ProfileScreen: View {
     }
 }
 
+/// The invitation sent with a shared profile, whether it goes out as the card picture or
+/// as the `tripsplit://` link — one voice for both. (The card's printed footer and the
+/// mail subject stay on the short "Add me on TripSplit"; neither has room for a sentence.)
+private let profileInvite: LocalizedStringKey =
+    "Hey! Add me on TripSplit and we'll share many journeys together while staying on budget!"
+
 /// A place the user has been, with an optional date drawn from a matching trip.
 /// Used to render the "Where I've been" passport-style cards.
 struct VisitedPlace: Identifiable {
@@ -353,8 +359,11 @@ struct ProfileDetailView: View {
     @State private var selectedTrip: Trip?
     /// A friend's profile opened from the Friends rail.
     @State private var viewingProfile: SharedProfileLink?
-    /// Rendered lazily for the "Share card" action; nil until the first share.
+    /// Set when "Share card" is picked; the sheet renders the picture from it.
     @State private var shareCard: ShareCardItem?
+    @State private var showCoverPicker = false
+    /// The passport cover share cards are printed on, shared with `ProfileShareSheet`.
+    @AppStorage("shareCardCover") private var shareCardCover: ShareCardCover = .unitedStates
     @State private var geocoder = VisitedPlaceGeocoder.shared
     @AppStorage("displayCurrency") private var displayCurrency = "USD"
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -515,7 +524,11 @@ struct ProfileDetailView: View {
             }
         }
         .sheet(item: $shareCard) { card in
-            ProfileShareSheet(image: card.image, name: store.currentUser.name)
+            ProfileShareSheet(card: card)
+        }
+        .sheet(isPresented: $showCoverPicker) {
+            ShareCardCoverPicker(cover: $shareCardCover)
+                .presentationDetents([.height(320)])
         }
     }
 
@@ -533,14 +546,26 @@ struct ProfileDetailView: View {
             }
             if let url = friends.shareURL() {
                 ShareLink(item: url, subject: Text(verbatim: store.currentUser.name),
-                          message: Text("Add me on TripSplit")) {
+                          message: Text(profileInvite)) {
                     Label("Share Link", systemImage: "link")
                 }
             }
             Button {
-                if let image = renderShareCard() { shareCard = ShareCardItem(image: image) }
+                shareCard = ShareCardItem(
+                    name: store.currentUser.name.isEmpty ? "TripSplit User" : store.currentUser.name,
+                    imageData: store.profileImageData,
+                    stats: stats,
+                    places: visitedPlaces
+                )
             } label: {
                 Label("Share Card", systemImage: "photo")
+            }
+            // Reachable without rendering a card first: the cover is a standing
+            // preference, not a per-share decision.
+            Button {
+                showCoverPicker = true
+            } label: {
+                Label("Card cover", systemImage: "paintpalette")
             }
         } label: {
             Image(systemName: "square.and.arrow.up")
@@ -552,25 +577,6 @@ struct ProfileDetailView: View {
         guard let url = friends.shareURL(),
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
         return components.queryItems?.first { $0.name == "token" }?.value
-    }
-
-    /// Rasterizes the profile into a shareable image. Rendered at 3x so it stays sharp
-    /// when it lands in a photo library or a message thread.
-    @MainActor
-    private func renderShareCard() -> Image? {
-        let card = ProfileShareCard(
-            name: store.currentUser.name.isEmpty ? "TripSplit User" : store.currentUser.name,
-            imageData: store.profileImageData,
-            stats: stats,
-            places: visitedPlaces
-        )
-        // Pinned to light: the card is a printed object — cream stamps on the accent
-        // gradient — and the renderer would otherwise resolve its adaptive colors against
-        // whatever appearance the app happens to be in.
-        let renderer = ImageRenderer(content: card.environment(\.colorScheme, .light))
-        renderer.scale = 3
-        guard let uiImage = renderer.uiImage else { return nil }
-        return Image(uiImage: uiImage)
     }
 
     /// Identity and the numbers behind it, in one card: photo, name, birthday, bio, the
@@ -1790,10 +1796,61 @@ struct VisitedPlaceCard: View {
     }
 }
 
-/// Wraps a rendered share card so it can drive an `.sheet(item:)` presentation.
+/// The profile data a share card is drawn from, held while the preview sheet is up. The
+/// picture itself is rendered in the sheet, which is where the cover is chosen.
 struct ShareCardItem: Identifiable {
     let id = UUID()
-    let image: Image
+    let name: String
+    let imageData: Data?
+    let stats: ProfileStats
+    let places: [VisitedPlace]
+}
+
+/// The cover a share card is printed on, taken from real passport covers — the object
+/// the card imitates. US navy is the default; the rest are picked for distinct hues
+/// rather than exhaustiveness, so the swatches never read as two shades of the same red.
+///
+/// Fixed hex values, not `Color(light:dark:)`: the card is a printed object and renders
+/// the same whatever appearance the app is in.
+enum ShareCardCover: String, CaseIterable, Identifiable {
+    case unitedStates, europeanUnion, japan, mexico, vietnam, newZealand
+
+    var id: Self { self }
+
+    /// Country names are localized like the rest of the UI, not shown verbatim.
+    var label: LocalizedStringKey {
+        switch self {
+        case .unitedStates: "United States"
+        case .europeanUnion: "European Union"
+        case .japan: "Japan"
+        case .mexico: "Mexico"
+        case .vietnam: "Vietnam"
+        case .newZealand: "New Zealand"
+        }
+    }
+
+    /// The cover stock, lit from the top-left the way a leather cover catches light.
+    var colors: [Color] {
+        switch self {
+        case .unitedStates: [Color(hex: 0x1E3560), Color(hex: 0x0B1526)]
+        case .europeanUnion: [Color(hex: 0x6E2038), Color(hex: 0x33101E)]
+        case .japan: [Color(hex: 0xA82B33), Color(hex: 0x5E121A)]
+        case .mexico: [Color(hex: 0x1D5A3C), Color(hex: 0x0A2A1C)]
+        case .vietnam: [Color(hex: 0x3A3573), Color(hex: 0x191634)]
+        case .newZealand: [Color(hex: 0x2C2C31), Color(hex: 0x0B0B0D)]
+        }
+    }
+
+    /// The embossing: gold foil on most covers, silver on the black one.
+    var foil: Color {
+        switch self {
+        case .newZealand: Color(hex: 0xD9DEE4)
+        default: Color(hex: 0xE3C486)
+        }
+    }
+
+    /// The cover's deepest tone, for type printed on the card's cream paper.
+    var ink: Color { colors.last ?? .black }
 }
 
 /// The profile rendered as a picture: a passport page someone can post anywhere, unlike
@@ -1812,6 +1869,8 @@ struct ProfileShareCard: View {
     /// Every visited place: the first three are stamped, the rest still count toward the
     /// flag row and the "+n more" line.
     let places: [VisitedPlace]
+    /// The passport cover the card is printed on, and the foil it is embossed in.
+    var cover: ShareCardCover = .unitedStates
 
     /// The card's fixed width; every metric below is tuned against it. `ImageRenderer`
     /// rasterizes at 3x, so the shared picture is 1140px wide.
@@ -1861,11 +1920,11 @@ struct ProfileShareCard: View {
         .padding(.vertical, 24)
         .frame(width: width)
         .background { background }
-        // The hairline that turns a colored panel into a document page.
+        // The foil hairline that turns a colored panel into a passport cover.
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .inset(by: 10)
-                .strokeBorder(.white.opacity(0.3), lineWidth: 1)
+                .strokeBorder(cover.foil.opacity(0.55), lineWidth: 1)
         }
     }
 
@@ -1878,13 +1937,13 @@ struct ProfileShareCard: View {
                 .clipShape(.rect(cornerRadius: 6, style: .continuous))
             Text(verbatim: "TripSplit")
                 .font(.app(.subheadline, .bold))
-                .foregroundStyle(.white)
+                .foregroundStyle(cover.foil)
             Spacer()
             Text("Travel passport")
                 .font(.app(.caption2, .semibold))
                 .textCase(.uppercase)
                 .tracking(1.4)
-                .foregroundStyle(.white.opacity(0.75))
+                .foregroundStyle(cover.foil.opacity(0.85))
         }
     }
 
@@ -1920,7 +1979,7 @@ struct ProfileShareCard: View {
                     paper.overlay {
                         Text(verbatim: initials)
                             .font(.app(size: 34, weight: .bold))
-                            .foregroundStyle(Theme.accent)
+                            .foregroundStyle(cover.ink)
                     }
                 }
             }
@@ -2037,7 +2096,7 @@ struct ProfileShareCard: View {
         VStack(spacing: 12) {
             // A perforation, the way a ticket stub tears.
             DashedRule()
-                .stroke(.white.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: [4, 5]))
+                .stroke(cover.foil.opacity(0.45), style: StrokeStyle(lineWidth: 1, dash: [4, 5]))
                 .frame(height: 1)
 
             HStack {
@@ -2049,28 +2108,30 @@ struct ProfileShareCard: View {
                     .font(.app(.caption2, .semibold))
                     .monospacedDigit()
                     .tracking(0.8)
-                    .foregroundStyle(.white.opacity(0.6))
+                    .foregroundStyle(cover.foil.opacity(0.7))
             }
         }
     }
 
-    /// The theme gradient, a highlight behind the portrait, two outsized rings bleeding
-    /// off the corners and a faint dot grid for paper texture — printed-document depth
-    /// built only from what `ImageRenderer` can rasterize.
+    /// The cover stock, a highlight behind the portrait, two outsized rings bleeding off
+    /// the corners and a faint dot grid for grain — printed-document depth built only
+    /// from what `ImageRenderer` can rasterize.
     private var background: some View {
         ZStack {
-            LinearGradient(colors: [Theme.accent, Theme.accentSecondary],
+            LinearGradient(colors: cover.colors,
                            startPoint: .topLeading, endPoint: .bottomTrailing)
-            RadialGradient(colors: [.white.opacity(0.28), .clear],
+            // Kept faint: the covers are dark stock, and a brighter highlight bleaches
+            // navy into a pale blue blob.
+            RadialGradient(colors: [.white.opacity(0.16), .clear],
                            center: UnitPoint(x: 0.5, y: 0.17), startRadius: 0, endRadius: 250)
             LinearGradient(colors: [.clear, .black.opacity(0.2)],
                            startPoint: .center, endPoint: .bottom)
             Circle()
-                .strokeBorder(.white.opacity(0.1), lineWidth: 24)
+                .strokeBorder(cover.foil.opacity(0.12), lineWidth: 24)
                 .frame(width: 300, height: 300)
                 .offset(x: -160, y: -150)
             Circle()
-                .strokeBorder(.white.opacity(0.08), lineWidth: 16)
+                .strokeBorder(cover.foil.opacity(0.1), lineWidth: 16)
                 .frame(width: 260, height: 260)
                 .offset(x: 165, y: 190)
             dotGrid
@@ -2103,10 +2164,15 @@ private struct DashedRule: Shape {
     }
 }
 
-/// Previews the rendered card and hands it to the system share sheet.
+/// Renders the card, previews it, and hands it to the system share sheet. Rendering
+/// lives here rather than at the call site because this is where the cover is chosen —
+/// picking one re-renders the picture in place.
 struct ProfileShareSheet: View {
-    let image: Image
-    let name: String
+    let card: ShareCardItem
+    @AppStorage("shareCardCover") private var cover: ShareCardCover = .unitedStates
+    /// Rasterized on appear and again whenever the cover changes.
+    @State private var image: Image?
+    @State private var showCovers = false
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -2116,27 +2182,106 @@ struct ProfileShareSheet: View {
                     .ignoresSafeArea()
 
                 VStack(spacing: 24) {
-                    image
-                        .resizable()
-                        .scaledToFit()
-                        .clipShape(.rect(cornerRadius: 24))
-                        .shadow(color: Theme.elevatedShadow, radius: 12, y: 6)
-                        .padding(.horizontal, 24)
-
-                    ShareLink(item: image,
-                              preview: SharePreview(Text(verbatim: name), image: image)) {
-                        Label("Share Card", systemImage: "square.and.arrow.up")
-                            .font(.app(.subheadline, .semibold))
-                            .foregroundStyle(Theme.onAccent)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 13)
+                    Group {
+                        if let image {
+                            image
+                                .resizable()
+                                .scaledToFit()
+                        } else {
+                            // Holds the card's shape for the frame or two before the
+                            // renderer returns, so the sheet doesn't open on nothing.
+                            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                                .fill(LinearGradient(colors: cover.colors,
+                                                     startPoint: .topLeading, endPoint: .bottomTrailing))
+                                .aspectRatio(0.63, contentMode: .fit)
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+                    .clipShape(.rect(cornerRadius: 24))
+                    .shadow(color: Theme.elevatedShadow, radius: 12, y: 6)
                     .padding(.horizontal, 24)
+
+                    if let image {
+                        ShareLink(item: image,
+                                  subject: Text("Add me on TripSplit"),
+                                  message: Text(profileInvite),
+                                  preview: SharePreview(Text(profileInvite), image: image)) {
+                            Label("Share Card", systemImage: "square.and.arrow.up")
+                                .font(.app(.subheadline, .semibold))
+                                .foregroundStyle(Theme.onAccent)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 13)
+                        }
+                        .buttonStyle(.plain)
+                        .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+                        .padding(.horizontal, 24)
+                    }
                 }
             }
             .navigationTitle("Share Card")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { showCovers = true } label: {
+                        Image(systemName: "paintpalette")
+                    }
+                    .accessibilityLabel("Card cover")
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .task(id: cover) { image = render() }
+            .sheet(isPresented: $showCovers) {
+                ShareCardCoverPicker(cover: $cover)
+                    // Short enough that the card stays visible above the picker, so each
+                    // cover is judged on the card rather than on a swatch.
+                    .presentationDetents([.height(320)])
+                    .presentationBackgroundInteraction(.enabled(upThrough: .height(320)))
+            }
+        }
+    }
+
+    /// Rasterizes the card at 3x so it stays sharp in a photo library or a message
+    /// thread. Pinned to light: the card is a printed object — cream stamps on a passport
+    /// cover — and the renderer would otherwise resolve the stamps' adaptive colors
+    /// against whatever appearance the app happens to be in.
+    @MainActor
+    private func render() -> Image? {
+        let content = ProfileShareCard(
+            name: card.name,
+            imageData: card.imageData,
+            stats: card.stats,
+            places: card.places,
+            cover: cover
+        )
+        let renderer = ImageRenderer(content: content.environment(\.colorScheme, .light))
+        renderer.scale = 3
+        guard let uiImage = renderer.uiImage else { return nil }
+        return Image(uiImage: uiImage)
+    }
+}
+
+/// Picks the passport cover the share card is printed on. Presented at a short detent so
+/// the card being restyled stays on screen behind it.
+struct ShareCardCoverPicker: View {
+    @Binding var cover: ShareCardCover
+    @Environment(\.dismiss) private var dismiss
+
+    private let columns = [GridItem(.adaptive(minimum: 96), spacing: 14)]
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                LazyVGrid(columns: columns, spacing: 14) {
+                    ForEach(ShareCardCover.allCases) { option in
+                        Button { cover = option } label: { swatch(option) }
+                            .buttonStyle(.plain)
+                    }
+                }
+                .padding(20)
+            }
+            .background { AppBackground() }
+            .navigationTitle("Card cover")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -2144,6 +2289,41 @@ struct ProfileShareSheet: View {
                 }
             }
         }
+    }
+
+    /// A passport cover in miniature: the stock, its foil frame and emblem, and a ring
+    /// when it is the one in use.
+    private func swatch(_ option: ShareCardCover) -> some View {
+        let isSelected = cover == option
+        return VStack(spacing: 7) {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(LinearGradient(colors: option.colors,
+                                     startPoint: .topLeading, endPoint: .bottomTrailing))
+                .frame(height: 64)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .inset(by: 5)
+                        .strokeBorder(option.foil.opacity(0.65), lineWidth: 1)
+                }
+                .overlay {
+                    Image(systemName: "globe")
+                        .font(.app(size: 20, weight: .light))
+                        .foregroundStyle(option.foil.opacity(0.9))
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(isSelected ? Theme.accent : .clear, lineWidth: 3)
+                }
+                .shadow(color: Theme.elevatedShadow, radius: 4, y: 2)
+
+            Text(option.label)
+                .font(.app(.caption, isSelected ? .semibold : nil))
+                .foregroundStyle(isSelected ? Color.primary : Theme.textSecondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 }
 
