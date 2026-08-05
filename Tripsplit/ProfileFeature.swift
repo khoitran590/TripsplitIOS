@@ -554,6 +554,7 @@ struct ProfileDetailView: View {
                 shareCard = ShareCardItem(
                     name: store.currentUser.name.isEmpty ? "TripSplit User" : store.currentUser.name,
                     imageData: store.profileImageData,
+                    avatarPath: store.currentUser.avatarURL,
                     stats: stats,
                     places: visitedPlaces
                 )
@@ -1802,6 +1803,9 @@ struct ShareCardItem: Identifiable {
     let id = UUID()
     let name: String
     let imageData: Data?
+    /// The avatar's Storage path, used when this device has no local copy of the photo —
+    /// signing in on a new device leaves `imageData` nil while the picture still exists.
+    let avatarPath: String?
     let stats: ProfileStats
     let places: [VisitedPlace]
 }
@@ -1864,7 +1868,9 @@ enum ShareCardCover: String, CaseIterable, Identifiable {
 /// what made the old card's stamps overlap the stats strip.
 struct ProfileShareCard: View {
     let name: String
-    let imageData: Data?
+    /// Already resolved by the sheet — a photo the card had to load itself would still be
+    /// downloading when `ImageRenderer` rasterizes it, and print as the monogram.
+    let photo: UIImage?
     let stats: ProfileStats
     /// Every visited place: the first three are stamped, the rest still count toward the
     /// flag row and the "+n more" line.
@@ -1971,7 +1977,7 @@ struct ProfileShareCard: View {
                 .strokeBorder(.white.opacity(0.55), lineWidth: 2)
                 .frame(width: 106, height: 106)
             Group {
-                if let imageData, let photo = UIImage(data: imageData) {
+                if let photo {
                     Image(uiImage: photo)
                         .resizable()
                         .scaledToFill()
@@ -2113,40 +2119,55 @@ struct ProfileShareCard: View {
         }
     }
 
-    /// The cover stock, a highlight behind the portrait, two outsized rings bleeding off
-    /// the corners and a faint dot grid for grain — printed-document depth built only
-    /// from what `ImageRenderer` can rasterize.
+    /// The cover stock: pebbled hide, a highlight behind the portrait and a shaded
+    /// bottom edge — leather depth built only from what `ImageRenderer` can rasterize.
+    /// The grain sits under the lighting so the top of the cover reads as washed out by
+    /// the light, the way a real cover does.
     private var background: some View {
         ZStack {
             LinearGradient(colors: cover.colors,
                            startPoint: .topLeading, endPoint: .bottomTrailing)
+            leatherGrain
             // Kept faint: the covers are dark stock, and a brighter highlight bleaches
             // navy into a pale blue blob.
             RadialGradient(colors: [.white.opacity(0.16), .clear],
                            center: UnitPoint(x: 0.5, y: 0.17), startRadius: 0, endRadius: 250)
             LinearGradient(colors: [.clear, .black.opacity(0.2)],
                            startPoint: .center, endPoint: .bottom)
-            Circle()
-                .strokeBorder(cover.foil.opacity(0.12), lineWidth: 24)
-                .frame(width: 300, height: 300)
-                .offset(x: -160, y: -150)
-            Circle()
-                .strokeBorder(cover.foil.opacity(0.1), lineWidth: 16)
-                .frame(width: 260, height: 260)
-                .offset(x: 165, y: 190)
-            dotGrid
         }
         .clipped()
     }
 
-    private var dotGrid: some View {
+    /// Pebble grain: a jittered lattice of cells, each creased in shadow and lit along
+    /// its top edge, which is what makes leather read as leather rather than as a flat
+    /// panel. Seeded from a fixed constant so re-sharing prints the same hide, and drawn
+    /// in `Canvas` because a blur or material would rasterize empty.
+    private var leatherGrain: some View {
         Canvas { context, size in
-            let step: CGFloat = 15
-            let diameter: CGFloat = 1.8
-            for y in stride(from: step / 2, to: size.height, by: step) {
-                for x in stride(from: step / 2, to: size.width, by: step) {
-                    let dot = CGRect(x: x, y: y, width: diameter, height: diameter)
-                    context.fill(Path(ellipseIn: dot), with: .color(.white.opacity(0.07)))
+            var state: UInt64 = 0x2545_F491_4F6C_DD1D
+            func jitter() -> CGFloat {
+                state ^= state << 13
+                state ^= state >> 7
+                state ^= state << 17
+                return CGFloat(state % 1000) / 1000
+            }
+            let step: CGFloat = 13
+            // Started a step outside the card so the pebbles run off every edge instead
+            // of stopping in a straight line short of it.
+            for row in stride(from: -step, through: size.height + step, by: step) {
+                for column in stride(from: -step, through: size.width + step, by: step) {
+                    let width = step * (0.75 + jitter() * 0.5)
+                    let height = width * (0.7 + jitter() * 0.45)
+                    let cell = CGRect(x: column + jitter() * step * 0.7 - width / 2,
+                                      y: row + jitter() * step * 0.7 - height / 2,
+                                      width: width, height: height)
+                    let pebble = Path(ellipseIn: cell)
+                    context.stroke(pebble,
+                                   with: .color(.black.opacity(0.10 + jitter() * 0.07)),
+                                   lineWidth: 1.4)
+                    context.stroke(pebble.offsetBy(dx: -0.5, dy: -0.9),
+                                   with: .color(.white.opacity(0.05 + jitter() * 0.045)),
+                                   lineWidth: 0.9)
                 }
             }
         }
@@ -2172,7 +2193,11 @@ struct ProfileShareSheet: View {
     @AppStorage("shareCardCover") private var cover: ShareCardCover = .unitedStates
     /// Rasterized on appear and again whenever the cover changes.
     @State private var image: Image?
+    /// The portrait, resolved once — from this device's copy, or downloaded from Storage.
+    @State private var photo: UIImage?
+    @State private var didResolvePhoto = false
     @State private var showCovers = false
+    @Environment(TripStore.self) private var store
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -2230,7 +2255,15 @@ struct ProfileShareSheet: View {
                     Button("Done") { dismiss() }
                 }
             }
-            .task(id: cover) { image = render() }
+            // Rendered with whatever portrait is in hand so the sheet fills immediately,
+            // then again if a cloud-only avatar had to be downloaded first.
+            .task(id: cover) {
+                image = render()
+                guard !didResolvePhoto else { return }
+                photo = await resolvePhoto()
+                didResolvePhoto = true
+                if photo != nil { image = render() }
+            }
             .sheet(isPresented: $showCovers) {
                 ShareCardCoverPicker(cover: $cover)
                     // Short enough that the card stays visible above the picker, so each
@@ -2249,7 +2282,7 @@ struct ProfileShareSheet: View {
     private func render() -> Image? {
         let content = ProfileShareCard(
             name: card.name,
-            imageData: card.imageData,
+            photo: photo,
             stats: card.stats,
             places: card.places,
             cover: cover
@@ -2258,6 +2291,19 @@ struct ProfileShareSheet: View {
         renderer.scale = 3
         guard let uiImage = renderer.uiImage else { return nil }
         return Image(uiImage: uiImage)
+    }
+
+    /// The portrait, the same way `AvatarView` finds one: this device's copy first, then
+    /// the cached Storage object, then the network. Resolved up front because
+    /// `ImageRenderer` rasterizes in one pass and never waits on a view's own loading.
+    private func resolvePhoto() async -> UIImage? {
+        if let data = card.imageData, let local = UIImage(data: data) { return local }
+        guard let stored = card.avatarPath, !stored.isEmpty else { return nil }
+        let path = ReceiptStorage.storagePath(from: stored)
+        guard !path.isEmpty else { return nil }
+        if let cached = await ImageCache.shared.image(for: path) { return cached }
+        guard let url = await store.signedImageURL(for: path) else { return nil }
+        return await ImageCache.shared.download(from: url, for: path)
     }
 }
 
