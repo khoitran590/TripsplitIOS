@@ -4,8 +4,16 @@ enum AIConsentPurpose: String, CaseIterable, Identifiable {
     case receiptProcessing = "receipt_processing"
     case itineraryGeneration = "itinerary_generation"
 
-    nonisolated static let currentVersion = "2026-08-02"
     nonisolated var id: String { rawValue }
+
+    /// Provider changes require fresh consent only for the affected purpose. Keeping these
+    /// versions separate prevents a receipt-provider update from disrupting itinerary AI.
+    nonisolated var consentVersion: String {
+        switch self {
+        case .receiptProcessing: "2026-08-05"
+        case .itineraryGeneration: "2026-08-02"
+        }
+    }
 
     var title: String {
         switch self {
@@ -17,7 +25,7 @@ enum AIConsentPurpose: String, CaseIterable, Identifiable {
     var disclosure: String {
         switch self {
         case .receiptProcessing:
-            "TripSplit will send the receipt photo and recognized receipt text to Google Cloud Vision and Google Gemini to identify line items, tax, tip, and totals. If you decline, Apple Vision will scan entirely on this device and you can enter anything manually."
+            "TripSplit will send the receipt photo to Anthropic Claude to identify line items, tax, tip, and totals. If Claude cannot complete the scan, TripSplit will send the photo to Google Gemini as a backup. If you decline, Apple Vision will scan entirely on this device and you can enter anything manually."
         case .itineraryGeneration:
             "TripSplit will send the trip destination, dates, budget, and existing itinerary text to Google Gemini. Gemini may use Google Search grounding to suggest current places and activities. If you decline, you can continue building the itinerary manually."
         }
@@ -25,7 +33,7 @@ enum AIConsentPurpose: String, CaseIterable, Identifiable {
 
     var providerSummary: String {
         switch self {
-        case .receiptProcessing: "Google Cloud Vision and Google Gemini"
+        case .receiptProcessing: "Anthropic Claude (primary) and Google Gemini (backup)"
         case .itineraryGeneration: "Google Gemini and Google Search grounding"
         }
     }
@@ -34,19 +42,19 @@ enum AIConsentPurpose: String, CaseIterable, Identifiable {
 enum AIConsentPreferences {
     nonisolated static func hasDecision(_ purpose: AIConsentPurpose, userID: UUID) -> Bool {
         let value = UserDefaults.standard.string(forKey: key(purpose, userID: userID))
-        return value == AIConsentPurpose.currentVersion || value == "declined:\(AIConsentPurpose.currentVersion)"
+        return value == purpose.consentVersion || value == "declined:\(purpose.consentVersion)"
     }
 
     nonisolated static func isGranted(_ purpose: AIConsentPurpose, userID: UUID) -> Bool {
-        UserDefaults.standard.string(forKey: key(purpose, userID: userID)) == AIConsentPurpose.currentVersion
+        UserDefaults.standard.string(forKey: key(purpose, userID: userID)) == purpose.consentVersion
     }
 
     nonisolated static func setGranted(_ granted: Bool, purpose: AIConsentPurpose, userID: UUID) {
         let storageKey = key(purpose, userID: userID)
         if granted {
-            UserDefaults.standard.set(AIConsentPurpose.currentVersion, forKey: storageKey)
+            UserDefaults.standard.set(purpose.consentVersion, forKey: storageKey)
         } else {
-            UserDefaults.standard.set("declined:\(AIConsentPurpose.currentVersion)", forKey: storageKey)
+            UserDefaults.standard.set("declined:\(purpose.consentVersion)", forKey: storageKey)
         }
     }
 
@@ -99,7 +107,7 @@ actor AIConsentService {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: [
             "p_purpose": purpose.rawValue,
-            "p_consent_version": AIConsentPurpose.currentVersion,
+            "p_consent_version": purpose.consentVersion,
             "p_granted": granted,
         ])
         let (data, response) = try await BackendSecurity.secureSession.data(for: request)
@@ -212,11 +220,11 @@ struct PrivacyPolicyView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     Text("TripSplit Privacy Policy")
                         .font(.app(.title2, .bold))
-                    Text("Last updated August 2, 2026")
+                    Text("Last updated August 5, 2026")
                         .font(.app(.caption))
                         .foregroundStyle(.secondary)
                     policySection("Data we use", "Account and profile details, trip membership, itineraries, expenses, settlements, receipts, photos, posts, comments, friendships, place information, and privacy choices are used to provide the features you request.")
-                    policySection("Cloud providers", "TripSplit stores account and app data with Supabase. Cloud-assisted receipt scanning sends receipt images and recognized text to Google Cloud Vision and Google Gemini only after consent. AI itinerary planning sends the destination, dates, budget, and existing plan text to Google Gemini and may use Google Search grounding only after consent.")
+                    policySection("Cloud providers", "TripSplit stores account and app data with Supabase. After receipt-processing consent, TripSplit sends the receipt image to Anthropic Claude first and to Google Gemini only if Claude cannot complete the scan. AI itinerary planning sends the destination, dates, budget, and existing plan text to Google Gemini and may use Google Search grounding only after separate consent.")
                     policySection("Retention", "TripSplit retains cloud data while your account or shared records need it. The app's AI proxy does not intentionally persist prompts, receipt images, or provider responses in logs. Provider-side retention is governed by the production cloud agreements. Device caches are protected and removed at sign-out or account deletion.")
                     policySection("Your choices", "You can decline or revoke cloud AI, use manual and on-device alternatives, edit profile information, sign out, and permanently delete your account in Settings. Deletion removes owned trips and user-generated content; shared financial history may retain a pseudonymous participant record so other members' balances remain accurate.")
                     policySection("Security and contact", "TripSplit uses HTTPS, private object storage, row-level authorization, Keychain session storage, and server-side provider credentials. Privacy questions can be sent to support@tripsplit.app.")

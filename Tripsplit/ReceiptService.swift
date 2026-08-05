@@ -10,21 +10,14 @@ import VisionKit
 
 /// Configuration for the LLM step of receipt scanning.
 ///
-/// The Gemini API key lives SERVER-SIDE only, inside the `parse-receipt` Supabase Edge
-/// Function (`supabase/functions/parse-receipt`). The app never holds the key: it sends the
-/// receipt image to the function authenticated with the signed-in user's Supabase JWT, and
-/// the function calls Gemini with the key stored as a Supabase secret. This keeps the key
-/// out of the app binary and gates usage behind authentication + per-user rate limiting.
+/// The Anthropic and Gemini API keys live SERVER-SIDE only, inside the `parse-receipt`
+/// Supabase Edge Function. The app sends the receipt image with the signed-in user's JWT;
+/// the function calls Claude first and Gemini only as a fallback. This keeps both keys out
+/// of the app binary and gates usage behind authentication, consent, and per-user limits.
 enum ReceiptAIConfig {
     /// The Edge Function endpoint that proxies the LLM call.
     nonisolated static var endpoint: String {
         "\(SupabaseConfig.url)/functions/v1/parse-receipt"
-    }
-
-    /// The Edge Function endpoint that proxies Google Cloud Vision OCR (the key lives
-    /// server-side as the Supabase secret `GOOGLE_VISION_API_KEY`).
-    nonisolated static var ocrEndpoint: String {
-        "\(SupabaseConfig.url)/functions/v1/ocr-receipt"
     }
 
     /// True when the backend is configured; scanning still requires a signed-in user's
@@ -113,34 +106,28 @@ struct ParsedReceipt: Decodable {
     }
 }
 
-// MARK: - Receipt LLM parser (Gemini via Edge Function)
+// MARK: - Receipt cloud parser (Claude, then Gemini, via Edge Function)
 
-/// Turns a receipt image into a structured `ParsedReceipt` via Gemini. Network I/O only —
-/// no observable state — so it's a plain namespace with static async calls.
+/// Turns a receipt image into a structured `ParsedReceipt` via the cloud provider chain.
+/// Network I/O only — no observable state — so it is a namespace with static async calls.
 ///
-/// Called by `ReceiptScanner.scan` in `.onlineBest` mode: the app sends the photo plus the
-/// on-device Vision OCR text so Gemini can cross-check both instead of starting from
-/// scratch. The Gemini key never leaves the `parse-receipt` Edge Function.
+/// Called by `ReceiptScanner.scan` in `.onlineBest` mode. Claude reads the image directly;
+/// the Edge Function falls back to Gemini if Claude fails. Neither key leaves the server.
 enum ReceiptParser {
     private static let maxImageBytes = 4_000_000
     private static let maxImageDimension: CGFloat = 2_200
 
     /// Sends the receipt image to the `parse-receipt` Edge Function (authenticated as the
-    /// signed-in user) and decodes the structured receipt it returns. The Gemini key and
-    /// prompt live in the function, not here. `accessToken` is the user's Supabase JWT.
-    static func parse(image: UIImage, ocrText: String? = nil, accessToken: String) async throws -> ParsedReceipt {
+    /// signed-in user) and decodes the structured receipt it returns. Provider keys and
+    /// prompts live in the function, not here. `accessToken` is the user's Supabase JWT.
+    static func parse(image: UIImage, accessToken: String) async throws -> ParsedReceipt {
         guard let jpeg = jpegData(for: image) else {
             throw ReceiptScanError.invalidResponse
         }
-        var payload = [
+        let payload = [
             "imageBase64": jpeg.base64EncodedString(),
             "mimeType": "image/jpeg",
         ]
-        // Ship the on-device OCR text alongside the photo: the Edge Function passes both
-        // to Gemini so it can cross-check faint/skewed rows instead of skipping them.
-        if let ocrText, !ocrText.isEmpty {
-            payload["text"] = String(ocrText.prefix(16_000))
-        }
         return try await parse(payload: payload, accessToken: accessToken)
     }
 
@@ -181,7 +168,7 @@ enum ReceiptParser {
     }
 
     /// Compresses the picked receipt enough for a JSON request while preserving enough
-    /// detail for the OCR/LLM services to read item rows. Shared with `CloudOCR`.
+    /// detail for Claude or Gemini to read item rows.
     static func jpegData(for image: UIImage) -> Data? {
         let candidates = [image, resizedImageIfNeeded(image)].compactMap { $0 }
         for candidate in candidates {
@@ -216,73 +203,15 @@ enum ReceiptParser {
     }
 }
 
-// MARK: - Cloud OCR (Google Cloud Vision via Edge Function)
-
-/// Calls the `ocr-receipt` Edge Function, which runs the receipt image through Google
-/// Cloud Vision OCR with the API key held server-side (hard rule: no keys in the app
-/// bundle). Returns the recognized text already grouped into receipt rows (name and
-/// price merged onto one line), ready for `ReceiptScanner.parseItems`.
-enum CloudOCR {
-    /// Runs server-side OCR on the receipt and returns its text rows, top to bottom.
-    /// `accessToken` is the signed-in user's Supabase JWT.
-    static func recognizeRows(_ image: UIImage, accessToken: String) async throws -> [String] {
-        guard ReceiptAIConfig.isConfigured, let url = URL(string: ReceiptAIConfig.ocrEndpoint) else {
-            throw ReceiptScanError.notConfigured
-        }
-        guard let jpeg = ReceiptParser.jpegData(for: image) else {
-            throw ReceiptScanError.invalidResponse
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(SupabaseConfig.anonKey, forHTTPHeaderField: "apikey")
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        request.httpBody = try JSONSerialization.data(withJSONObject: [
-            "imageBase64": jpeg.base64EncodedString(),
-            "mimeType": "image/jpeg",
-        ])
-
-        let (data, response) = try await BackendSecurity.secureSession.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw ReceiptScanError.invalidResponse
-        }
-        switch http.statusCode {
-        case 200:
-            struct OCRResponse: Decodable {
-                let text: String?
-                let lines: [String]?
-            }
-            let decoded = try JSONDecoder().decode(OCRResponse.self, from: data)
-            if let lines = decoded.lines, !lines.isEmpty { return lines }
-            // Older deployments may return only the raw text blob; split it into rows.
-            return (decoded.text ?? "")
-                .components(separatedBy: .newlines)
-                .map { $0.trimmingCharacters(in: .whitespaces) }
-                .filter { !$0.isEmpty }
-        case 401, 403:
-            throw ReceiptScanError.unauthorized
-        case 429:
-            throw ReceiptScanError.rateLimited(
-                retryAfterSeconds: AIRateLimitResponse.retryDelay(data: data, response: http)
-            )
-        default:
-            let detail = ReceiptStorage.messageField(from: String(data: data, encoding: .utf8) ?? "")
-            throw ReceiptScanError.apiError(detail ?? "HTTP \(http.statusCode)")
-        }
-    }
-}
-
-// MARK: - Receipt scanning (hybrid: cloud OCR + Gemini primary, on-device Vision fallback)
+// MARK: - Receipt scanning (Claude → Gemini → on-device Apple Vision)
 
 /// How `ReceiptScanner.scan` balances quality against privacy/latency.
 enum ReceiptScanMode {
     /// On-device Apple Vision OCR only — no network, no sign-in, fastest and fully private.
     case offlineFast
-    /// Best understanding: Google Cloud Vision OCR runs first (server-side key, via the
-    /// `ocr-receipt` Edge Function), then the image and that OCR text go to Gemini via
-    /// the `parse-receipt` Edge Function. On-device Apple Vision is the fallback whenever
-    /// the network steps fail or return nothing usable.
+    /// Best understanding: the `parse-receipt` Edge Function reads with Claude first and
+    /// Gemini second. On-device Apple Vision runs only if both cloud providers fail or
+    /// return nothing usable.
     case onlineBest
 }
 
@@ -302,16 +231,14 @@ struct ReceiptScanResult {
     var aiRateLimitRetryAfterSeconds: Int? = nil
 
     /// Whether the scan produced anything worth showing. Used by the scan orchestrator to
-    /// decide if a Gemini result should be preferred over the local Vision parse.
+    /// decide if a cloud result should be preferred over the local Vision parse.
     var isUsable: Bool { !items.isEmpty }
 }
 
-/// Reads line items off a receipt photo. In `.onlineBest` mode the OCR is Google Cloud
-/// Vision (`CloudOCR`, key server-side) and the structured understanding is Gemini
-/// (`ReceiptParser`, key server-side), with the on-device Apple Vision pipeline (deskew,
-/// enhancement, text rows, heuristic name/price parser) as the offline/failure fallback
-/// and the sole engine in `.offlineFast`. The results are an editable list the user can
-/// correct.
+/// Reads line items off a receipt photo. In `.onlineBest` mode the server-side provider
+/// chain is Claude then Gemini. The on-device Apple Vision pipeline (deskew, enhancement,
+/// text rows, heuristic parser) is the final failure fallback and sole `.offlineFast`
+/// engine. Results remain editable so users can correct recognition mistakes.
 enum ReceiptScanner {
 
     /// Words that mark a line as a total/tax/payment row rather than a purchasable item.
@@ -338,53 +265,26 @@ enum ReceiptScanner {
     ///
     /// `.onlineBest` (the default, requires a signed-in user's token) tries, in order:
     ///
-    /// 1. **Google Cloud Vision OCR** via the `ocr-receipt` Edge Function (key server-side)
-    ///    — the best raw text extraction, returned already grouped into receipt rows.
-    /// 2. **Gemini** via the `parse-receipt` Edge Function, given the image *plus* the OCR
-    ///    text (from step 1, or on-device Apple Vision if step 1 failed) so it can
-    ///    cross-check both. Its structured receipt wins when usable.
-    /// 3. The **heuristic parse of the Cloud Vision rows** when Gemini fails.
-    /// 4. **On-device Apple Vision** as the final fallback — also the sole engine in
+    /// 1. **Claude** reads and structures the image in the `parse-receipt` Edge Function.
+    /// 2. **Gemini** runs inside that same function only when Claude fails or is unusable.
+    /// 3. **On-device Apple Vision** is the final fallback — also the sole engine in
     ///    `.offlineFast` mode or when no token is available.
     ///
-    /// `accessToken` is the signed-in user's Supabase JWT; the Google Cloud Vision and
-    /// Gemini keys never leave their Edge Functions.
+    /// `accessToken` is the signed-in user's Supabase JWT; Anthropic and Gemini keys never
+    /// leave the Edge Function.
     static func scan(_ image: UIImage,
                      mode: ReceiptScanMode = .onlineBest,
                      accessToken: String? = nil) async -> ReceiptScanResult {
         // Bake any EXIF rotation into the pixels first: `cgImage` ignores
-        // `imageOrientation`, and Cloud Vision ignores EXIF too — so a library photo
-        // taken in another orientation would otherwise be OCR'd sideways everywhere.
+        // `imageOrientation`, and provider image decoders may ignore EXIF too — so a
+        // library photo taken in another orientation would otherwise be read sideways.
         let image = normalizedUpright(image)
 
         if mode == .onlineBest, let accessToken, ReceiptAIConfig.isConfigured {
-            // 1. Server-side Google Cloud Vision OCR.
             var rateLimitRetryAfterSeconds: Int?
-            let cloudRows: [String]
-            do {
-                cloudRows = try await CloudOCR.recognizeRows(image, accessToken: accessToken)
-            } catch ReceiptScanError.rateLimited(let retryAfterSeconds) {
-                rateLimitRetryAfterSeconds = retryAfterSeconds ?? 60
-                cloudRows = []
-            } catch {
-                cloudRows = []
-            }
-
-            // Only run the on-device pass here if the cloud OCR came back empty — its rows
-            // then stand in as the OCR text for Gemini, and its parse as a ready fallback.
-            var localScan: (result: ReceiptScanResult, rows: [String])?
-            var ocrRows = cloudRows
-            if ocrRows.isEmpty {
-                localScan = await visionScanWithRows(image)
-                ocrRows = localScan?.rows ?? []
-            }
-
-            // 2. Gemini structured parse, cross-checking the photo against the OCR text.
-            let ocrText = ocrRows.joined(separator: "\n")
             do {
                 let parsed = try await ReceiptParser.parse(
                     image: image,
-                    ocrText: ocrText.isEmpty ? nil : ocrText,
                     accessToken: accessToken
                 )
                 let mapped = mapToScanResult(parsed)
@@ -395,18 +295,7 @@ enum ReceiptScanner {
                     retryAfterSeconds ?? 60
                 )
             } catch {
-                // The existing fallback pipeline handles network/upstream/model failures.
-            }
-
-            // 3. Heuristic parse of the Cloud Vision rows.
-            var cloudParse = parseItems(from: cloudRows)
-            cloudParse.aiRateLimitRetryAfterSeconds = rateLimitRetryAfterSeconds
-            if cloudParse.isUsable { return cloudParse }
-
-            // 4. On-device result if it already ran; otherwise fall through to run it.
-            if var localResult = localScan?.result {
-                localResult.aiRateLimitRetryAfterSeconds = rateLimitRetryAfterSeconds
-                return localResult
+                // Apple Vision below handles network/upstream/model failures.
             }
 
             var localResult = await visionScan(image)
@@ -424,7 +313,7 @@ enum ReceiptScanner {
     }
 
     /// Like `visionScan`, but also returns the raw OCR rows of the winning pass so the
-    /// caller can ship them to Gemini alongside the image (`.onlineBest` mode).
+    /// scanner can compare preprocessing passes and retain the most useful row set.
     static func visionScanWithRows(_ image: UIImage) async -> (result: ReceiptScanResult, rows: [String]) {
         guard let cgImage = normalizedUpright(image).cgImage else { return (ReceiptScanResult(), []) }
         // Photos picked from the library arrive un-cropped and skewed (the document

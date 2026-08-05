@@ -1,10 +1,10 @@
 // parse-receipt — server-side proxy for the receipt-parsing LLM call.
 //
-// Why this exists: the app must NOT ship the Gemini API key. The client sends the receipt
+// Why this exists: the app must NOT ship provider API keys. The client sends the receipt
 // image plus the signed-in user's Supabase JWT; this function authenticates the user,
-// reserves a feature-local quota slot, calls Gemini with the key held in a Supabase
-// secret, commits usage once provider work is attempted, validates the
-// model output, and returns structured JSON.
+// reserves a feature-local quota slot, calls Claude first and Gemini only as a fallback,
+// commits usage once provider work is attempted, validates the model output, and returns
+// structured JSON.
 //
 // Security posture:
 //  - Auth: platform `verify_jwt = true` AND an explicit `/auth/v1/user` check, so only a
@@ -12,7 +12,7 @@
 //  - Rate limit: 15 paid provider attempts per user per 60 seconds. Capacity is reserved
 //    atomically by a service-role-only RPC and is not refunded for invalid/error output.
 //  - Input: JSON body must contain either an image payload or legacy OCR `text`, under caps.
-//  - Secret: the Gemini key is read from env and never logged or returned.
+//  - Secrets: Anthropic/Gemini keys are read from env and never logged or returned.
 //  - Output: the model's JSON is re-validated/normalized before it reaches the client.
 //  - No dependencies: plain fetch only, to minimize supply-chain surface.
 //  - Privacy: receipt images/text are never logged.
@@ -20,6 +20,10 @@
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+// `ANTHROPIC_API_KEY` is canonical. `Claude Key` supports the initial Dashboard label so
+// the configured secret can be used without copying its value into source or chat.
+const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? Deno.env.get("Claude Key");
+const CLAUDE_MODEL = Deno.env.get("CLAUDE_MODEL") ?? "claude-sonnet-5";
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
 const GEMINI_MODEL = Deno.env.get("GEMINI_MODEL") ?? "gemini-2.5-flash";
 
@@ -30,7 +34,8 @@ const RATE_LIMIT = 15;              // Max paid provider attempts ...
 const RATE_WINDOW_SECONDS = 60;     // ... per user per this window.
 const RATE_KIND = "parse";
 const CONSENT_PURPOSE = "receipt_processing";
-const CONSENT_VERSION = "2026-08-02";
+const CONSENT_VERSION = "2026-08-05";
+const LEGACY_GOOGLE_CONSENT_VERSION = "2026-08-02";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
@@ -48,7 +53,14 @@ Deno.serve(async (req) => {
   if (!token) return jsonResponse({ error: "Unauthorized" }, 401);
   const user = await getUser(token);
   if (!user) return jsonResponse({ error: "Unauthorized" }, 401);
-  if (!(await hasAIConsent(token, CONSENT_PURPOSE))) {
+  // A legacy Google-only grant can continue using Gemini during app rollout, but can
+  // never authorize sending the image to Anthropic. New clients collect the current
+  // version before Claude becomes eligible.
+  const hasCurrentConsent = await hasAIConsent(token, CONSENT_PURPOSE, CONSENT_VERSION);
+  const hasLegacyGoogleConsent = hasCurrentConsent
+    ? false
+    : await hasAIConsent(token, CONSENT_PURPOSE, LEGACY_GOOGLE_CONSENT_VERSION);
+  if (!hasCurrentConsent && !hasLegacyGoogleConsent) {
     return jsonResponse({ error: "Current AI consent is required." }, 403);
   }
 
@@ -68,14 +80,15 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: "Receipt text too large" }, 413);
   }
 
-  // 3. The key must be configured before reserving quota: our own outage is never charged.
-  if (!GEMINI_API_KEY) {
+  // 3. At least one cloud provider must be configured before reserving quota: our own
+  // configuration outage is never charged. Claude is primary whenever its key exists.
+  if ((!hasCurrentConsent || !ANTHROPIC_API_KEY) && !GEMINI_API_KEY) {
     return jsonResponse({ error: "Receipt parsing is not configured." }, 503);
   }
 
   // 4. Reserve this feature's capacity atomically. The reservation prevents concurrent
-  // requests from exceeding the bucket. Once Gemini is called, the attempt is charged
-  // even when Gemini returns an error or unusable output.
+  // requests from exceeding the bucket. Once a provider is called, the attempt is charged
+  // even when the provider returns an error or unusable output.
   let usage: UsageReservation;
   try {
     usage = await reserveUsage(user.id);
@@ -88,42 +101,64 @@ Deno.serve(async (req) => {
     return rateLimitResponse(usage);
   }
 
-  // 5. Call Gemini with the server-side key. When the client sends both the photo and
-  // on-device OCR text, both go to the model — the OCR text helps it recover faint or
-  // skewed line items it might otherwise miss in the image.
+  // 5. Ask Claude to read and structure the receipt directly from the image. If Claude is
+  // unavailable, rejects the request, or returns an unusable/collapsed receipt, try Gemini.
+  // Apple Vision remains entirely client-side and runs only if this function fails.
   const prompt = buildPrompt(text || null, Boolean(image));
-  const parts = image?.data
-    ? [
-      { text: prompt },
-      { inline_data: { mime_type: image.mimeType, data: image.data } },
-    ]
-    : [{ text: prompt }];
-  let receipt = await callGemini(parts);
-  if (!receipt) {
+  let provider: "claude" | "gemini" | undefined;
+  let receipt = hasCurrentConsent && ANTHROPIC_API_KEY ? await callClaude(prompt, image) : null;
+  if (isUsableReceipt(receipt)) {
+    provider = "claude";
+  } else if (hasCurrentConsent && ANTHROPIC_API_KEY && GEMINI_API_KEY) {
+    console.log(JSON.stringify({ function: "parse-receipt", outcome: "provider_fallback", from: "claude", to: "gemini" }));
+  }
+
+  if (!provider && GEMINI_API_KEY) {
+    const parts = image?.data
+      ? [
+        { text: prompt },
+        { inline_data: { mime_type: image.mimeType, data: image.data } },
+      ]
+      : [{ text: prompt }];
+    receipt = await callGemini(parts);
+
+    // Gemini's known failure mode is a single pseudo-item equal to the total. Re-ask once
+    // with corrective feedback and keep the retry only when it finds more real items.
+    if (receipt && isCollapsed(receipt)) {
+      const retry = await callGemini([
+        ...parts,
+        {
+          text:
+            "IMPORTANT CORRECTION: your previous answer collapsed this receipt into a single item whose price equals the grand total. That is wrong. Look again at the item section of the receipt and list each individual line item with its own printed name and per-unit price. Do not include subtotal, tax, tip, or total rows as items.",
+        },
+      ]);
+      if (retry && (retry.items as unknown[]).length > (receipt.items as unknown[]).length) {
+        receipt = retry;
+      }
+    }
+    // A real receipt may contain exactly one purchase. After the corrective retry, retain
+    // Gemini's normalized item instead of forcing a needless on-device scan solely because
+    // one line plus tax happens to equal the printed total.
+    if (hasReceiptItems(receipt)) provider = "gemini";
+  }
+
+  if (!receipt || !provider) {
     await completeUsage(usage.reservationId, true);
     logUsage("post_call_failure", 502);
     return jsonResponse({ error: "Parsing service error" }, 502);
   }
-
-  // The known failure mode: the model "summarizes" the receipt as a single item whose
-  // price is the grand total. Re-ask once with explicit corrective feedback — the second
-  // pass almost always itemizes properly. Only kept if it actually finds more items.
-  if (isCollapsed(receipt)) {
-    const retry = await callGemini([
-      ...parts,
-      {
-        text:
-          "IMPORTANT CORRECTION: your previous answer collapsed this receipt into a single item whose price equals the grand total. That is wrong. Look again at the item section of the receipt and list each individual line item with its own printed name and per-unit price. Do not include subtotal, tax, tip, or total rows as items.",
-      },
-    ]);
-    if (retry && (retry.items as unknown[]).length > (receipt.items as unknown[]).length) {
-      receipt = retry;
-    }
-  }
   await completeUsage(usage.reservationId, true);
-  logUsage("success", 200, usage);
+  logUsage("success", 200, usage, provider);
   return jsonResponse(receipt, 200);
 });
+
+function isUsableReceipt(receipt: Record<string, unknown> | null): receipt is Record<string, unknown> {
+  return hasReceiptItems(receipt) && !isCollapsed(receipt);
+}
+
+function hasReceiptItems(receipt: Record<string, unknown> | null): receipt is Record<string, unknown> {
+  return Boolean(receipt && Array.isArray(receipt.items) && receipt.items.length > 0);
+}
 
 // One item whose price (alone, or plus tax/tip) matches the total = a collapsed summary.
 function isCollapsed(receipt: Record<string, unknown>): boolean {
@@ -135,7 +170,7 @@ function isCollapsed(receipt: Record<string, unknown>): boolean {
   return Math.abs(line - total) < 0.02 || Math.abs(withTaxTip - total) < 0.02;
 }
 
-async function hasAIConsent(token: string, purpose: string): Promise<boolean> {
+async function hasAIConsent(token: string, purpose: string, version: string): Promise<boolean> {
   const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/has_ai_consent`, {
     method: "POST",
     headers: {
@@ -143,7 +178,7 @@ async function hasAIConsent(token: string, purpose: string): Promise<boolean> {
       Authorization: `Bearer ${token}`,
       apikey: SUPABASE_ANON_KEY,
     },
-    body: JSON.stringify({ p_purpose: purpose, p_consent_version: CONSENT_VERSION }),
+    body: JSON.stringify({ p_purpose: purpose, p_consent_version: version }),
   });
   if (!response.ok) {
     console.error(JSON.stringify({ function: "parse-receipt", outcome: "consent_check_failure", status: response.status }));
@@ -152,8 +187,96 @@ async function hasAIConsent(token: string, purpose: string): Promise<boolean> {
   return (await response.json().catch(() => false)) === true;
 }
 
+const RECEIPT_JSON_SCHEMA = {
+  type: "object",
+  properties: {
+    merchant: { type: "string" },
+    date: { type: ["string", "null"] },
+    items: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          price: { type: "number" },
+          quantity: { type: "integer" },
+        },
+        required: ["name", "price", "quantity"],
+        additionalProperties: false,
+      },
+    },
+    tax: { type: "number" },
+    tip: { type: "number" },
+    total: { type: "number" },
+  },
+  required: ["merchant", "date", "items", "tax", "tip", "total"],
+  additionalProperties: false,
+};
+
+// Calls Anthropic's Messages API once. Claude receives the image in-memory as base64;
+// TripSplit never gives Anthropic a storage URL or provider credential.
+async function callClaude(
+  prompt: string,
+  image: ImagePayload | null,
+): Promise<Record<string, unknown> | null> {
+  if (!ANTHROPIC_API_KEY) return null;
+
+  const content: unknown[] = [];
+  if (image?.data) {
+    content.push({
+      type: "image",
+      source: { type: "base64", media_type: image.mimeType, data: image.data },
+    });
+  }
+  content.push({ type: "text", text: prompt });
+
+  let response: Response;
+  try {
+    response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        ...JSON_HEADERS,
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: CLAUDE_MODEL,
+        max_tokens: 4_096,
+        thinking: { type: "disabled" },
+        messages: [{ role: "user", content }],
+        output_config: {
+          format: { type: "json_schema", schema: RECEIPT_JSON_SCHEMA },
+        },
+      }),
+    });
+  } catch {
+    return null;
+  }
+  if (!response.ok) {
+    // Status only: receipt data and upstream response bodies must never reach logs.
+    console.error("Claude call failed:", response.status);
+    return null;
+  }
+
+  const body = await response.json().catch(() => null);
+  const textBlock = Array.isArray(body?.content)
+    ? body.content.find((block: unknown) =>
+      Boolean(block && typeof block === "object" && (block as Record<string, unknown>).type === "text")
+    ) as Record<string, unknown> | undefined
+    : undefined;
+  const rawText = textBlock?.text;
+  if (typeof rawText !== "string") return null;
+
+  try {
+    return normalizeReceipt(JSON.parse(stripFences(rawText)));
+  } catch {
+    return null;
+  }
+}
+
 // Calls Gemini once and returns the normalized receipt, or null on any failure.
 async function callGemini(parts: unknown[]): Promise<Record<string, unknown> | null> {
+  if (!GEMINI_API_KEY) return null;
   let geminiResponse: Response;
   try {
     geminiResponse = await fetch(
@@ -288,7 +411,12 @@ function rateLimitResponse(usage: UsageReservation): Response {
   }, 429, { "Retry-After": String(retry) });
 }
 
-function logUsage(outcome: string, status: number, usage?: Partial<UsageReservation>): void {
+function logUsage(
+  outcome: string,
+  status: number,
+  usage?: Partial<UsageReservation>,
+  provider?: "claude" | "gemini",
+): void {
   console.log(JSON.stringify({
     function: "parse-receipt",
     kind: RATE_KIND,
@@ -297,6 +425,7 @@ function logUsage(outcome: string, status: number, usage?: Partial<UsageReservat
     limit: usage?.limit ?? RATE_LIMIT,
     remaining: usage?.remaining,
     windowSeconds: usage?.windowSeconds ?? RATE_WINDOW_SECONDS,
+    provider,
   }));
 }
 
@@ -339,8 +468,8 @@ ${source}`;
 }
 
 type ImagePayload =
-  | { data: string; mimeType: string; status: 200 }
-  | { error: string; status: 400 | 413 | 415 };
+  | { data: string; mimeType: string; status: 200; error?: never }
+  | { error: string; status: 400 | 413 | 415; data?: never; mimeType?: never };
 
 function parseImagePayload(payload: { imageBase64?: unknown; mimeType?: unknown }): ImagePayload | null {
   if (typeof payload.imageBase64 !== "string") return null;

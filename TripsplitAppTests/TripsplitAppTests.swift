@@ -292,6 +292,14 @@ final class TripsplitAppTests: XCTestCase {
         XCTAssertTrue(itineraryMessage.contains("Continue Without AI"))
     }
 
+    func testReceiptProviderChangeUsesPurposeSpecificConsentVersion() {
+        XCTAssertEqual(AIConsentPurpose.receiptProcessing.consentVersion, "2026-08-05")
+        XCTAssertEqual(AIConsentPurpose.itineraryGeneration.consentVersion, "2026-08-02")
+        XCTAssertTrue(AIConsentPurpose.receiptProcessing.providerSummary.contains("Anthropic Claude"))
+        XCTAssertTrue(AIConsentPurpose.receiptProcessing.providerSummary.contains("backup"))
+        XCTAssertFalse(AIConsentPurpose.receiptProcessing.disclosure.contains("Google Cloud Vision"))
+    }
+
     func testStoragePolicyFailureDoesNotExposeSchemaDetails() {
         let response = #"{"statusCode":"403","message":"permission denied for table storage_attachments"}"#
         let message = ReceiptStorage.userFacingUploadError(body: response, statusCode: 403)
