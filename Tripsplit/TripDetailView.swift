@@ -37,9 +37,20 @@ struct TripDetailView: View {
     @State private var expenseParticipantID: Person.ID?
     @State private var expenseReceiptOnly = false
     @State private var expenseDateWindow: ExpenseDateWindow = .all
+    /// Ruled hero numeral. Fixed point sizes don't scale with Dynamic Type, so it is
+    /// tied to `.largeTitle` rather than hard-coded at 56.
+    @ScaledMetric(relativeTo: .largeTitle) private var ruledHeroSize: CGFloat = 56
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
     private enum TripDetailTab: String, CaseIterable {
         case overview, feed
+
+        var title: LocalizedStringKey {
+            switch self {
+            case .overview: "Overview"
+            case .feed: "Feed"
+            }
+        }
     }
 
     private enum ProtectedIntent { case addExpense, editTrip }
@@ -72,7 +83,9 @@ struct TripDetailView: View {
                         ScrollView {
                             VStack(spacing: 0) {
                                 heroHeader(trip)
-                                VStack(spacing: 18) {
+                                // Ruled themes take their rhythm from each section's
+                                // own rule, so the stack stops adding gaps between them.
+                                VStack(spacing: Theme.isRuled ? 0 : 18) {
                                     detailTabPicker
                                     switch detailTab {
                                     case .overview:
@@ -97,22 +110,26 @@ struct TripDetailView: View {
                                         TripFeedView(tripID: tripID)
                                     }
                                 }
-                                .padding()
-                                .padding(.top, 18)
-                                .padding(.bottom, 24)
-                                .background(
-                                    LinearGradient(
-                                        colors: Theme.sheetGradient,
-                                        startPoint: .top, endPoint: .bottom
-                                    ),
-                                    in: .rect(topLeadingRadius: 28, topTrailingRadius: 28)
-                                )
+                                .padding(.horizontal, Theme.contentInset)
+                                .padding(.top, Theme.isRuled ? 4 : 34)
+                                .padding(.bottom, 40)
+                                .background {
+                                    // The ruled hero is typographic, not a photo, so
+                                    // there is no cover edge for a card to tuck under.
+                                    if !Theme.isRuled {
+                                        LinearGradient(
+                                            colors: Theme.sheetGradient,
+                                            startPoint: .top, endPoint: .bottom
+                                        )
+                                        .clipShape(.rect(topLeadingRadius: 28, topTrailingRadius: 28))
+                                    }
+                                }
                                 // Pull the content sheet up over the photo's bottom so the
                                 // cover fades under a rounded card edge instead of a hard cut.
-                                .padding(.top, -28)
+                                .padding(.top, Theme.isRuled ? 0 : -28)
                             }
                         }
-                        .ignoresSafeArea(edges: .top)
+                        .ignoresSafeArea(edges: Theme.isRuled ? [] : .top)
                         .onChange(of: scrollToSettle) { _, shouldScroll in
                             guard shouldScroll else { return }
                             detailTab = .overview
@@ -218,7 +235,105 @@ struct TripDetailView: View {
 
     // MARK: Hero header
 
+    @ViewBuilder
     private func heroHeader(_ trip: Trip) -> some View {
+        if Theme.isRuled {
+            ruledHeader(trip)
+        } else {
+            photoHeroHeader(trip)
+        }
+    }
+
+    /// The ruled hero: the cover as a plain full-bleed plate, then the eyebrow, the
+    /// Display title and the screen's one near-black rule. No scrim, no glass chrome —
+    /// the actions are tracked-caps labels under the rule.
+    private func ruledHeader(_ trip: Trip) -> some View {
+        let eyebrow = [trip.location, trip.dateRangeText]
+            .compactMap { ($0?.isEmpty == false) ? $0 : nil }
+            .joined(separator: " · ")
+        return VStack(alignment: .leading, spacing: 12) {
+            TripCoverView(trip: trip)
+                .frame(height: 220)
+                .frame(maxWidth: .infinity)
+                .clipped()
+
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Group {
+                    if eyebrow.isEmpty {
+                        Text("NOW EXPLORING")
+                    } else {
+                        Text(verbatim: eyebrow)
+                    }
+                }
+                .inscription()
+                .foregroundStyle(Theme.textSecondary)
+                Spacer(minLength: 0)
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark")
+                        .font(.app(.subheadline, .semibold))
+                        .foregroundStyle(Theme.textSecondary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close")
+            }
+            .padding(.horizontal, Theme.ruledInset)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(trip.name)
+                    .font(.app(size: 36, weight: .medium))
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.7)
+                Text("\(trip.members.count) traveler\(trip.members.count == 1 ? "" : "s")")
+                    .inscription()
+                    .foregroundStyle(Theme.textSecondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, Theme.ruledInset)
+
+            // The one near-black rule on the screen; it closes the title block.
+            Rectangle()
+                .fill(Color.primary)
+                .frame(height: Theme.ruleWidth(colorSchemeContrast))
+
+            ruledHeroActions(trip)
+                .padding(.horizontal, Theme.ruledInset)
+        }
+        .padding(.top, 8)
+    }
+
+    private func ruledHeroActions(_ trip: Trip) -> some View {
+        HStack(spacing: 12) {
+            ruledHeroButton("Add Expense") { requireAuthentication(for: .addExpense) }
+            if store.isCreator(of: trip) {
+                ruledHeroButton("Edit Trip") { requireAuthentication(for: .editTrip) }
+            }
+            ruledHeroButton("Record Payment") { scrollToSettle = true }
+            ShareLink(item: TripExport.text(trip)) {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.app(.caption, .semibold))
+                    .frame(width: 44, height: 46)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Share trip summary")
+        }
+    }
+
+    private func ruledHeroButton(_ title: LocalizedStringKey, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .inscription()
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .frame(minHeight: 46)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func photoHeroHeader(_ trip: Trip) -> some View {
         ZStack(alignment: .bottomLeading) {
             TripCoverView(trip: trip)
                 .frame(height: 440)
@@ -330,10 +445,17 @@ struct TripDetailView: View {
 
     // MARK: Detail tabs
 
+    @ViewBuilder
     private var detailTabPicker: some View {
-        HStack(spacing: 8) {
-            detailTabButton(.overview, title: "Overview", icon: "list.bullet.rectangle")
-            detailTabButton(.feed, title: "Feed", icon: "photo.on.rectangle.angled")
+        if Theme.isRuled {
+            // Not a segmented control on ruled themes: labels on a ruled row, the
+            // active one underlined. Same tabs, same binding.
+            RuledSegmentedRow(items: TripDetailTab.allCases, selection: $detailTab) { $0.title }
+        } else {
+            HStack(spacing: 8) {
+                detailTabButton(.overview, title: "Overview", icon: "list.bullet.rectangle")
+                detailTabButton(.feed, title: "Feed", icon: "photo.on.rectangle.angled")
+            }
         }
     }
 
@@ -406,7 +528,11 @@ struct TripDetailView: View {
         let barColor = overBudget ? Theme.negative : (nearBudget ? Theme.warning : Theme.positive)
         return VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Label("Budget Overview", systemImage: "wallet.bifold.fill").font(.app(.headline))
+                if Theme.isRuled {
+                    Text("Budget Overview").inscription().foregroundStyle(Theme.textSecondary)
+                } else {
+                    Label("Budget Overview", systemImage: "wallet.bifold.fill").font(.app(.headline))
+                }
                 Spacer()
                 if store.isCreator(of: trip) {
                     Button {
@@ -423,10 +549,23 @@ struct TripDetailView: View {
                 }
             }
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Total Budget").font(.app(.caption)).foregroundStyle(.secondary)
-                Text(money(budget, trip.currencyCode))
-                    .font(.app(size: 30, weight: .bold))
+            VStack(alignment: .leading, spacing: Theme.isRuled ? 6 : 2) {
+                if Theme.isRuled {
+                    // Hero numeral first on ruled themes: one thin, large figure, then
+                    // the accent bar, then the label — the mockup's reading order.
+                    Text(money(budget, trip.currencyCode))
+                        .font(.app(size: ruledHeroSize, weight: .medium))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                    Rectangle()
+                        .fill(Theme.accent)
+                        .frame(width: 44, height: 2)
+                    Text("Total Budget").inscription().foregroundStyle(Theme.textSecondary)
+                } else {
+                    Text("Total Budget").font(.app(.caption)).foregroundStyle(.secondary)
+                    Text(money(budget, trip.currencyCode))
+                        .font(.app(size: 30, weight: .bold))
+                }
             }
 
             if budget > 0 {
@@ -466,7 +605,7 @@ struct TripDetailView: View {
                 )
             }
 
-            Divider()
+            SectionDivider()
 
             let owed = trip.remainingOwed(for: me)
             HStack {
@@ -475,9 +614,9 @@ struct TripDetailView: View {
                 statColumn("You're owed", money(owed.to, trip.currencyCode), Theme.positive)
             }
         }
-        .padding(18)
+        .panelPadding(horizontal: 18, vertical: 18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .readableSurface(cornerRadius: Theme.cardRadius)
+        .homePanel(cornerRadius: Theme.cardRadius)
     }
 
     private func requireAuthentication(for intent: ProtectedIntent) {
@@ -494,17 +633,25 @@ struct TripDetailView: View {
 
     private func budgetTile(_ label: LocalizedStringKey, _ value: String, _ color: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) {
+            // The inner `textCase` wins over the one `inscription()` sets, so card
+            // themes keep the caps they already had and ruled themes gain the tracking.
             Text(label)
-                .font(.app(.caption2, .semibold)).tracking(0.5)
                 .textCase(.uppercase)
+                .inscription()
                 .foregroundStyle(.secondary)
             Text(value)
                 .font(.app(.subheadline, .bold)).foregroundStyle(color)
                 .lineLimit(1).minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 10).padding(.horizontal, 12)
-        .background(color.opacity(0.10), in: .rect(cornerRadius: 12))
+        .padding(.vertical, 10)
+        // Ruled tiles carry no fill, so they take no padding of their own either.
+        .padding(.horizontal, Theme.isRuled ? 0 : 12)
+        .background {
+            if !Theme.isRuled {
+                RoundedRectangle(cornerRadius: 12).fill(color.opacity(0.10))
+            }
+        }
     }
 
     private func historyBinding(for settlement: Settlement) -> Binding<[SettlementRecord]> {
@@ -1166,8 +1313,9 @@ struct TripDetailView: View {
                     .font(.app(.subheadline, .semibold)).foregroundStyle(.secondary)
                 // Eager (not Lazy) on purpose: a LazyVStack here re-measured rows as
                 // they scrolled back into view, hitching the scroll-up out of this card.
-                VStack(spacing: 8) {
+                VStack(spacing: Theme.isRuled ? 0 : 8) {
                     ForEach(filtered) { expense in
+                        if Theme.isRuled { RuledDivider() }
                         let link = NavigationLink {
                             ExpenseDetailView(tripID: tripID, expense: expense)
                         } label: {
@@ -1193,9 +1341,9 @@ struct TripDetailView: View {
             }
 
             if !settled.isEmpty {
-                Divider()
+                SectionDivider()
                 Text("Settled payments")
-                    .font(.app(.subheadline, .semibold))
+                    .inscription(orFont: .app(.subheadline, .semibold))
                     .foregroundStyle(.secondary)
                 ForEach(settled) { settlement in
                     Button {
@@ -1327,11 +1475,20 @@ struct TripDetailView: View {
         let yourShare = trip.share(for: me, in: expense)
         return HStack(alignment: .top, spacing: 12) {
             if let payer {
-                AvatarView(
-                    person: payer,
-                    imageData: payer.id == me ? store.profileImageData : nil,
-                    size: 34
-                )
+                if Theme.isRuled {
+                    // A monogram, not a disc: the ruled style has no filled shapes
+                    // besides the primary action.
+                    Text(payer.initials)
+                        .font(.app(size: 13, weight: .semibold))
+                        .foregroundStyle(payer.id == me ? Theme.accent : Theme.accentSecondary)
+                        .frame(width: 24, height: 24)
+                } else {
+                    AvatarView(
+                        person: payer,
+                        imageData: payer.id == me ? store.profileImageData : nil,
+                        size: 34
+                    )
+                }
             }
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
@@ -1373,15 +1530,22 @@ struct TripDetailView: View {
                 }
             }
         }
-        .padding(12)
+        .padding(.vertical, 12)
+        .padding(.horizontal, Theme.isRuled ? 0 : 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(.rect)
-        .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+        .background {
+            if !Theme.isRuled {
+                RoundedRectangle(cornerRadius: 12).fill(Theme.fieldBackground)
+            }
+        }
     }
 
     private func statColumn(_ title: LocalizedStringKey, _ value: String, _ color: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.app(.caption)).foregroundStyle(.secondary)
+            Text(title)
+                .inscription(orFont: .app(.caption))
+                .foregroundStyle(.secondary)
             Text(value).font(.app(.subheadline, .bold)).foregroundStyle(color)
         }
     }

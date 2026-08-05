@@ -66,6 +66,8 @@ struct AddExpenseView: View {
     @State private var selectedPayerID: Person.ID?
     /// Removed items kept so a deletion can be undone (most-recent first).
     @State private var removedItems: [(item: ReceiptItem, index: Int)] = []
+    /// The ruled amount numeral. Tied to `.largeTitle` so it still answers Dynamic Type.
+    @ScaledMetric(relativeTo: .largeTitle) private var ruledAmountSize: CGFloat = 60
 
     private var isEditing: Bool { editing != nil }
     private var trip: Trip? { store.trip(tripID) }
@@ -112,7 +114,9 @@ struct AddExpenseView: View {
 
                 if let trip {
                     ScrollView {
-                        VStack(spacing: 18) {
+                        // Ruled themes bound each section with a rule of its own, so
+                        // the stack stops adding gaps between them.
+                        VStack(spacing: Theme.isRuled ? 0 : 18) {
                             if !isEditing {
                                 OneTimeTipBanner(
                                     key: "tipScanReceiptDismissed",
@@ -131,9 +135,21 @@ struct AddExpenseView: View {
                                 itemSplitsCard(trip)
                             }
                         }
-                        .padding()
+                        .padding(.horizontal, Theme.contentInset)
+                        .padding(.vertical, 16)
                         .padding(.bottom, 24)
                     }
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                // On ruled themes the primary action is a pinned band, not a toolbar
+                // button — the one place accent fills a shape on the screen.
+                if Theme.isRuled, let trip {
+                    RuledPrimaryButton(title: isEditing ? "Save" : "Add Expense") {
+                        Task { await save() }
+                    }
+                    .disabled(!canSave(trip) || isSaving)
+                    .opacity(canSave(trip) && !isSaving ? 1 : 0.5)
                 }
             }
             .navigationTitle(isEditing ? "Edit Expense" : "Add Expense")
@@ -145,7 +161,7 @@ struct AddExpenseView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     if isSaving {
                         ProgressView()
-                    } else {
+                    } else if !Theme.isRuled {
                         Button("Save") { Task { await save() } }
                             .disabled(!(trip.map(canSave) ?? false))
                     }
@@ -519,7 +535,82 @@ struct AddExpenseView: View {
 
     // MARK: Amount + payer
 
+    /// One row of the ruled field list: a tracked-caps label on the left, the current
+    /// value (or its editable field) on the right, closed by a full-bleed rule. It
+    /// replaces the card each of these fields had on the card themes.
+    private func ruledFieldRow<Trailing: View>(
+        _ label: LocalizedStringKey,
+        @ViewBuilder trailing: () -> Trailing
+    ) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Text(label).inscription().foregroundStyle(Theme.textSecondary)
+                Spacer(minLength: 12)
+                trailing()
+            }
+            .frame(minHeight: 46)
+            RuledDivider()
+        }
+    }
+
+    @ViewBuilder
     private func amountCard(_ trip: Trip) -> some View {
+        if Theme.isRuled {
+            ruledAmountCard(trip)
+        } else {
+            cardAmountCard(trip)
+        }
+    }
+
+    /// The ruled amount block: the label carries the currency so the numeral row is
+    /// nothing but the numeral, with title and date as ruled rows beneath it.
+    private func ruledAmountCard(_ trip: Trip) -> some View {
+        VStack(spacing: 0) {
+            VStack(spacing: 10) {
+                HStack(spacing: 6) {
+                    Text("Amount")
+                    Text(verbatim: "·")
+                    Text(verbatim: trip.currencyCode)
+                }
+                .inscription()
+                .foregroundStyle(Theme.textSecondary)
+
+                TextField("0.00", text: $amountText)
+                    .font(.app(size: ruledAmountSize, weight: .medium))
+                    .keyboardType(.decimalPad)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+                    .focused($focusedField, equals: .amount)
+                    .disabled(!items.isEmpty)
+                    .accessibilityLabel("Amount in \(trip.currencyCode)")
+
+                if !items.isEmpty {
+                    Text("Total is calculated from the items, tax, and tip below.")
+                        .font(.app(.caption))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+            }
+            .padding(.vertical, 18)
+
+            ruledFieldRow("Title") {
+                TextField("Dinner", text: $title)
+                    .font(.app(.subheadline, .medium))
+                    .multilineTextAlignment(.trailing)
+                    .textContentType(.none)
+                    .submitLabel(.next)
+                    .focused($focusedField, equals: .title)
+                    .onSubmit { focusedField = .amount }
+            }
+
+            ruledFieldRow("Date") {
+                DatePicker("", selection: $date, displayedComponents: .date)
+                    .labelsHidden()
+            }
+        }
+    }
+
+    private func cardAmountCard(_ trip: Trip) -> some View {
         TripCard(title: "Expense", icon: "dollarsign.circle.fill") {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Title")
@@ -563,24 +654,64 @@ struct AddExpenseView: View {
         }
     }
 
+    @ViewBuilder
     private func payerCard(_ trip: Trip) -> some View {
+        if Theme.isRuled {
+            ruledPayerRow(trip)
+        } else {
+            cardPayerCard(trip)
+        }
+    }
+
+    /// The payer picker as one ruled row: label left, current payer and a chevron
+    /// right. The menu it presents is the same one the card themes open.
+    private func ruledPayerRow(_ trip: Trip) -> some View {
+        let payer = trip.members.first { $0.id == resolvedPayer } ?? store.currentUser
+        let isMe = payer.id == store.currentUser.id
+        return ruledFieldRow("Paid by") {
+            if canChoosePayer {
+                Menu {
+                    payerMenuItems(trip)
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(LocalizedStringKey(isMe ? "You" : payer.name))
+                            .font(.app(.subheadline, .medium))
+                        Image(systemName: "chevron.right")
+                            .font(.app(.caption2, .bold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .foregroundStyle(.primary)
+                }
+            } else {
+                Text(LocalizedStringKey(isMe ? "You" : payer.name))
+                    .font(.app(.subheadline, .medium))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func payerMenuItems(_ trip: Trip) -> some View {
+        ForEach(trip.members) { member in
+            Button {
+                selectedPayerID = member.id
+            } label: {
+                let label = LocalizedStringKey(member.id == store.currentUser.id ? "You" : member.name)
+                if member.id == resolvedPayer {
+                    Label(label, systemImage: "checkmark")
+                } else {
+                    Text(label)
+                }
+            }
+        }
+    }
+
+    private func cardPayerCard(_ trip: Trip) -> some View {
         let payer = trip.members.first { $0.id == resolvedPayer } ?? store.currentUser
         let isMe = payer.id == store.currentUser.id
         return TripCard(title: "Paid by", icon: "creditcard.fill") {
             if canChoosePayer {
                 Menu {
-                    ForEach(trip.members) { member in
-                        Button {
-                            selectedPayerID = member.id
-                        } label: {
-                            let label = LocalizedStringKey(member.id == store.currentUser.id ? "You" : member.name)
-                            if member.id == resolvedPayer {
-                                Label(label, systemImage: "checkmark")
-                            } else {
-                                Text(label)
-                            }
-                        }
-                    }
+                    payerMenuItems(trip)
                 } label: {
                     HStack(spacing: 10) {
                         avatar(payer, size: 30)
@@ -604,6 +735,74 @@ struct AddExpenseView: View {
     }
 
     private var locationCard: some View {
+        Group {
+            if Theme.isRuled {
+                ruledLocationRow
+            } else {
+                cardLocationCard
+            }
+        }
+        .onChange(of: locationQuery) { _, newValue in
+            if isSelectingLocation {
+                isSelectingLocation = false
+                return
+            }
+            expenseLocation = nil
+            locationCompleter.update(query: newValue)
+        }
+    }
+
+    /// The location field as one ruled row, with the completer's suggestions listed
+    /// bare beneath it instead of inside a filled card.
+    private var ruledLocationRow: some View {
+        VStack(spacing: 0) {
+            ruledFieldRow("Location (optional)") {
+                HStack(spacing: 8) {
+                    TextField("Merchant or place", text: $locationQuery)
+                        .font(.app(.subheadline, .medium))
+                        .multilineTextAlignment(.trailing)
+                        .focused($locationFocused)
+                        .autocorrectionDisabled()
+                    if !locationQuery.isEmpty {
+                        Button {
+                            locationQuery = ""
+                            expenseLocation = nil
+                            locationCompleter.clear()
+                        } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            if locationFocused && !locationCompleter.suggestions.isEmpty {
+                ForEach(Array(locationCompleter.suggestions.prefix(5).enumerated()), id: \.offset) { _, suggestion in
+                    Button { selectExpenseLocation(suggestion) } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(suggestion.title).font(.app(.subheadline, .semibold))
+                            if !suggestion.subtitle.isEmpty {
+                                Text(suggestion.subtitle)
+                                    .font(.app(.caption)).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 10)
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    RuledDivider()
+                }
+            } else if let expenseLocation, let address = expenseLocation.address {
+                Label(address, systemImage: "checkmark.circle.fill")
+                    .font(.app(.caption)).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 8)
+            }
+        }
+    }
+
+    private var cardLocationCard: some View {
         TripCard(title: "Location (optional)", icon: "mappin.and.ellipse") {
             HStack(spacing: 10) {
                 TextField("Merchant or place", text: $locationQuery)
@@ -648,14 +847,6 @@ struct AddExpenseView: View {
                     .font(.app(.caption)).foregroundStyle(.secondary)
             }
         }
-        .onChange(of: locationQuery) { _, newValue in
-            if isSelectingLocation {
-                isSelectingLocation = false
-                return
-            }
-            expenseLocation = nil
-            locationCompleter.update(query: newValue)
-        }
     }
 
     private func selectExpenseLocation(_ suggestion: MKLocalSearchCompletion) {
@@ -695,15 +886,24 @@ struct AddExpenseView: View {
                     }
                 } label: {
                     HStack {
-                        Image(systemName: method.icon)
+                        // The ruled style carries no icon chrome: the method reads as a
+                        // value on a field row, not as a filled control.
+                        if !Theme.isRuled { Image(systemName: method.icon) }
                         Text(LocalizedStringKey(method.rawValue)).font(.app(.subheadline, .semibold))
                         Spacer()
                         Image(systemName: "chevron.up.chevron.down").font(.app(.caption)).foregroundStyle(.secondary)
                     }
                     .foregroundStyle(.primary)
-                    .padding(.horizontal, 14).padding(.vertical, 12)
-                    .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+                    .padding(.horizontal, Theme.isRuled ? 0 : 14)
+                    .padding(.vertical, Theme.isRuled ? 0 : 12)
+                    .frame(minHeight: Theme.isRuled ? 46 : 0)
+                    .background {
+                        if !Theme.isRuled {
+                            RoundedRectangle(cornerRadius: 12).fill(Theme.fieldBackground)
+                        }
+                    }
                 }
+                if Theme.isRuled { RuledDivider() }
 
                 switch method {
                 case .equalAll:
@@ -908,12 +1108,37 @@ struct AddExpenseView: View {
         return (combined, base.valid)
     }
 
+    @ViewBuilder
     private func taxTipCard(_ trip: Trip) -> some View {
-        TripCard(title: "Tax & tip", icon: "percent") {
-            Text("Allocated across items by each person's subtotal.")
-                .font(.app(.caption)).foregroundStyle(.secondary)
-            extraField(trip, title: "Tax", text: $taxText)
-            extraField(trip, title: "Tip", text: $tipText)
+        if Theme.isRuled {
+            // Two ruled rows instead of a card: label left, amount field right.
+            VStack(spacing: 0) {
+                ruledFieldRow("Tax") { extraAmountField(trip, text: $taxText) }
+                ruledFieldRow("Tip") { extraAmountField(trip, text: $tipText) }
+                Text("Allocated across items by each person's subtotal.")
+                    .font(.app(.caption)).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 8)
+            }
+        } else {
+            TripCard(title: "Tax & tip", icon: "percent") {
+                Text("Allocated across items by each person's subtotal.")
+                    .font(.app(.caption)).foregroundStyle(.secondary)
+                extraField(trip, title: "Tax", text: $taxText)
+                extraField(trip, title: "Tip", text: $tipText)
+            }
+        }
+    }
+
+    private func extraAmountField(_ trip: Trip, text: Binding<String>) -> some View {
+        HStack(spacing: 4) {
+            Text(currencySymbol(trip.currencyCode))
+                .font(.app(.subheadline)).foregroundStyle(.secondary)
+            TextField("0.00", text: text)
+                .font(.app(.subheadline, .medium))
+                .keyboardType(.decimalPad)
+                .multilineTextAlignment(.trailing)
+                .frame(width: 80)
         }
     }
 

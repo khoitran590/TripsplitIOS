@@ -273,12 +273,18 @@ struct TripCard<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label(title, systemImage: icon).font(.app(.headline))
+            if Theme.isRuled {
+                // No icon, no card: on ruled themes the heading is an inscription and
+                // the section's own rule does the bounding the card outline used to.
+                Text(title).inscription().foregroundStyle(Theme.textSecondary)
+            } else {
+                Label(title, systemImage: icon).font(.app(.headline))
+            }
             content
         }
-        .padding(18)
+        .panelPadding(horizontal: 18, vertical: 18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .readableSurface(cornerRadius: Theme.cardRadius)
+        .homePanel(cornerRadius: Theme.cardRadius)
     }
 }
 

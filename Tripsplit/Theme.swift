@@ -643,6 +643,15 @@ extension View {
     /// look Colonnade is built on; card themes keep the tighter track they already had.
     func inscription() -> some View { modifier(InscriptionModifier()) }
 
+    /// An inscription on ruled themes, `font` on card themes. For labels the ruled
+    /// screens set inscriptionally without disturbing the style the other eight have.
+    /// Note the font must be applied here, not before: `inscription()` sets its own,
+    /// and a font applied closer to the text would win over it.
+    @ViewBuilder
+    func inscription(orFont font: Font) -> some View {
+        if Theme.isRuled { inscription() } else { self.font(font) }
+    }
+
     /// Home section heading: an inscription on ruled themes, the existing headline
     /// everywhere else.
     @ViewBuilder
@@ -676,6 +685,111 @@ private struct InscriptionModifier: ViewModifier {
             .font(.app(.caption2, .semibold))
             .textCase(inscribed ? .uppercase : nil)
             .tracking(tracking)
+    }
+}
+
+/// A hairline that runs past the content column to the screen edges, for the places a
+/// ruled screen needs a rule of its own: between list rows, or bounding a control strip
+/// where there is no panel for `homePanel()` to rule. Only ruled themes render it — card
+/// themes bound the same content with the card itself.
+struct RuledDivider: View {
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    /// How far the rule runs past the content column on each side. The default cancels
+    /// the ruled content inset exactly; a narrower column passes its own.
+    var bleed: CGFloat = Theme.ruledInset
+
+    var body: some View {
+        Rectangle()
+            .fill(Theme.ruleColor(colorSchemeContrast))
+            .frame(height: Theme.ruleWidth(colorSchemeContrast))
+            .padding(.horizontal, -bleed)
+    }
+}
+
+/// The divider inside a section: the system `Divider` on card themes, a full-bleed rule
+/// on ruled ones, so a section's internal breaks match the rules bounding it.
+struct SectionDivider: View {
+    @ViewBuilder
+    var body: some View {
+        if Theme.isRuled {
+            RuledDivider()
+        } else {
+            Divider()
+        }
+    }
+}
+
+/// A ruled segmented control: tracked-caps labels on a row bounded top and bottom by
+/// rules, the active one underlined. Used where card themes draw a capsule or chip
+/// picker; the caller keeps its own selection state either way.
+struct RuledSegmentedRow<Item: Hashable>: View {
+    let items: [Item]
+    @Binding var selection: Item
+    let title: (Item) -> LocalizedStringKey
+
+    var body: some View {
+        VStack(spacing: 0) {
+            RuledDivider()
+            HStack(spacing: 0) {
+                ForEach(items, id: \.self) { item in
+                    Button {
+                        withAnimation(.snappy) { selection = item }
+                    } label: {
+                        Text(title(item))
+                            .inscription()
+                            .foregroundStyle(selection == item ? Color.primary : Theme.textSecondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                            .frame(maxWidth: .infinity)
+                            // 46pt is the mockup's row height, and clears the 44pt
+                            // minimum target the tighter visual rhythm would miss.
+                            .frame(minHeight: 46)
+                            .contentShape(.rect)
+                            .overlay(alignment: .bottom) {
+                                if selection == item {
+                                    Rectangle().fill(Color.primary).frame(height: 2)
+                                }
+                            }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            RuledDivider()
+        }
+    }
+}
+
+/// A screen's primary action. On ruled themes this is the one place accent fills a
+/// shape — a flat, unrounded band — while card themes keep the tinted glass capsule
+/// they already had, so call sites don't branch per theme.
+struct RuledPrimaryButton: View {
+    let title: LocalizedStringKey
+    let action: () -> Void
+
+    @ViewBuilder
+    var body: some View {
+        if Theme.isRuled {
+            Button(action: action) {
+                Text(title)
+                    .inscription()
+                    .foregroundStyle(Theme.onAccent)
+                    .frame(maxWidth: .infinity, minHeight: 52)
+                    .background(Theme.accent)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+        } else {
+            Button(action: action) {
+                Text(title)
+                    .font(.app(.subheadline, .semibold))
+                    .foregroundStyle(Theme.onAccent)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .contentShape(.capsule)
+            }
+            .buttonStyle(.plain)
+            .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+        }
     }
 }
 
