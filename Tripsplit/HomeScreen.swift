@@ -164,18 +164,20 @@ struct HomeScreen: View {
                     .homeSectionHeading()
                     .padding(.leading, Theme.isRuled ? 0 : 4)
                 Spacer()
-                Button {
-                    requestAddTrip()
-                } label: {
-                    Label("Add Trip", systemImage: "plus")
-                        .font(.app(.subheadline, .semibold))
-                        .foregroundStyle(Theme.onAccent)
-                        .padding(.horizontal, 14)
-                        .frame(minHeight: 44)
-                        .contentShape(.capsule)
+                RuledInlineButton(title: "Add Trip", tint: Theme.accent, action: requestAddTrip) {
+                    Button {
+                        requestAddTrip()
+                    } label: {
+                        Label("Add Trip", systemImage: "plus")
+                            .font(.app(.subheadline, .semibold))
+                            .foregroundStyle(Theme.onAccent)
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: 44)
+                            .contentShape(.capsule)
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
                 }
-                .buttonStyle(.plain)
-                .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
             }
 
             if store.myTrips.isEmpty {
@@ -228,6 +230,9 @@ struct HomeScreen: View {
             }
 
             if !store.archivedTrips.isEmpty {
+                // Ruled themes bound this row with a rule of its own; the glass rect it
+                // sits in on card themes is what separates it there.
+                if Theme.isRuled { RuledDivider() }
                 Button { showArchivedTrips = true } label: {
                     HStack(spacing: 10) {
                         Image(systemName: "archivebox")
@@ -238,20 +243,18 @@ struct HomeScreen: View {
                         Text(verbatim: "\(store.archivedTrips.count)")
                             .font(.app(.caption, .bold))
                             .foregroundStyle(.secondary)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(.secondary.opacity(0.15), in: .capsule)
+                            .pillTint(Color.secondary.opacity(0.15), horizontal: 8, vertical: 3)
                         Spacer()
                         Image(systemName: "chevron.right")
                             .font(.app(.caption, .bold))
                             .foregroundStyle(.secondary)
                     }
-                    .padding(.horizontal, 14)
+                    .padding(.horizontal, Theme.isRuled ? 0 : 14)
                     .frame(minHeight: 48)
-                    .contentShape(.rect(cornerRadius: 16))
+                    .contentShape(.rect(cornerRadius: Theme.isRuled ? 0 : 16))
                 }
                 .buttonStyle(.plain)
-                .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 16))
+                .cardOnlyGlass(cornerRadius: 16)
             }
         }
         .ruledSection()
@@ -268,18 +271,20 @@ struct HomeScreen: View {
                 .font(.app(.caption))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-            Button {
-                onBrowseIdeas()
-            } label: {
-                Label("Browse trip ideas", systemImage: "sparkles")
-                    .font(.app(.subheadline, .semibold))
-                    .foregroundStyle(Theme.onAccent)
-                    .padding(.horizontal, 18)
-                    .frame(minHeight: 44)
-                    .contentShape(.capsule)
+            RuledInlineButton(title: "Browse trip ideas", tint: Theme.accent, action: onBrowseIdeas) {
+                Button {
+                    onBrowseIdeas()
+                } label: {
+                    Label("Browse trip ideas", systemImage: "sparkles")
+                        .font(.app(.subheadline, .semibold))
+                        .foregroundStyle(Theme.onAccent)
+                        .padding(.horizontal, 18)
+                        .frame(minHeight: 44)
+                        .contentShape(.capsule)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
             }
-            .buttonStyle(.plain)
-            .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
             .padding(.top, 4)
 
             Button {
@@ -363,7 +368,9 @@ struct HomeScreen: View {
                 colors: [Color(hex: 0x34D399), Color(hex: 0x059669)]
             ) { startQuickAction(.addExpense) }
         }
-        .ruledSection()
+        // A hairline keeps this strip attached to the budget block it acts on, rather
+        // than making it a third chapter of equal weight.
+        .ruledSection(weight: .hairline)
     }
 
     /// Every expense across the user's trips, newest first, as transaction rows.
@@ -503,6 +510,8 @@ struct HomeScreen: View {
                 }
             }
         }
+        // Bounds the chapter itself; the trip groups inside carry hairlines.
+        .ruledSection()
         .confirmationDialog(
             "Delete transaction\(transactionsPendingDelete.map { $0.count == 1 ? "" : "s" } ?? "")?",
             isPresented: Binding(
@@ -546,7 +555,9 @@ struct HomeScreen: View {
                 }
             }
         }
-        .homeGlassPanel()
+        // Trip groups are peers within the transactions chapter, not chapters of their
+        // own — a stack of section rules would flatten the hierarchy again.
+        .homeGlassPanel(weight: .hairline)
     }
 
     /// Separator between an expanded trip's rows. The stock `Divider` is the system
@@ -555,8 +566,8 @@ struct HomeScreen: View {
     private var rowDivider: some View {
         if Theme.isRuled {
             Rectangle()
-                .fill(Theme.ruleColor(colorSchemeContrast))
-                .frame(height: Theme.ruleWidth(colorSchemeContrast))
+                .fill(Theme.ruleColor(colorSchemeContrast, .hairline))
+                .frame(height: Theme.ruleWidth(colorSchemeContrast, .hairline))
         } else {
             Divider().padding(.leading, 14)
         }
@@ -661,14 +672,16 @@ struct SyncFailureBanner: View {
             Button { store.retrySync() } label: {
                 Text("Retry").font(.app(.caption, .bold)).foregroundStyle(Color(hex: 0xDC2626))
                     .padding(.horizontal, 12).padding(.vertical, 6)
-                    .background(.white, in: .capsule)
+                    // A failure banner keeps its fill on every theme — it has to stay
+                    // loud. Ruled themes only square its corners.
+                    .background(.white, in: Theme.isRuled ? AnyShape(Rectangle()) : AnyShape(Capsule()))
                     .frame(minWidth: 44, minHeight: 44)
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
-        .background(Color(hex: 0xDC2626), in: .rect(cornerRadius: 14))
+        .background(Color(hex: 0xDC2626), in: .rect(cornerRadius: Theme.isRuled ? 0 : 14))
     }
 }
 
@@ -790,10 +803,15 @@ struct BalanceCard: View {
                             .font(.app(.caption2, .bold))
                     }
                     .font(.app(.caption, .semibold))
-                    .padding(.horizontal, 11)
+                    // No pill on ruled themes: the code and its chevron are the control.
+                    .padding(.horizontal, Theme.isRuled ? 0 : 11)
                     .frame(minHeight: 36)
-                    .background(Color.primary.opacity(0.07), in: .capsule)
-                    .contentShape(.capsule)
+                    .background {
+                        if !Theme.isRuled {
+                            Capsule().fill(Color.primary.opacity(0.07))
+                        }
+                    }
+                    .contentShape(Theme.isRuled ? AnyShape(Rectangle()) : AnyShape(Capsule()))
                 }
                 .accessibilityLabel("Home currency")
 
@@ -827,7 +845,10 @@ struct BalanceCard: View {
                 Button {
                     if hasBudget { showBudgetBreakdown = true }
                 } label: {
-                    HStack(alignment: .bottom, spacing: 12) {
+                    // At accessibility sizes the status label and the hero's caption
+                    // cannot share a line — the caption gets squeezed into a two-word
+                    // column and hyphenates. Stack them, as `statGrid` already does.
+                    heroLayout {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(verbatim: heroValue)
                                 .font(Theme.isRuled
@@ -860,12 +881,12 @@ struct BalanceCard: View {
 
                         if hasConvertedBudget {
                             Spacer(minLength: 8)
+                            // The status colour carries this on ruled themes; a tinted
+                            // capsule around it would be saying the same thing twice.
                             Text(LocalizedStringKey(statusText))
-                                .font(.app(.caption, .semibold))
+                                .inscription(orFont: .app(.caption, .semibold))
                                 .foregroundStyle(statusColor)
-                                .padding(.horizontal, 9)
-                                .padding(.vertical, 4)
-                                .background(statusColor.opacity(0.12), in: .capsule)
+                                .pillTint(statusColor.opacity(0.12))
                         }
                     }
                 }
@@ -890,22 +911,12 @@ struct BalanceCard: View {
                                     .font(.app(.caption, .semibold))
                                     .foregroundStyle(statusColor)
                             }
-                            GeometryReader { geo in
-                                ZStack(alignment: .leading) {
-                                    Capsule().fill(Color.primary.opacity(0.08))
-                                    Capsule()
-                                        .fill(
-                                            LinearGradient(
-                                                colors: progressColors(isOver: isOver, isNear: isNear),
-                                                startPoint: .leading,
-                                                endPoint: .trailing
-                                            )
-                                        )
-                                        .frame(width: geo.size.width * min(1, max(0, fraction)))
-                                        .animation(.easeInOut(duration: 0.4), value: fraction)
-                                }
-                            }
-                            .frame(height: 9)
+                            MeterBar(
+                                fraction: fraction,
+                                colors: progressColors(isOver: isOver, isNear: isNear),
+                                height: 9
+                            )
+                            .animation(.easeInOut(duration: 0.4), value: fraction)
                             HStack {
                                 Text(verbatim: summaryMoney(totals.spent, displayCurrency))
                                 Text("of")
@@ -969,7 +980,17 @@ struct BalanceCard: View {
         }
         .panelPadding(horizontal: 16, vertical: 16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .homePanel(cornerRadius: 24, elevated: true)
+        // Opens the screen: chapter air, no rule. Under the large navigation title a
+        // rule here reads as an underline on the title, not as a boundary.
+        .homePanel(cornerRadius: 24, elevated: true, weight: .opening)
+    }
+
+    /// The hero figure and its status label side by side, stacking at accessibility
+    /// sizes where they no longer fit on one line.
+    private var heroLayout: AnyLayout {
+        dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+            : AnyLayout(HStackLayout(alignment: .bottom, spacing: 12))
     }
 
     private func statGrid(
@@ -1017,8 +1038,7 @@ struct BalanceCard: View {
                 .lineLimit(1).minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 10).padding(.horizontal, 12)
-        .background(background, in: .rect(cornerRadius: 12))
+        .calloutBlock(tint: background, cornerRadius: 12)
     }
 
     private var noBudgetCallout: some View {
@@ -1031,13 +1051,14 @@ struct BalanceCard: View {
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
-            Button("Set a budget", action: startBudgetFlow)
-                .font(.app(.caption, .semibold))
-                .buttonStyle(.borderedProminent)
-                .tint(Theme.accent)
+            RuledInlineButton(title: "Set a budget", tint: Theme.accent, action: startBudgetFlow) {
+                Button("Set a budget", action: startBudgetFlow)
+                    .font(.app(.caption, .semibold))
+                    .buttonStyle(.borderedProminent)
+                    .tint(Theme.accent)
+            }
         }
-        .padding(12)
-        .background(Theme.accent.opacity(0.08), in: .rect(cornerRadius: 14))
+        .calloutBlock(tint: Theme.accent.opacity(0.08), horizontal: 12, vertical: 12)
     }
 
     private func settlementBand(_ totals: TripStore.HomeTotals) -> some View {
@@ -1056,17 +1077,17 @@ struct BalanceCard: View {
                     .foregroundStyle(Theme.positive)
             }
             Spacer(minLength: 6)
-            Button("Record payment", action: startSettleFlow)
-                .font(.app(.caption, .semibold))
-                .buttonStyle(.bordered)
-                .tint(Theme.accent)
+            RuledInlineButton(title: "Record payment", tint: Theme.accent, action: startSettleFlow) {
+                Button("Record payment", action: startSettleFlow)
+                    .font(.app(.caption, .semibold))
+                    .buttonStyle(.bordered)
+                    .tint(Theme.accent)
+            }
         }
         .font(.app(.caption, .semibold))
         .lineLimit(1)
         .minimumScaleFactor(0.72)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .background(Color.primary.opacity(0.045), in: .rect(cornerRadius: 14))
+        .calloutBlock(tint: Color.primary.opacity(0.045), vertical: 9)
     }
 
     private func missingBudgetBand(count: Int) -> some View {
@@ -1084,9 +1105,7 @@ struct BalanceCard: View {
                 .foregroundStyle(Theme.accent)
         }
         .font(.app(.caption))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(Color.primary.opacity(0.035), in: .rect(cornerRadius: 14))
+        .calloutBlock(tint: Color.primary.opacity(0.035))
     }
 
     private func progressColors(isOver: Bool, isNear: Bool) -> [Color] {
@@ -1271,15 +1290,7 @@ private struct BudgetByTripSheet: View {
             .font(.app(.caption, .semibold))
             .foregroundStyle(color)
 
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.primary.opacity(0.08))
-                    Capsule()
-                        .fill(LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing))
-                        .frame(width: geo.size.width * min(1, max(0, fraction)))
-                }
-            }
-            .frame(height: 8)
+            MeterBar(fraction: fraction, colors: colors)
 
             HStack(spacing: 4) {
                 Text(verbatim: money(trip.spent, trip.currencyCode))
@@ -1291,9 +1302,9 @@ private struct BudgetByTripSheet: View {
             .font(.app(.caption))
             .foregroundStyle(.secondary)
         }
-        .padding(14)
-        .readableSurface(cornerRadius: 16)
-        .contentShape(.rect(cornerRadius: 16))
+        .panelPadding(horizontal: 14, vertical: 14)
+        .homePanel(cornerRadius: 16)
+        .contentShape(.rect(cornerRadius: Theme.isRuled ? 0 : 16))
     }
 }
 
@@ -1347,6 +1358,7 @@ struct TripRow: View {
         VStack(alignment: .leading, spacing: 0) {
             cover
             VStack(alignment: .leading, spacing: 12) {
+                ruledEyebrow
                 titleRow
                 dateRow
                 budgetBoxes
@@ -1377,23 +1389,42 @@ struct TripRow: View {
             .frame(height: Theme.isRuled ? 112 : 130)
             .frame(maxWidth: .infinity)
             .clipped()
+            // On ruled themes the cover is a plain plate and its caption is set below
+            // on the paper (as in the trip detail hero), so there is nothing to scrim.
             .overlay {
-                LinearGradient(
-                    colors: [.clear, .clear, .black.opacity(0.55)],
-                    startPoint: .top, endPoint: .bottom
-                )
+                if !Theme.isRuled {
+                    LinearGradient(
+                        colors: [.clear, .clear, .black.opacity(0.55)],
+                        startPoint: .top, endPoint: .bottom
+                    )
+                }
             }
             .overlay(alignment: .bottomLeading) {
-                Label(trip.location?.isEmpty == false ? trip.location! : trip.name,
-                      systemImage: "mappin.circle.fill")
-                    .font(.app(.caption, .semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .padding(12)
+                if !Theme.isRuled {
+                    Label(trip.location?.isEmpty == false ? trip.location! : trip.name,
+                          systemImage: "mappin.circle.fill")
+                        .font(.app(.caption, .semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .padding(12)
+                }
             }
             .overlay(alignment: .topTrailing) {
                 if isOver || isNear { healthBadge.padding(12) }
             }
+    }
+
+    /// The location as an eyebrow above the title, for ruled themes — where the cover
+    /// carries no caption of its own. Omitted when there is no location, since the
+    /// overlay's fallback (the trip name) would only repeat the title beneath it.
+    @ViewBuilder
+    private var ruledEyebrow: some View {
+        if Theme.isRuled, let location = trip.location, !location.isEmpty {
+            Text(verbatim: location)
+                .inscription()
+                .foregroundStyle(Theme.textSecondary)
+                .lineLimit(1)
+        }
     }
 
     private var healthBadge: some View {
@@ -1405,7 +1436,9 @@ struct TripRow: View {
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 9).padding(.vertical, 5)
-        .background(accent, in: .capsule)
+        // The badge sits on a photo, so it keeps its fill on every theme for
+        // legibility — ruled themes only square it.
+        .background(accent, in: Theme.isRuled ? AnyShape(Rectangle()) : AnyShape(Capsule()))
     }
 
     // MARK: Body content
@@ -1458,8 +1491,7 @@ struct TripRow: View {
                 .lineLimit(1).minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 10).padding(.horizontal, 12)
-        .background(background, in: .rect(cornerRadius: 12))
+        .calloutBlock(tint: background, cornerRadius: 12)
     }
 
     private var progress: some View {
@@ -1471,15 +1503,11 @@ struct TripRow: View {
                     .font(.app(.caption, .semibold))
                     .foregroundStyle(isOver || isNear ? accent : .secondary)
             }
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(.primary.opacity(0.1))
-                    Capsule()
-                        .fill(LinearGradient(colors: progressColors, startPoint: .leading, endPoint: .trailing))
-                        .frame(width: geo.size.width * min(1, max(0, percent / 100)))
-                }
-            }
-            .frame(height: 8)
+            MeterBar(
+                fraction: percent / 100,
+                colors: progressColors,
+                track: .primary.opacity(0.1)
+            )
         }
     }
 }

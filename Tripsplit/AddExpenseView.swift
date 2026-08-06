@@ -321,7 +321,7 @@ struct AddExpenseView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 12)
-        .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+        .fieldFill()
     }
 
     private func itemsEditor(_ trip: Trip) -> some View {
@@ -349,7 +349,7 @@ struct AddExpenseView: View {
                     .buttonStyle(.plain)
                 }
                 .padding(.horizontal, 12).padding(.vertical, 8)
-                .background(Theme.fieldBackground, in: .rect(cornerRadius: 10))
+                .fieldFill(cornerRadius: 10)
             }
 
             HStack {
@@ -623,7 +623,7 @@ struct AddExpenseView: View {
                     .focused($focusedField, equals: .title)
                     .onSubmit { focusedField = .amount }
                     .padding(.horizontal, 14).padding(.vertical, 12)
-                    .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+                    .fieldFill()
             }
 
             VStack(alignment: .leading, spacing: 6) {
@@ -640,7 +640,7 @@ struct AddExpenseView: View {
                 }
                 .font(.app(.title3, .semibold))
                 .padding(.horizontal, 14).padding(.vertical, 12)
-                .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+                .fieldFill()
             }
 
             if !items.isEmpty {
@@ -722,7 +722,7 @@ struct AddExpenseView: View {
                     }
                     .foregroundStyle(.primary)
                     .padding(.horizontal, 14).padding(.vertical, 10)
-                    .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+                    .fieldFill()
                 }
             } else {
                 HStack {
@@ -821,7 +821,7 @@ struct AddExpenseView: View {
                 }
             }
             .padding(.horizontal, 14).padding(.vertical, 12)
-            .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+            .fieldFill()
 
             if locationFocused && !locationCompleter.suggestions.isEmpty {
                 VStack(spacing: 0) {
@@ -841,7 +841,7 @@ struct AddExpenseView: View {
                         if index < min(locationCompleter.suggestions.count, 5) - 1 { Divider() }
                     }
                 }
-                .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+                .fieldFill()
             } else if let expenseLocation, let address = expenseLocation.address {
                 Label(address, systemImage: "checkmark.circle.fill")
                     .font(.app(.caption)).foregroundStyle(.secondary)
@@ -1034,7 +1034,7 @@ struct AddExpenseView: View {
                 .multilineTextAlignment(.trailing)
                 .frame(width: 64)
                 .padding(.horizontal, 10).padding(.vertical, 8)
-                .background(Theme.fieldBackground, in: .rect(cornerRadius: 10))
+                .fieldFill(cornerRadius: 10)
                 Text(unit).font(.app(.subheadline)).foregroundStyle(.secondary)
             }
         }
@@ -1152,7 +1152,7 @@ struct AddExpenseView: View {
                 .multilineTextAlignment(.trailing)
                 .frame(width: 80)
                 .padding(.horizontal, 10).padding(.vertical, 8)
-                .background(Theme.fieldBackground, in: .rect(cornerRadius: 10))
+                .fieldFill(cornerRadius: 10)
         }
     }
 
@@ -1184,7 +1184,7 @@ struct AddExpenseView: View {
                     }
                     .contentShape(.rect)
                     .padding(.horizontal, 12).padding(.vertical, 10)
-                    .background(Theme.fieldBackground, in: .rect(cornerRadius: 10))
+                    .fieldFill(cornerRadius: 10)
                 }
                 .buttonStyle(.plain)
             }

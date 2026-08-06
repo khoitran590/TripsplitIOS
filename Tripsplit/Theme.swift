@@ -428,6 +428,28 @@ extension AppTheme {
         default: nil
         }
     }
+
+    /// Secondary copy for this theme; `nil` uses the shared cool-neutral grey, which
+    /// reads blue against travertine for the same reason `ruleOverride` exists.
+    var textSecondaryOverride: Color? {
+        switch self {
+        case .colonnade: Color(light: 0x5C564C, dark: 0xB6B0A5)
+        default: nil
+        }
+    }
+
+    /// Sheet backdrop pair for this theme; `nil` uses the shared cool-neutral pair.
+    /// These are `homeGradient`'s end stops: a cool sheet presented over a travertine
+    /// field is exactly the two-papers problem that gradient is warmed to avoid.
+    var sheetOverride: [Color]? {
+        switch self {
+        case .colonnade: [
+            Color(light: 0xF1EEE7, dark: 0x171614),
+            Color(light: 0xFCFBF8, dark: 0x0A0A09),
+        ]
+        default: nil
+        }
+    }
 }
 
 // MARK: - Shared app backdrop
@@ -443,16 +465,23 @@ struct AppBackground: View {
     var body: some View {
         let theme = ThemeManager.shared.selection
         // Kept faint so glass materials layered on top refract a hint of the
-        // theme instead of a saturated blob.
-        let glowOpacity = reduceTransparency ? 0 : (colorScheme == .dark ? 0.08 : 0.10)
+        // theme instead of a saturated blob. Ruled themes take none at all: their
+        // ground is one uninterrupted field, and a bloom across it reads as a smudge
+        // on the paper rather than as light.
+        let hasGlow = !reduceTransparency && theme.surfaceStyle != .ruled
+        let glowOpacity = colorScheme == .dark ? 0.08 : 0.10
         LinearGradient(colors: theme.homeGradient, startPoint: .top, endPoint: .bottom)
             .overlay(alignment: .topLeading) {
-                glow(theme.accent, opacity: glowOpacity)
-                    .offset(x: -100, y: -140)
+                if hasGlow {
+                    glow(theme.accent, opacity: glowOpacity)
+                        .offset(x: -100, y: -140)
+                }
             }
             .overlay(alignment: .topTrailing) {
-                glow(theme.accentSecondary, opacity: glowOpacity)
-                    .offset(x: 120, y: -60)
+                if hasGlow {
+                    glow(theme.accentSecondary, opacity: glowOpacity)
+                        .offset(x: 120, y: -60)
+                }
             }
             .ignoresSafeArea()
     }
@@ -499,7 +528,7 @@ enum Theme {
 
     /// Backdrop for presented sheets (add trip, trip detail, add expense, split, settle).
     static var sheetGradient: [Color] {
-        [
+        ThemeManager.shared.selection.sheetOverride ?? [
             Color(light: 0xF2F5F8, dark: 0x1C1C1E),
             Color(light: 0xFFFFFF, dark: 0x0E0E10),
         ]
@@ -526,7 +555,10 @@ enum Theme {
     static let elevatedShadow = Color(light: 0x1F2937, dark: 0x000000).opacity(0.12)
     /// Readable secondary copy over the app's decorative backgrounds. Unlike the
     /// system tertiary hierarchy, this token remains suitable for normal body text.
-    static let textSecondary = Color(light: 0x4B5563, dark: 0xC6CBD2)
+    /// Resolves through the theme so a warm palette isn't written in cool grey.
+    static var textSecondary: Color {
+        ThemeManager.shared.selection.textSecondaryOverride ?? Color(light: 0x4B5563, dark: 0xC6CBD2)
+    }
 
     /// Accent used for primary actions and creator badges (follows the chosen theme).
     static var accent: Color { ThemeManager.shared.selection.accent }
@@ -564,13 +596,53 @@ enum Theme {
     /// they keep SwiftUI's default padding rather than a hard-coded stand-in for it.
     static var contentInset: CGFloat? { isRuled ? ruledInset : nil }
 
+    /// How strong a break a rule marks. A ruled page takes its structure from the
+    /// *contrast* between these — one repeated hairline gives a screen no hierarchy at
+    /// all, which is the difference between a ruled page and a bordered list.
+    ///
+    /// The intervals are deliberately not a linear ramp: negative space reads as
+    /// deliberate only when the steps between its sizes are obvious.
+    enum RuleWeight {
+        /// Between rows inside one section.
+        case hairline
+        /// Bounding a section — the default, and what every existing rule was.
+        case section
+        /// Closing a title block. The screen's one strong rule; use it once.
+        case chapter
+        /// Opens a screen: chapter air, no rule. The first block has nothing above it
+        /// to separate from — the navigation title already does that — so a rule there
+        /// reads as an underline on the title instead of as a boundary.
+        case opening
+
+        /// Padding a block bearing this rule takes above and below itself.
+        var space: CGFloat {
+            switch self {
+            case .hairline: 8
+            case .section: 14
+            case .chapter, .opening: 26
+            }
+        }
+
+        /// Whether this weight draws a rule at all.
+        var drawsRule: Bool { self != .opening }
+    }
+
     /// Hairline weight and color, doubled and opaque under Increased Contrast to match
     /// what `readableSurface` already does to its border.
-    static func ruleWidth(_ contrast: ColorSchemeContrast) -> CGFloat {
-        contrast == .increased ? 2 : 1
+    static func ruleWidth(_ contrast: ColorSchemeContrast, _ weight: RuleWeight = .section) -> CGFloat {
+        guard weight.drawsRule else { return 0 }
+        let base: CGFloat = weight == .chapter ? 1.5 : 1
+        return contrast == .increased ? base * 2 : base
     }
-    static func ruleColor(_ contrast: ColorSchemeContrast) -> Color {
-        separator.opacity(contrast == .increased ? 1 : 0.9)
+
+    static func ruleColor(_ contrast: ColorSchemeContrast, _ weight: RuleWeight = .section) -> Color {
+        switch weight {
+        // Near-black rather than the separator: a chapter rule is ink, not a hairline.
+        case .chapter: Color.primary
+        case .section: separator.opacity(contrast == .increased ? 1 : 0.9)
+        case .hairline: separator.opacity(contrast == .increased ? 1 : 0.55)
+        case .opening: .clear
+        }
     }
 }
 
@@ -578,11 +650,17 @@ enum Theme {
 
 extension View {
     /// Panel treatment for the home screen: a readable card on card themes, bare
-    /// content under a full-bleed hairline on ruled ones.
+    /// content under a full-bleed rule on ruled ones. `weight` sets how strong a break
+    /// the rule marks and how much air the block takes; it is ignored on card themes,
+    /// where the cards themselves do the separating.
     @ViewBuilder
-    func homePanel(cornerRadius: CGFloat = 20, elevated: Bool = false) -> some View {
+    func homePanel(
+        cornerRadius: CGFloat = 20,
+        elevated: Bool = false,
+        weight: Theme.RuleWeight = .section
+    ) -> some View {
         if Theme.isRuled {
-            modifier(RuledSectionModifier())
+            modifier(RuledSectionModifier(weight: weight))
         } else {
             readableSurface(cornerRadius: cornerRadius, elevated: elevated)
         }
@@ -591,20 +669,32 @@ extension View {
     /// The same switch for panels whose card form is Liquid Glass rather than a readable
     /// surface, so card themes keep exactly the material they had.
     @ViewBuilder
-    func homeGlassPanel(cornerRadius: CGFloat = 20) -> some View {
+    func homeGlassPanel(cornerRadius: CGFloat = 20, weight: Theme.RuleWeight = .section) -> some View {
         if Theme.isRuled {
-            modifier(RuledSectionModifier())
+            modifier(RuledSectionModifier(weight: weight))
         } else {
             glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
+        }
+    }
+
+    /// The interactive glass a standalone row carries on card themes, and nothing at
+    /// all on ruled ones, where a rule bounds the same row. Unlike `homeGlassPanel`
+    /// this adds no rule of its own — for rows that already sit under one.
+    @ViewBuilder
+    func cardOnlyGlass(cornerRadius: CGFloat) -> some View {
+        if Theme.isRuled {
+            self
+        } else {
+            glassEffect(.regular.interactive(), in: .rect(cornerRadius: cornerRadius))
         }
     }
 
     /// A ruled boundary for content that has no card form at all (the quick actions).
     /// Identity on card themes, where the cards themselves separate the sections.
     @ViewBuilder
-    func ruledSection() -> some View {
+    func ruledSection(weight: Theme.RuleWeight = .section) -> some View {
         if Theme.isRuled {
-            modifier(RuledSectionModifier())
+            modifier(RuledSectionModifier(weight: weight))
         } else {
             self
         }
@@ -622,18 +712,21 @@ extension View {
 /// Bounds content with a hairline that bleeds past the content column to the screen
 /// edges — what makes the ruled style read as ruled rather than as a bordered list.
 private struct RuledSectionModifier: ViewModifier {
+    var weight: Theme.RuleWeight = .section
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
     func body(content: Content) -> some View {
         content
-            .padding(.vertical, 14)
+            .padding(.vertical, weight.space)
             .overlay(alignment: .top) {
-                Rectangle()
-                    .fill(Theme.ruleColor(colorSchemeContrast))
-                    .frame(height: Theme.ruleWidth(colorSchemeContrast))
-                    // Negative inset cancels the content column's margin exactly, so the
-                    // rule spans the full width wherever the panel sits in the stack.
-                    .padding(.horizontal, -Theme.ruledInset)
+                if weight.drawsRule {
+                    Rectangle()
+                        .fill(Theme.ruleColor(colorSchemeContrast, weight))
+                        .frame(height: Theme.ruleWidth(colorSchemeContrast, weight))
+                        // Negative inset cancels the content column's margin exactly, so
+                        // the rule spans the full width wherever the panel sits.
+                        .padding(.horizontal, -Theme.ruledInset)
+                }
             }
     }
 }
@@ -697,11 +790,14 @@ struct RuledDivider: View {
     /// How far the rule runs past the content column on each side. The default cancels
     /// the ruled content inset exactly; a narrower column passes its own.
     var bleed: CGFloat = Theme.ruledInset
+    /// Defaults to `.hairline`: a bare `RuledDivider` is nearly always separating rows
+    /// *inside* a section, and the section's own boundary is drawn by `ruledSection`.
+    var weight: Theme.RuleWeight = .hairline
 
     var body: some View {
         Rectangle()
-            .fill(Theme.ruleColor(colorSchemeContrast))
-            .frame(height: Theme.ruleWidth(colorSchemeContrast))
+            .fill(Theme.ruleColor(colorSchemeContrast, weight))
+            .frame(height: Theme.ruleWidth(colorSchemeContrast, weight))
             .padding(.horizontal, -bleed)
     }
 }
@@ -729,7 +825,9 @@ struct RuledSegmentedRow<Item: Hashable>: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            RuledDivider()
+            // Section weight, not the hairline default: this strip switches the whole
+            // screen beneath it, so its boundaries have to read as a real break.
+            RuledDivider(weight: .section)
             HStack(spacing: 0) {
                 ForEach(items, id: \.self) { item in
                     Button {
@@ -754,7 +852,7 @@ struct RuledSegmentedRow<Item: Hashable>: View {
                     .buttonStyle(.plain)
                 }
             }
-            RuledDivider()
+            RuledDivider(weight: .section)
         }
     }
 }
@@ -790,6 +888,125 @@ struct RuledPrimaryButton: View {
             .buttonStyle(.plain)
             .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
         }
+    }
+}
+
+/// A secondary action in a header or callout: a tracked-caps label on ruled themes,
+/// the pill the call site already drew everywhere else. Ruled screens carry no filled
+/// pills — an action is marked by its inscription, the way the trip detail hero
+/// actions already are.
+struct RuledInlineButton<CardLabel: View>: View {
+    let title: LocalizedStringKey
+    var tint: Color = .primary
+    let action: () -> Void
+    @ViewBuilder let cardLabel: () -> CardLabel
+
+    @ViewBuilder
+    var body: some View {
+        if Theme.isRuled {
+            Button(action: action) {
+                Text(title)
+                    .inscription()
+                    .foregroundStyle(tint)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .frame(minHeight: 44)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+        } else {
+            cardLabel()
+        }
+    }
+}
+
+/// A budget meter. Card themes keep the rounded, two-stop bar they have always drawn;
+/// ruled themes draw a square-ended rule in one flat colour over a hairline track — a
+/// gradient capsule is card-era ornament, not this theme's vocabulary.
+struct MeterBar: View {
+    let fraction: Double
+    /// Card themes render these leading-to-trailing as a gradient; ruled themes take
+    /// the last stop, the darker and truer single colour of the pair.
+    let colors: [Color]
+    /// The unfilled remainder on card themes; ruled themes always use the hairline.
+    var track: Color = Color.primary.opacity(0.08)
+    var height: CGFloat = 8
+
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+
+    var body: some View {
+        let clamped = min(1, max(0, fraction))
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                shape.fill(Theme.isRuled ? Theme.ruleColor(colorSchemeContrast) : track)
+                shape.fill(fill).frame(width: geo.size.width * clamped)
+            }
+        }
+        // Thin enough to read as a rule rather than as a bar, which is the point.
+        .frame(height: Theme.isRuled ? 3 : height)
+    }
+
+    private var shape: AnyShape {
+        Theme.isRuled ? AnyShape(Rectangle()) : AnyShape(Capsule())
+    }
+
+    private var fill: AnyShapeStyle {
+        Theme.isRuled
+            ? AnyShapeStyle(colors.last ?? Theme.accent)
+            : AnyShapeStyle(LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing))
+    }
+}
+
+extension View {
+    /// A small tinted pill — badges, inline chips. Card themes fill a capsule; ruled
+    /// themes let the label's own colour carry the status and drop both the fill and
+    /// the inset that went with it, the same trade `calloutBlock` makes at block scale.
+    func pillTint(_ tint: Color, horizontal: CGFloat = 9, vertical: CGFloat = 4) -> some View {
+        padding(.horizontal, Theme.isRuled ? 0 : horizontal)
+            .padding(.vertical, vertical)
+            .background {
+                if !Theme.isRuled {
+                    Capsule().fill(tint)
+                }
+            }
+    }
+
+    /// A text-field fill. Ruled themes square every filled shape; the fill colour
+    /// itself already resolves through the theme via `Theme.fieldBackground`.
+    func fieldFill(cornerRadius: CGFloat = 12) -> some View {
+        background(Theme.fieldBackground, in: .rect(cornerRadius: Theme.isRuled ? 0 : cornerRadius))
+    }
+
+    /// A primary action's fill: the tinted glass capsule on card themes, a flat
+    /// unrounded band on ruled ones. `RuledPrimaryButton` is the same trade for
+    /// call sites whose label is just a title; this is for the richer ones
+    /// (icons, spinners, disabled states) that need to keep their own label.
+    @ViewBuilder
+    func actionFill(tint: Color, in shape: some Shape = .capsule) -> some View {
+        if Theme.isRuled {
+            background(tint)
+        } else {
+            glassEffect(.regular.tint(tint).interactive(), in: shape)
+        }
+    }
+
+    /// A tinted callout block — stat tiles, status bands, warnings. Card themes fill a
+    /// rounded rectangle; ruled themes drop the fill and the inset that went with it and
+    /// let the copy's own colour carry the status, exactly as `budgetTile` already does.
+    /// The vertical padding stays either way: it is the block's rhythm, not its box.
+    func calloutBlock(
+        tint: Color,
+        cornerRadius: CGFloat = 14,
+        horizontal: CGFloat = 12,
+        vertical: CGFloat = 10
+    ) -> some View {
+        padding(.horizontal, Theme.isRuled ? 0 : horizontal)
+            .padding(.vertical, vertical)
+            .background {
+                if !Theme.isRuled {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).fill(tint)
+                }
+            }
     }
 }
 

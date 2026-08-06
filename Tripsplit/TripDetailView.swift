@@ -294,8 +294,8 @@ struct TripDetailView: View {
 
             // The one near-black rule on the screen; it closes the title block.
             Rectangle()
-                .fill(Color.primary)
-                .frame(height: Theme.ruleWidth(colorSchemeContrast))
+                .fill(Theme.ruleColor(colorSchemeContrast, .chapter))
+                .frame(height: Theme.ruleWidth(colorSchemeContrast, .chapter))
 
             ruledHeroActions(trip)
                 .padding(.horizontal, Theme.ruledInset)
@@ -511,7 +511,7 @@ struct TripDetailView: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+        .fieldFill()
     }
 
     private func budgetOverviewCard(_ trip: Trip) -> some View {
@@ -535,17 +535,21 @@ struct TripDetailView: View {
                 }
                 Spacer()
                 if store.isCreator(of: trip) {
-                    Button {
+                    RuledInlineButton(title: "Edit Budget") {
                         requireAuthentication(for: .editTrip)
-                    } label: {
-                        Text("Edit Budget")
-                            .font(.app(.caption, .semibold))
-                            .padding(.horizontal, 12).padding(.vertical, 6)
-                            .background(.secondary.opacity(0.14), in: .capsule)
-                            .frame(minHeight: 44)
-                            .contentShape(.rect)
+                    } cardLabel: {
+                        Button {
+                            requireAuthentication(for: .editTrip)
+                        } label: {
+                            Text("Edit Budget")
+                                .font(.app(.caption, .semibold))
+                                .padding(.horizontal, 12).padding(.vertical, 6)
+                                .background(.secondary.opacity(0.14), in: .capsule)
+                                .frame(minHeight: 44)
+                                .contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
             }
 
@@ -570,15 +574,7 @@ struct TripDetailView: View {
 
             if budget > 0 {
                 let fraction = min(usedFraction, 1)
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(Theme.fieldBackground)
-                        Capsule()
-                            .fill(barColor)
-                            .frame(width: max(0, geo.size.width * fraction))
-                    }
-                }
-                .frame(height: 8)
+                MeterBar(fraction: fraction, colors: [barColor], track: Theme.fieldBackground)
 
                 if nearBudget || overBudget {
                     HStack(spacing: 8) {
@@ -591,8 +587,7 @@ struct TripDetailView: View {
                         Spacer(minLength: 0)
                     }
                     .foregroundStyle(barColor)
-                    .padding(.vertical, 8).padding(.horizontal, 12)
-                    .background(barColor.opacity(0.12), in: .rect(cornerRadius: 12))
+                    .calloutBlock(tint: barColor.opacity(0.12), cornerRadius: 12, vertical: 8)
                 }
             }
 
@@ -844,7 +839,7 @@ struct TripDetailView: View {
                             .font(.app(.caption, .semibold))
                             .foregroundStyle(Color(hex: 0x10B981))
                             .padding(.horizontal, 10).padding(.vertical, 6)
-                            .background(Color(hex: 0x10B981).opacity(0.15), in: .capsule)
+                            .pillTint(Color(hex: 0x10B981).opacity(0.15), horizontal: 10, vertical: 6)
                             .contentShape(.capsule)
                     }
                     .buttonStyle(.plain)
@@ -935,7 +930,7 @@ struct TripDetailView: View {
                                     .foregroundStyle(Theme.accent)
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 2)
-                                    .background(Theme.accent.opacity(0.14), in: .capsule)
+                                    .pillTint(Theme.accent.opacity(0.14), horizontal: 6, vertical: 2)
                             }
                         }
                         .frame(width: 74)
@@ -958,7 +953,7 @@ struct TripDetailView: View {
                             .font(.app(.subheadline))
                             .padding(.horizontal, 14)
                             .padding(.vertical, 10)
-                            .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+                            .fieldFill()
                         Button { addManualMember(trip) } label: {
                             Image(systemName: "plus")
                                 .font(.app(.subheadline, .bold))
@@ -966,7 +961,7 @@ struct TripDetailView: View {
                                 .frame(width: 40, height: 40)
                         }
                         .buttonStyle(.plain)
-                        .glassEffect(.regular.tint(Theme.accent).interactive(), in: .circle)
+                        .actionFill(tint: Theme.accent, in: .circle)
                         .disabled(manualMemberName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
 
@@ -977,7 +972,7 @@ struct TripDetailView: View {
                         .font(.app(.subheadline))
                         .padding(.horizontal, 14)
                         .padding(.vertical, 10)
-                        .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+                        .fieldFill()
 
                     Button { invite(trip) } label: {
                         HStack(spacing: 8) {
@@ -990,7 +985,7 @@ struct TripDetailView: View {
                         .padding(.vertical, 12)
                     }
                     .buttonStyle(.plain)
-                    .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+                    .actionFill(tint: Theme.accent)
                     .disabled(inviteEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isInviting)
                     .opacity(inviteEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isInviting ? 0.55 : 1)
 
@@ -1014,7 +1009,7 @@ struct TripDetailView: View {
                         .padding(.vertical, 12)
                     }
                     .buttonStyle(.plain)
-                    .glassEffect(.regular.tint(Color(hex: 0x10B981)).interactive(), in: .capsule)
+                    .actionFill(tint: Color(hex: 0x10B981))
                     .disabled(isGeneratingLink)
 
                     if let inviteLink {
@@ -1043,7 +1038,7 @@ struct TripDetailView: View {
                         }
                         .padding(.horizontal, 12)
                         .padding(.vertical, 10)
-                        .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+                        .fieldFill()
                     }
 
                     if !pendingInvitations.isEmpty {
@@ -1218,7 +1213,7 @@ struct TripDetailView: View {
                             .foregroundStyle(.tertiary)
                     }
                     .padding(12)
-                    .background(Theme.fieldBackground, in: .rect(cornerRadius: 14))
+                    .fieldFill(cornerRadius: 14)
                     .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
@@ -1236,7 +1231,7 @@ struct TripDetailView: View {
                         .padding(.vertical, 12)
                 }
                 .buttonStyle(.plain)
-                .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+                .actionFill(tint: Theme.accent)
             }
         }
     }
@@ -1278,7 +1273,12 @@ struct TripDetailView: View {
                     }
                     .padding(.horizontal, 12)
                     .frame(minHeight: 44)
-                    .background(Theme.fieldBackground, in: .capsule)
+                    // Card themes keep a true capsule here: this field grows with
+                    // Dynamic Type, and a fixed radius would stop tracking its height.
+                    .background(
+                        Theme.fieldBackground,
+                        in: Theme.isRuled ? AnyShape(Rectangle()) : AnyShape(Capsule())
+                    )
 
                     Menu {
                         Section("Payer") {
@@ -1458,7 +1458,7 @@ struct TripDetailView: View {
                     Text("Restore")
                         .font(.app(.caption, .semibold))
                         .padding(.horizontal, 12).padding(.vertical, 6)
-                        .background(Theme.accent.opacity(0.16), in: .capsule)
+                        .pillTint(Theme.accent.opacity(0.16), horizontal: 12, vertical: 6)
                         .foregroundStyle(Theme.accent)
                         .frame(minHeight: 44)
                         .contentShape(.rect)

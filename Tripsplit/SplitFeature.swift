@@ -260,9 +260,15 @@ struct SplitView: View {
                 Label(message, systemImage: "exclamationmark.triangle.fill")
                     .font(.app(.footnote, .medium))
                     .foregroundStyle(Color(hex: 0xEF4444))
-                    .padding(10)
+                    .padding(.horizontal, Theme.isRuled ? 0 : 10)
+                    .padding(.vertical, 10)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(hex: 0xEF4444).opacity(0.12), in: .rect(cornerRadius: 12))
+                    .background {
+                        if !Theme.isRuled {
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(Color(hex: 0xEF4444).opacity(0.12))
+                        }
+                    }
             }
 
             ForEach(people) { person in
@@ -450,7 +456,8 @@ struct SplitView: View {
             .font(.app(.subheadline, .semibold))
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
-            .background(.secondary.opacity(0.12), in: .rect(cornerRadius: 10))
+            // A filled input keeps its fill on every theme; ruled squares it.
+            .background(.secondary.opacity(0.12), in: .rect(cornerRadius: Theme.isRuled ? 0 : 10))
         }
     }
 
