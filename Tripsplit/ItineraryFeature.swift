@@ -288,16 +288,19 @@ extension TripStore {
     }
 }
 
-// MARK: - AI suggestions (Gemini via Edge Function)
+// MARK: - AI suggestions (Claude, then Gemini, via Edge Function)
 
-/// Client for the `suggest-itinerary` Supabase Edge Function. The Gemini key lives
+/// Client for the `suggest-itinerary` Supabase Edge Function. The provider keys live
 /// server-side only (hard rule: no API keys in the app bundle); the app sends the
-/// trip context plus the signed-in user's JWT and gets back a structured plan.
+/// trip context plus the signed-in user's JWT and gets back a structured plan. The
+/// function asks Claude first and falls back to Gemini, which is invisible here — the
+/// response shape is identical either way.
 enum ItineraryAI {
     /// Dedicated session for plan generation: same hardening as
     /// `BackendSecurity.secureSession` (ephemeral, no cookies/cache, auth-preserving
-    /// redirects) but with timeouts sized for a search-grounded Gemini call — the
-    /// shared session's 20s request / 60s resource limits time out long drafts.
+    /// redirects) but with timeouts sized for a model that researches the web before
+    /// answering — the shared session's 20s request / 60s resource limits time out long
+    /// drafts. The Edge Function budgets its own providers to answer inside this window.
     nonisolated static let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 150

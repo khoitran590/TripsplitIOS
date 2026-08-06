@@ -292,12 +292,21 @@ final class TripsplitAppTests: XCTestCase {
         XCTAssertTrue(itineraryMessage.contains("Continue Without AI"))
     }
 
-    func testReceiptProviderChangeUsesPurposeSpecificConsentVersion() {
+    func testProviderChangesUsePurposeSpecificConsentVersions() {
         XCTAssertEqual(AIConsentPurpose.receiptProcessing.consentVersion, "2026-08-05")
-        XCTAssertEqual(AIConsentPurpose.itineraryGeneration.consentVersion, "2026-08-02")
+        XCTAssertEqual(AIConsentPurpose.itineraryGeneration.consentVersion, "2026-08-06")
+        XCTAssertNotEqual(
+            AIConsentPurpose.receiptProcessing.consentVersion,
+            AIConsentPurpose.itineraryGeneration.consentVersion
+        )
         XCTAssertTrue(AIConsentPurpose.receiptProcessing.providerSummary.contains("Anthropic Claude"))
         XCTAssertTrue(AIConsentPurpose.receiptProcessing.providerSummary.contains("backup"))
         XCTAssertFalse(AIConsentPurpose.receiptProcessing.disclosure.contains("Google Cloud Vision"))
+        // Claude is now primary for planning too, so the itinerary disclosure has to name
+        // Anthropic before any trip context can be sent there.
+        XCTAssertTrue(AIConsentPurpose.itineraryGeneration.providerSummary.contains("Anthropic Claude"))
+        XCTAssertTrue(AIConsentPurpose.itineraryGeneration.providerSummary.contains("Google Gemini"))
+        XCTAssertTrue(AIConsentPurpose.itineraryGeneration.disclosure.contains("Anthropic Claude"))
     }
 
     func testStoragePolicyFailureDoesNotExposeSchemaDetails() {

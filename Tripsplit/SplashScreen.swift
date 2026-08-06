@@ -2,6 +2,7 @@ import SwiftUI
 
 /// Shows the TripSplit splash screen on launch, then transitions into the app.
 struct RootView: View {
+    @State private var isActive = false
     @State private var localization = LocalizationManager.shared
     @State private var themeManager = ThemeManager.shared
     @State private var fontManager = FontManager.shared
@@ -27,14 +28,23 @@ struct RootView: View {
     }
 
     var body: some View {
-        Group {
-            if hasSeenWelcome || isSignedInAtLaunch {
-                ContentView(startsAtSignIn: startsAtSignIn)
-            } else {
-                WelcomeView { intent in
-                    startsAtSignIn = intent == .signIn
-                    hasSeenWelcome = true
+        ZStack {
+            if isActive {
+                if hasSeenWelcome || isSignedInAtLaunch {
+                    ContentView(startsAtSignIn: startsAtSignIn)
+                        .transition(.opacity)
+                } else {
+                    WelcomeView { intent in
+                        withAnimation(.easeInOut(duration: 0.35)) {
+                            startsAtSignIn = intent == .signIn
+                            hasSeenWelcome = true
+                        }
+                    }
+                    .transition(.opacity)
                 }
+            } else {
+                SplashScreen()
+                    .transition(.opacity)
             }
         }
         // In-app language selection: expose the manager and drive SwiftUI's locale so
@@ -51,6 +61,14 @@ struct RootView: View {
         .environment(\.font, fontManager.selection == .independence ? .app(.body) : nil)
         // App-wide control tint follows the user's chosen theme (see `ThemeManager`).
         .tint(themeManager.selection.accent)
+        .task {
+            // Brief hold so the logo animation reads, then hand off to the app. Kept short —
+            // every extra tenth of a second here is pure added launch latency.
+            try? await Task.sleep(for: .seconds(0.45))
+            withAnimation(.easeInOut(duration: 0.35)) {
+                isActive = true
+            }
+        }
     }
 }
 
