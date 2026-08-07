@@ -87,7 +87,7 @@ struct SplashScreen: View {
                     .scaledToFit()
                     .frame(width: 128, height: 128)
                     .clipShape(.rect(cornerRadius: 30, style: .continuous))
-                    .shadow(color: Color(hex: 0xEC4899).opacity(0.35), radius: 18, y: 8)
+                    .shadow(color: Color(hex: 0x7699CC).opacity(0.35), radius: 18, y: 8)
                     .scaleEffect(appeared ? 1 : 0.6)
                     .opacity(appeared ? 1 : 0)
 
