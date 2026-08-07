@@ -2138,10 +2138,23 @@ struct ProfileShareCard: View {
         .clipped()
     }
 
-    /// Pebble grain: a jittered lattice of cells, each creased in shadow and lit along
-    /// its top edge, which is what makes leather read as leather rather than as a flat
-    /// panel. Seeded from a fixed constant so re-sharing prints the same hide, and drawn
-    /// in `Canvas` because a blur or material would rasterize empty.
+    /// Pebble grain: a jittered lattice of cells, each a lit crown sitting over a shadow
+    /// dropped down and right, so the hide reads as raised bumps divided by creases.
+    ///
+    /// Every pebble is *filled*, never stroked. Stroking the ellipse outlines draws a
+    /// closed ring around each cell, and rings overlapping at this density read as bubble
+    /// wrap rather than as leather — the reason this was rebuilt.
+    ///
+    /// Crowns and shadows are each accumulated into a single `Path` and filled once.
+    /// Overlapping subpaths union under nonzero winding instead of stacking their
+    /// opacity, which is what keeps the tone even rather than mottled where cells pile up.
+    ///
+    /// Cells are ~4pt against the card's 380pt width. A passport is about 125mm across, so
+    /// that is roughly the 1mm grain real pebbled stock has — and fine enough that the
+    /// texture stays a surface rather than a pattern competing with the type.
+    ///
+    /// Seeded from a fixed constant so re-sharing prints the same hide, and drawn in
+    /// `Canvas` because a blur or material would rasterize empty.
     private var leatherGrain: some View {
         Canvas { context, size in
             var state: UInt64 = 0x2545_F491_4F6C_DD1D
@@ -2151,25 +2164,32 @@ struct ProfileShareCard: View {
                 state ^= state << 17
                 return CGFloat(state % 1000) / 1000
             }
-            let step: CGFloat = 13
+            let step: CGFloat = 4
+            var shadows = Path()
+            var crowns = Path()
+            var rowIndex = 0
             // Started a step outside the card so the pebbles run off every edge instead
             // of stopping in a straight line short of it.
             for row in stride(from: -step, through: size.height + step, by: step) {
+                // Alternate rows shift half a cell so the pebbles pack instead of lining
+                // up in columns; the positional jitter below dissolves the rest of the
+                // grid, which otherwise shows through as a honeycomb.
+                let stagger = rowIndex.isMultiple(of: 2) ? 0 : step / 2
+                rowIndex += 1
                 for column in stride(from: -step, through: size.width + step, by: step) {
-                    let width = step * (0.75 + jitter() * 0.5)
-                    let height = width * (0.7 + jitter() * 0.45)
-                    let cell = CGRect(x: column + jitter() * step * 0.7 - width / 2,
-                                      y: row + jitter() * step * 0.7 - height / 2,
+                    // Held under a full step so neighbours stay parted by a crease rather
+                    // than fusing into blobs.
+                    let width = step * 0.8 * (0.75 + jitter() * 0.5)
+                    let height = width * (0.78 + jitter() * 0.34)
+                    let cell = CGRect(x: column + stagger + (jitter() - 0.5) * step * 0.45 - width / 2,
+                                      y: row + (jitter() - 0.5) * step * 0.45 - height / 2,
                                       width: width, height: height)
-                    let pebble = Path(ellipseIn: cell)
-                    context.stroke(pebble,
-                                   with: .color(.black.opacity(0.10 + jitter() * 0.07)),
-                                   lineWidth: 1.4)
-                    context.stroke(pebble.offsetBy(dx: -0.5, dy: -0.9),
-                                   with: .color(.white.opacity(0.05 + jitter() * 0.045)),
-                                   lineWidth: 0.9)
+                    shadows.addEllipse(in: cell.offsetBy(dx: 0.39, dy: 0.7))
+                    crowns.addEllipse(in: cell)
                 }
             }
+            context.fill(shadows, with: .color(.black.opacity(0.07)))
+            context.fill(crowns, with: .color(.white.opacity(0.03)))
         }
     }
 }

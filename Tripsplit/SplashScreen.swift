@@ -94,9 +94,13 @@ struct SplashScreen: View {
                 VStack(spacing: 6) {
                     Text("TripSplit")
                         .font(.app(size: 34, weight: .bold))
+                        // The logo's own palette. Adaptive rather than fixed hex: the
+                        // mark's light tones (periwinkle, peach) wash out against a white
+                        // background, so light mode runs the deeper half of the ramp.
                         .foregroundStyle(
                             LinearGradient(
-                                colors: [Color(hex: 0xF59E0B), Color(hex: 0xEC4899)],
+                                colors: [Color(light: 0x334260, dark: 0xAEB7FF),
+                                         Color(light: 0x6E8FC7, dark: 0xFFBF85)],
                                 startPoint: .leading, endPoint: .trailing
                             )
                         )
