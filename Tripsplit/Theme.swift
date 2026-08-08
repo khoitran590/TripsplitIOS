@@ -259,7 +259,7 @@ extension Font {
 /// home-screen backdrop for *both* light and dark appearances, so switching the
 /// system scheme never changes the chosen theme — only how bright it renders.
 enum AppTheme: String, CaseIterable, Identifiable {
-    case classic, matcha, butter, chocolate, gothic, y2k, paper, pop, colonnade
+    case classic, matcha, butter, chocolate, gothic, y2k, paper, pop, colonnade, clay
 
     var id: Self { self }
 
@@ -275,6 +275,7 @@ enum AppTheme: String, CaseIterable, Identifiable {
         case .paper: "Paper"
         case .pop: "Pop"
         case .colonnade: "Colonnade"
+        case .clay: "Clay"
         }
     }
 
@@ -299,6 +300,12 @@ enum AppTheme: String, CaseIterable, Identifiable {
         // Colonnade: slate ink, with bronze as its companion — the swatch reads
         // stone → metal rather than as a second blue theme.
         case .colonnade: Color(light: 0x2F4858, dark: 0x9FBDCE)
+        // Clay: the reference palette's terracotta `--primary`. Dark mode is its
+        // #D97757 verbatim; light mode is its #C96442 taken from 52% to 45%
+        // lightness (hue and saturation unchanged). The web original clears the
+        // 3:1 bar for large text on white, not the 4.5:1 this app holds accents
+        // to — small labels and icons sit on the accent here too.
+        case .clay: Color(light: 0xB35333, dark: 0xD97757)
         }
     }
 
@@ -318,6 +325,11 @@ enum AppTheme: String, CaseIterable, Identifiable {
         case .pop: Color(light: 0x14B8A6, dark: 0x2DD4BF)
         // Aged bronze against the slate.
         case .colonnade: Color(light: 0x8A6A4B, dark: 0xC9A882)
+        // The palette's `--chart-2` lavender, deepened for light mode so it stays
+        // readable as text (it is used as a foreground, not only in gradients).
+        // A taupe companion would have made this a second Paper; the lavender is
+        // the one hue in the reference set that isn't a warm neutral.
+        case .clay: Color(light: 0x7A5FE0, dark: 0x9C87F5)
         }
     }
 
@@ -389,6 +401,16 @@ enum AppTheme: String, CaseIterable, Identifiable {
                 Color(light: 0xF8F6F1, dark: 0x121110),
                 Color(light: 0xFCFBF8, dark: 0x0A0A09),
             ]
+        case .clay:
+            // Lands on the palette's own `--background` (#FAF9F5 / #262624) rather
+            // than the shared near-neutral base, with a faint warm wash above it.
+            // Dark mode deliberately stays a warm mid-grey instead of dropping to
+            // near-black: that raised ground is the reference dark mode's whole look.
+            [
+                Color(light: 0xF2EFE6, dark: 0x2C2C2B),
+                Color(light: 0xF7F5F0, dark: 0x262624),
+                Color(light: 0xFAF9F5, dark: 0x1F1E1D),
+            ]
         }
     }
 }
@@ -409,6 +431,7 @@ extension AppTheme {
     var ruleOverride: Color? {
         switch self {
         case .colonnade: Color(light: 0xD3CDC0, dark: 0x37342E)
+        case .clay: Color(light: 0xDAD9D4, dark: 0x3E3E38)   // `--border`
         default: nil
         }
     }
@@ -417,6 +440,11 @@ extension AppTheme {
     var surfaceOverride: Color? {
         switch self {
         case .colonnade: Color(light: 0xFFFFFF, dark: 0x1D1C1A)
+        // `--popover`, not `--card`: the reference `--card` (#F5F4EF) is *darker*
+        // than its background, which works on the web where cards carry a border on
+        // a flat page. Here a card sits on a gradient, so it has to be the brightest
+        // surface at every stop or it reads as a hole partway down the screen.
+        case .clay: Color(light: 0xFFFFFF, dark: 0x30302E)
         default: nil
         }
     }
@@ -425,6 +453,10 @@ extension AppTheme {
     var fieldOverride: Color? {
         switch self {
         case .colonnade: Color(light: 0xEDE9E0, dark: 0x2A2724)
+        // `--muted` in light. Dark takes `--sidebar` rather than the reference
+        // `--input` (#52514A), which is a border color there and would read as a
+        // raised block, not a well, once it fills the field.
+        case .clay: Color(light: 0xEDE9DE, dark: 0x1F1E1D)
         default: nil
         }
     }
@@ -434,6 +466,7 @@ extension AppTheme {
     var textSecondaryOverride: Color? {
         switch self {
         case .colonnade: Color(light: 0x5C564C, dark: 0xB6B0A5)
+        case .clay: Color(light: 0x6E6D68, dark: 0xB7B5A9)   // `--muted-foreground`
         default: nil
         }
     }
@@ -446,6 +479,10 @@ extension AppTheme {
         case .colonnade: [
             Color(light: 0xF1EEE7, dark: 0x171614),
             Color(light: 0xFCFBF8, dark: 0x0A0A09),
+        ]
+        case .clay: [
+            Color(light: 0xF2EFE6, dark: 0x2C2C2B),
+            Color(light: 0xFAF9F5, dark: 0x1F1E1D),
         ]
         default: nil
         }
