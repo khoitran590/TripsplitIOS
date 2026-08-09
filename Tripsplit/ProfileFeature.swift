@@ -1854,6 +1854,20 @@ enum ShareCardCover: String, CaseIterable, Identifiable {
         }
     }
 
+    /// The three-letter issuing-state code the data page prints in its header and again
+    /// at the head of the machine-readable zone. The country's own ICAO code, so picking a
+    /// cover changes what the document says it was issued by and not just its colour.
+    var code: String {
+        switch self {
+        case .unitedStates: "USA"
+        case .europeanUnion: "EUR"
+        case .japan: "JPN"
+        case .mexico: "MEX"
+        case .vietnam: "VNM"
+        case .newZealand: "NZL"
+        }
+    }
+
     /// The embossing: gold foil on most covers, silver on the black one.
     var foil: Color {
         switch self {
@@ -1887,7 +1901,7 @@ struct ProfileShareCard: View {
     /// downloading when `ImageRenderer` rasterizes it, and print as the monogram.
     let photo: UIImage?
     let stats: ProfileStats
-    /// Every visited place: the first two are stamped, the rest still count toward the
+    /// Every visited place: the first few are stamped, the rest still count toward the
     /// flag row and the "+n more" line.
     let places: [VisitedPlace]
     /// The passport cover the page is bound in, and the foil its spine is embossed with.
@@ -1911,9 +1925,27 @@ struct ProfileShareCard: View {
         String(name.split(separator: " ").prefix(2).compactMap(\.first)).uppercased()
     }
 
-    /// Two stamps, not three. They overlap and run off the page here rather than sitting
-    /// in a tidy centred row, and a third had nowhere to land that wasn't on the numerals.
-    private var stamped: [VisitedPlace] { Array(places.prefix(2)) }
+    /// Up to three stamps — as many as the visa band holds at a diameter where the wording
+    /// around the rim is still readable. The rest still count toward the flag row and the
+    /// "+n more" line.
+    private var stamped: [VisitedPlace] { Array(places.prefix(3)) }
+
+    /// Where each stamp lands in the visa band: its centre as a fraction of the band's
+    /// width, its offset from the band's middle as a fraction of the band's height, its
+    /// diameter, and the angle it was pressed at.
+    ///
+    /// A table per count rather than one formula. Two stamps spread across a band scaled
+    /// for three read as a row with a hole in it, so a pair is printed larger and pulled
+    /// in; a lone stamp is printed larger still and centred. The vertical offsets
+    /// alternate because stamps go onto a page one at a time, by hand, and a level row of
+    /// them reads as a chart rather than as a travel record.
+    private var stampLayout: [(x: CGFloat, y: CGFloat, size: CGFloat, tilt: Double)] {
+        switch stamped.count {
+        case 1: [(0.50, 0.00, 114, -7)]
+        case 2: [(0.28, -0.06, 110, -10), (0.72, 0.08, 100, 7)]
+        default: [(0.20, -0.07, 108, -11), (0.49, 0.12, 96, 6), (0.79, -0.09, 104, -4)]
+        }
+    }
 
     /// Flags for the countries behind the places, in the order they were visited — a
     /// passport page reads as one at a glance, before any of the numbers are.
@@ -1943,28 +1975,18 @@ struct ProfileShareCard: View {
     /// available. Falls back to today for a profile whose trips carry no dates.
     private var issued: Date { places.compactMap(\.date).min() ?? .now }
 
+    /// Ten years on — the validity a passport is issued for.
+    private var expires: Date {
+        Calendar.current.date(byAdding: .year, value: 10, to: issued) ?? issued
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             spineView
             pageView
         }
         .frame(width: width, height: height)
-        .background { ZStack { page; guilloche }.clipped() }
-        // Stamps last, and as overlays rather than in the stack, so the ink lands on top
-        // of whatever was already printed there.
-        //
-        // Both sit fully on the page. Letting one bleed off the edge is what a real
-        // passport does, but the card's edge is a hard vertical cut through a perfect
-        // circle, so a stamp crossing it lost half its rim wording mid-word and read as a
-        // rendering fault rather than as ink running off the paper.
-        //
-        // Positioned from the leading edge, which is the card's own origin and includes
-        // the spine, so these read as page coordinates. They fill the open band between
-        // the counts and the visas — the area a page keeps clear for exactly this.
-        .overlay(alignment: .topLeading) { stamp(0, size: 96, tilt: -12, x: 238, y: 250) }
-        // Held right of x=172 and above y=372: the visas label runs to about there, and a
-        // stamp over it obscures wording rather than decorating it.
-        .overlay(alignment: .topLeading) { stamp(1, size: 84, tilt: 8, x: 174, y: 286) }
+        .background { ZStack { page; guilloche; gutter }.clipped() }
     }
 
     /// The cover, as the spine of an open passport.
@@ -1999,11 +2021,13 @@ struct ProfileShareCard: View {
             rule.padding(.top, 7)
             identity.padding(.top, 14)
             counts
-                .padding(.top, 18)
-                .overlay(alignment: .top) { rule }
                 .padding(.top, 16)
-            Spacer(minLength: 12)
-            endorsements.padding(.bottom, 14)
+                .overlay(alignment: .top) { rule }
+                .padding(.top, 14)
+            visaBand
+            endorsements
+                .overlay(alignment: .bottomTrailing) { ghostPortrait }
+                .padding(.bottom, 12)
             machineReadableZone
         }
         .padding(.horizontal, 18)
@@ -2011,22 +2035,83 @@ struct ProfileShareCard: View {
         .padding(.bottom, 14)
     }
 
+    /// The open middle of the page, and the only part of it that stretches: whatever the
+    /// blocks above and below don't use is visa space, which is what a passport page does
+    /// with its middle too.
+    ///
+    /// The stamps are placed inside this band rather than offset from the card's own
+    /// corner, which is what they used to be. Card coordinates left them wherever the
+    /// numbers above happened to end — clustered to one side with the rest of the band
+    /// unaccounted for, and the first of them cut in half by the card's edge.
+    private var visaBand: some View {
+        GeometryReader { geometry in
+            ZStack {
+                ForEach(Array(stamped.enumerated()), id: \.offset) { index, place in
+                    let spec = stampLayout[index]
+                    PlaceStampBadge(place: place, size: spec.size, page: page)
+                        // Just off full strength: a stamp is ink pressed into paper, and
+                        // at 100% it sits on top of the page as artwork rather than in it.
+                        .opacity(0.94)
+                        .rotationEffect(.degrees(spec.tilt))
+                        .position(x: geometry.size.width * spec.x,
+                                  y: geometry.size.height * (0.5 + spec.y))
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// The shadow a page throws as it curves down into the binding — the cue that makes
+    /// this read as an open book rather than a cream rectangle with a stripe down one side.
+    private var gutter: some View {
+        LinearGradient(colors: [.black.opacity(0.13), .black.opacity(0.02), .clear],
+                       startPoint: .leading, endPoint: .trailing)
+            .frame(width: 46)
+            .offset(x: spine)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private var rule: some View {
         Rectangle().fill(ink.opacity(0.3)).frame(height: 1)
     }
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            chipSymbol.alignmentGuide(.firstTextBaseline) { $0[.bottom] - 0.5 }
             Text("Passport / Passeport")
                 .font(.system(size: 9, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(1.5)
                 .foregroundStyle(ink)
             Spacer()
-            // The type and issuing-authority codes every data page opens with.
+            // The type and issuing-state codes every data page opens with.
             Text(verbatim: "TYPE P").font(document(8.5, .medium)).foregroundStyle(ink.opacity(0.55))
-            Text(verbatim: "CODE TSP").font(document(8.5, .medium)).foregroundStyle(ink.opacity(0.55))
+            Text(verbatim: "CODE \(cover.code)").font(document(8.5, .medium)).foregroundStyle(ink.opacity(0.55))
         }
+    }
+
+    /// The biometric-passport symbol a data page carries beside its title: a chip in a
+    /// rectangle, radiating. Drawn from shapes because there is no SF Symbol for it, and
+    /// it is the one mark that says *passport* before a word of the page has been read.
+    private var chipSymbol: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 1.6, style: .continuous)
+                .strokeBorder(ink.opacity(0.75), lineWidth: 0.9)
+            Circle().fill(ink.opacity(0.75)).frame(width: 2.4, height: 2.4).offset(x: -2.6)
+            chipWave(diameter: 4.4, x: -1.2)
+            chipWave(diameter: 7.6, x: -0.4)
+        }
+        .frame(width: 12, height: 9)
+    }
+
+    /// One of the symbol's two radiating arcs — a right-facing quarter circle.
+    private func chipWave(diameter: CGFloat, x: CGFloat) -> some View {
+        Circle()
+            .trim(from: 0, to: 0.25)
+            .stroke(ink.opacity(0.75), lineWidth: 0.8)
+            .rotationEffect(.degrees(-45))
+            .frame(width: diameter, height: diameter)
+            .offset(x: x)
     }
 
     /// Portrait and the name block beside it.
@@ -2036,9 +2121,9 @@ struct ProfileShareCard: View {
     /// first and "Jennie Tran" puts it last — and guessing wrong prints someone's name
     /// backwards on the thing they are about to post.
     private var identity: some View {
-        HStack(alignment: .top, spacing: 14) {
+        HStack(alignment: .top, spacing: 16) {
             portrait
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 12) {
                 field("Name / Nom") {
                     Text(verbatim: name.uppercased())
                         .font(document(19, .bold))
@@ -2046,16 +2131,35 @@ struct ProfileShareCard: View {
                         .lineLimit(2)
                         .minimumScaleFactor(0.55)
                 }
-                field("Passport no.") {
-                    Text(verbatim: "TS\(serial)").font(document(13)).foregroundStyle(ink)
+                // Paired into two columns rather than stacked down one: three short values
+                // in a single column left the page's whole upper right quarter empty, and
+                // a data page is a grid of fields, not a list of them.
+                HStack(alignment: .top, spacing: 10) {
+                    field("Passport no.") { documentValue(Text(verbatim: "TS\(serial)")) }
+                    field("Authority / Autorité") { documentValue(Text(cover.label)) }
                 }
-                field("Issued / Délivré") {
-                    Text(verbatim: issued.formatted(.dateTime.month(.abbreviated).year()).uppercased())
-                        .font(document(13))
-                        .foregroundStyle(ink)
+                HStack(alignment: .top, spacing: 10) {
+                    field("Issued / Délivré") { documentValue(Text(verbatim: monthYear(issued))) }
+                    field("Expires / Expire") { documentValue(Text(verbatim: monthYear(expires))) }
                 }
             }
         }
+    }
+
+    /// A data-page value in one of the paired columns: allowed to shrink rather than wrap,
+    /// because a long country name would otherwise take a second line the row has no room
+    /// for. Takes a `Text` so a localized country name arrives still localized.
+    private func documentValue(_ value: Text) -> some View {
+        value
+            .font(document(12))
+            .textCase(.uppercase)
+            .foregroundStyle(ink)
+            .lineLimit(1)
+            .minimumScaleFactor(0.55)
+    }
+
+    private func monthYear(_ date: Date) -> String {
+        date.formatted(.dateTime.month(.abbreviated).year())
     }
 
     /// Rectangular, because a biodata photo is. The circular portrait it replaces was the
@@ -2073,9 +2177,63 @@ struct ProfileShareCard: View {
                 }
             }
         }
-        .frame(width: 86, height: 118)
+        .frame(width: 86, height: 124)
         .clipped()
         .overlay(Rectangle().strokeBorder(ink.opacity(0.32), lineWidth: 0.75))
+        // Straddling the portrait's corner, the way a laminate seal is applied over the
+        // photo's edge so the picture can't be swapped without breaking it.
+        .overlay(alignment: .bottomTrailing) { laminateSeal.offset(x: 13, y: 12) }
+    }
+
+    /// The optically variable patch a laminated data page carries over its portrait: an
+    /// angular sweep through the prismatic sequence a hologram runs, etched with the fine
+    /// concentric rings the diffraction sits in.
+    ///
+    /// The one thing on the page that is neither the cover's ink nor the paper — a printed
+    /// document is monochrome by nature, and without this the card had no colour of its own
+    /// beyond whatever the stamps happened to bring.
+    private var laminateSeal: some View {
+        let diameter: CGFloat = 36
+        return ZStack {
+            Circle().fill(
+                AngularGradient(
+                    colors: [Color(hex: 0xE9B8C8), Color(hex: 0xF2DDA8), Color(hex: 0xB8E0D2),
+                             Color(hex: 0xB9C8EE), Color(hex: 0xE0BCE8), Color(hex: 0xE9B8C8)],
+                    center: .center
+                )
+            )
+            ForEach(1..<5) { ring in
+                Circle()
+                    .inset(by: CGFloat(ring) * diameter * 0.09)
+                    .strokeBorder(.white.opacity(0.45), lineWidth: 0.5)
+            }
+            Image(systemName: "globe")
+                .font(.system(size: diameter * 0.34, weight: .light))
+                .foregroundStyle(.white.opacity(0.85))
+            Circle().strokeBorder(.white.opacity(0.6), lineWidth: 0.8)
+        }
+        .frame(width: diameter, height: diameter)
+        .opacity(0.72)
+    }
+
+    /// The secondary portrait a data page repeats down beside the machine-readable zone,
+    /// printed faint and desaturated where the main one is neither.
+    ///
+    /// Only drawn when there is a photo: a second copy of the monogram would read as a
+    /// duplicated view rather than as a security feature.
+    @ViewBuilder
+    private var ghostPortrait: some View {
+        if let photo {
+            Image(uiImage: photo)
+                .resizable()
+                .scaledToFill()
+                .frame(width: 40, height: 54)
+                .clipped()
+                .grayscale(0.85)
+                .opacity(0.5)
+                .overlay(Rectangle().strokeBorder(ink.opacity(0.22), lineWidth: 0.5))
+                .offset(y: -10)
+        }
     }
 
     /// Three counts, not the old four: `places` and `countries` answer nearly the same
@@ -2103,23 +2261,24 @@ struct ProfileShareCard: View {
             .minimumScaleFactor(0.6)
     }
 
+    /// Flags and the overflow count on one line, under one label. Stacked as two rows it
+    /// took a third of the page's height to say very little, and every point it used came
+    /// out of the visa band above it. A profile with nowhere in it prints the label over an
+    /// empty value, which is what a passport with no endorsements yet looks like.
     private var endorsements: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            if !flags.isEmpty {
-                field("Visas / Endorsements") {
-                    HStack(spacing: 5) {
-                        ForEach(flags, id: \.self) { flag in
-                            Text(verbatim: flag).font(.system(size: 16))
-                        }
-                    }
+        field("Visas / Endorsements") {
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                ForEach(flags, id: \.self) { flag in
+                    Text(verbatim: flag).font(.system(size: 17))
                 }
-            }
-            if places.count > stamped.count {
-                Text("+\(places.count - stamped.count) more places")
-                    .font(document(8.5))
-                    .textCase(.uppercase)
-                    .tracking(0.6)
-                    .foregroundStyle(ink.opacity(0.5))
+                if places.count > stamped.count {
+                    Text("+\(places.count - stamped.count) more")
+                        .font(document(8.5))
+                        .textCase(.uppercase)
+                        .tracking(0.6)
+                        .foregroundStyle(ink.opacity(0.5))
+                        .padding(.leading, 2)
+                }
             }
         }
     }
@@ -2156,20 +2315,8 @@ struct ProfileShareCard: View {
         let invite = "ADDMEONTRIPSPLIT"
         let parts = Calendar.current.dateComponents([.year, .month], from: issued)
         let stamp = String(format: "%04d%02d", parts.year ?? 0, parts.month ?? 0)
-        return (pad("P<TSP" + encode(name), to: 44),
+        return (pad("P<" + cover.code + encode(name), to: 44),
                 pad("TS\(serial)<\(stamp)", to: 44 - invite.count) + invite)
-    }
-
-    @ViewBuilder
-    private func stamp(_ index: Int, size: CGFloat, tilt: Double, x: CGFloat, y: CGFloat) -> some View {
-        if index < stamped.count {
-            PlaceStampBadge(place: stamped[index], size: size, page: page)
-                // Just off full strength: a stamp is ink pressed into paper, and at 100%
-                // it sits on top of the page as artwork rather than in it.
-                .opacity(0.94)
-                .rotationEffect(.degrees(tilt))
-                .offset(x: x, y: y)
-        }
     }
 
     /// A labelled field, the way a data page sets one: a tiny tracked-caps label over a
@@ -2205,25 +2352,53 @@ struct ProfileShareCard: View {
         .system(size: size, weight: weight, design: .monospaced)
     }
 
-    /// Security-print line work: rose curves, the engraving a data page carries under its
-    /// type. Held near the threshold of visibility, because this is a ground rather than a
-    /// pattern, and drawn in `Canvas` for the same reason the grain is.
+    /// Security-print line work: two families of fine waves, the second laid across the
+    /// first at an angle, which is how engine-turned guilloche is generated — the lines
+    /// beat against each other and the interference is the pattern. Held near the threshold
+    /// of visibility, because this is a ground rather than a pattern, and drawn in `Canvas`
+    /// for the same reason the grain is.
+    ///
+    /// Concentric rose curves came first and were wrong for the job. At the radii a whole
+    /// page needs they are a handful of enormous arcs, so most of the page sees one stray
+    /// line wandering across it and reads as a hair on the paper rather than as printing.
+    /// Crossed wave families cover every part of the page at the same density, which is
+    /// what makes it read as stock however the card is cropped.
     private var guilloche: some View {
         Canvas { context, size in
-            let centre = CGPoint(x: size.width * 0.55, y: size.height * 0.52)
-            for ring in 0..<9 {
-                var path = Path()
-                let radius = 46 + CGFloat(ring) * 25
-                let amplitude = 0.09 + CGFloat(ring % 3) * 0.04
-                let lobes = CGFloat(5 + ring % 5)
-                let phase = CGFloat(ring) * 0.5
-                for step in 0...900 {
-                    let t = CGFloat(step) / 900 * 2 * .pi
-                    let r = radius * (1 + amplitude * cos(lobes * t + phase))
-                    let point = CGPoint(x: centre.x + r * cos(t), y: centre.y + r * sin(t) * 0.85)
-                    if step == 0 { path.move(to: point) } else { path.addLine(to: point) }
+            // Drawn across a square larger than the card so the turned family still reaches
+            // the corners once it has been rotated into place.
+            let span = max(size.width, size.height) * 1.6
+            func family(_ layer: GraphicsContext, spacing: CGFloat, amplitude: CGFloat,
+                        wavelength: CGFloat, skew: CGFloat, phase: CGFloat, tone: Color) {
+                var origin = -amplitude * 2
+                while origin < span + amplitude * 2 {
+                    var path = Path()
+                    var x: CGFloat = 0
+                    while x <= span {
+                        // `skew` walks the phase line by line, so the family shears
+                        // gradually instead of repeating the same wave down the page.
+                        let y = origin + amplitude * sin(x / wavelength + origin * skew + phase)
+                        let point = CGPoint(x: x, y: y)
+                        if x == 0 { path.move(to: point) } else { path.addLine(to: point) }
+                        x += 4
+                    }
+                    layer.stroke(path, with: .color(tone), lineWidth: 0.5)
+                    origin += spacing
                 }
-                context.stroke(path, with: .color(ink.opacity(0.075)), lineWidth: 0.6)
+            }
+            context.drawLayer { layer in
+                layer.translateBy(x: -(span - size.width) / 2, y: -(span - size.height) / 2)
+                family(layer, spacing: 6.5, amplitude: 5.5, wavelength: 27, skew: 0.055,
+                       phase: 0, tone: ink.opacity(0.068))
+            }
+            // The second ink. Data pages are printed in two or three colours precisely so
+            // their line work interferes; one ink alone gives a flat, even hatch.
+            context.drawLayer { layer in
+                layer.translateBy(x: size.width / 2, y: size.height / 2)
+                layer.rotate(by: .degrees(-26))
+                layer.translateBy(x: -span / 2, y: -span / 2)
+                family(layer, spacing: 6.5, amplitude: 4.2, wavelength: 17.5, skew: -0.08,
+                       phase: 1.9, tone: Color(hex: 0xB3543A).opacity(0.063))
             }
         }
     }
