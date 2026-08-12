@@ -1843,14 +1843,17 @@ enum ShareCardCover: String, CaseIterable, Identifiable {
     }
 
     /// The cover stock, lit from the top-left the way a leather cover catches light.
+    ///
+    /// Three stops rather than two: the card is bound in the cover on all four sides, and a
+    /// two-stop gradient stretched over that much board bands visibly across its middle.
     var colors: [Color] {
         switch self {
-        case .unitedStates: [Color(hex: 0x1E3560), Color(hex: 0x0B1526)]
-        case .europeanUnion: [Color(hex: 0x6E2038), Color(hex: 0x33101E)]
-        case .japan: [Color(hex: 0xA82B33), Color(hex: 0x5E121A)]
-        case .mexico: [Color(hex: 0x1D5A3C), Color(hex: 0x0A2A1C)]
-        case .vietnam: [Color(hex: 0x3A3573), Color(hex: 0x191634)]
-        case .newZealand: [Color(hex: 0x2C2C31), Color(hex: 0x0B0B0D)]
+        case .unitedStates: [Color(hex: 0x2A4677), Color(hex: 0x152A4B), Color(hex: 0x08111F)]
+        case .europeanUnion: [Color(hex: 0x7E2742), Color(hex: 0x4C1727), Color(hex: 0x230A12)]
+        case .japan: [Color(hex: 0xB63039), Color(hex: 0x7B1A21), Color(hex: 0x420C11)]
+        case .mexico: [Color(hex: 0x24734B), Color(hex: 0x134A30), Color(hex: 0x062218)]
+        case .vietnam: [Color(hex: 0x494284), Color(hex: 0x2A2557), Color(hex: 0x121029)]
+        case .newZealand: [Color(hex: 0x3A3A41), Color(hex: 0x1D1D22), Color(hex: 0x08080A)]
         }
     }
 
@@ -1876,8 +1879,39 @@ enum ShareCardCover: String, CaseIterable, Identifiable {
         }
     }
 
-    /// The cover's deepest tone, for type printed on the card's cream paper.
+    /// The cover's deepest tone, for type printed on the page and for the band the page's
+    /// header is reversed out of.
     var ink: Color { colors.last ?? .black }
+
+    /// The page stock. Printed paper is never white — and here it is never the same cream
+    /// twice either: every cover's page is mixed toward that cover's own hue, so choosing a
+    /// country repaints the card's whole ground instead of one strip down its edge.
+    var paper: Color {
+        switch self {
+        case .unitedStates: Color(hex: 0xEEF1F7)
+        case .europeanUnion: Color(hex: 0xFAF0F0)
+        case .japan: Color(hex: 0xFCF2EB)
+        case .mexico: Color(hex: 0xEDF5EE)
+        case .vietnam: Color(hex: 0xF1EFF9)
+        case .newZealand: Color(hex: 0xF5F3EE)
+        }
+    }
+
+    /// The second ink the page's security printing runs in. Data pages are printed in two
+    /// or three colours precisely so their line work interferes, and the pairing is picked
+    /// to sit *against* the cover rather than with it — blue line work under a red Japanese
+    /// page, gold under the indigo ones — because a second ink in the cover's own hue
+    /// disappears into the first and the guilloche flattens to a plain hatch.
+    var lineInk: Color {
+        switch self {
+        case .unitedStates: Color(hex: 0xB3543A)
+        case .europeanUnion: Color(hex: 0xC08A3E)
+        case .japan: Color(hex: 0x2F5FA8)
+        case .mexico: Color(hex: 0xB05236)
+        case .vietnam: Color(hex: 0xC08A3E)
+        case .newZealand: Color(hex: 0x8A6A4A)
+        }
+    }
 }
 
 /// The profile rendered as a picture: a passport biodata page someone can post anywhere,
@@ -1888,8 +1922,13 @@ enum ShareCardCover: String, CaseIterable, Identifiable {
 /// carries an emblem, a country and the word PASSPORT and nothing else, so a cover loaded
 /// with a portrait, four counts and three captioned stamps was working against itself.
 /// Everything here is what a biodata page genuinely holds, set the way a page sets it —
-/// left-aligned, ruled and field-labelled rather than centred, with the chosen cover kept
-/// as the spine so the country picker still changes something real.
+/// left-aligned, ruled and field-labelled rather than centred.
+///
+/// The cover is the card's ground, not a stripe on it. Shown as a 30pt spine down one
+/// edge, the country picker changed a thirteenth of the picture and every cover produced
+/// the same cream card; the page is now *mounted* in the cover, which frames it on all
+/// four sides, prints its own stock in the cover's tone, and reverses the page header out
+/// of a band of the cover's ink.
 ///
 /// Deliberately built from gradients, shapes and `Canvas` — `ImageRenderer` cannot
 /// rasterize glass, materials or blurs, which come out empty. Nothing is shrunk with
@@ -1904,7 +1943,7 @@ struct ProfileShareCard: View {
     /// Every visited place: the first few are stamped, the rest still count toward the
     /// flag row and the "+n more" line.
     let places: [VisitedPlace]
-    /// The passport cover the page is bound in, and the foil its spine is embossed with.
+    /// The passport cover the page is bound in: its board, its paper and its foil.
     var cover: ShareCardCover = .unitedStates
 
     /// 4:5. Deliberately not the old 0.61: that was too tall for a feed, which cropped it,
@@ -1912,14 +1951,17 @@ struct ProfileShareCard: View {
     /// so the shared picture is 1140x1410.
     private let width: CGFloat = 380
     private let height: CGFloat = 470
-    /// How much of the cover shows down the left edge as the spine.
-    private let spine: CGFloat = 30
-    /// The page stock — warm, never white, the way printed stock never is.
-    private let page = Color(hex: 0xFBF7EC)
+    /// How much cover shows around the mounted page — the border of the passport's own
+    /// board, and the first thing the card is read by.
+    private let margin: CGFloat = 14
+    /// The deeper band of cover above the page, carrying the foil a cover is embossed with.
+    private let coverBand: CGFloat = 30
 
-    /// The page is printed in the cover's deepest tone, so a Japan cover prints a
-    /// red-inked page and a Mexico cover a green one.
+    /// The page is printed in the cover's deepest tone on the cover's own stock, so a Japan
+    /// cover prints a red-inked page on warm paper and a Mexico cover a green-inked one on
+    /// cool.
     private var ink: Color { cover.ink }
+    private var page: Color { cover.paper }
 
     private var initials: String {
         String(name.split(separator: " ").prefix(2).compactMap(\.first)).uppercased()
@@ -1941,9 +1983,9 @@ struct ProfileShareCard: View {
     /// them reads as a chart rather than as a travel record.
     private var stampLayout: [(x: CGFloat, y: CGFloat, size: CGFloat, tilt: Double)] {
         switch stamped.count {
-        case 1: [(0.50, 0.00, 114, -7)]
-        case 2: [(0.28, -0.06, 110, -10), (0.72, 0.08, 100, 7)]
-        default: [(0.20, -0.07, 108, -11), (0.49, 0.12, 96, 6), (0.79, -0.09, 104, -4)]
+        case 1: [(0.50, 0.00, 106, -7)]
+        case 2: [(0.28, -0.06, 100, -10), (0.72, 0.08, 92, 7)]
+        default: [(0.20, -0.07, 98, -11), (0.49, 0.11, 88, 6), (0.79, -0.09, 94, -4)]
         }
     }
 
@@ -1981,58 +2023,92 @@ struct ProfileShareCard: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            spineView
+        VStack(spacing: 0) {
+            coverWordmark
             pageView
+                .background { pageStock }
+                .clipShape(pageShape)
+                // The recess the page is mounted in, and the foil rule around it. A real
+                // drop shadow would be a blur, and `ImageRenderer` rasterizes blurs empty —
+                // a dark edge a hair wider than the page does the same work here.
+                .background { pageShape.fill(.black.opacity(0.3)).padding(-1.5) }
+                .overlay { pageShape.strokeBorder(cover.foil.opacity(0.45), lineWidth: 0.8) }
+                .padding(.horizontal, margin)
+                .padding(.bottom, margin)
         }
         .frame(width: width, height: height)
-        .background { ZStack { page; guilloche; gutter }.clipped() }
+        .background { coverStock }
+        .clipped()
     }
 
-    /// The cover, as the spine of an open passport.
-    private var spineView: some View {
+    /// Barely rounded: the leaf of a bound document, not a card.
+    private var pageShape: RoundedRectangle { .rect(cornerRadius: 5, style: .continuous) }
+
+    /// The cover the card is bound in: the stock, its grain, and the light a leather board
+    /// catches across the corner it is lit from.
+    private var coverStock: some View {
         ZStack {
-            LinearGradient(colors: cover.colors, startPoint: .top, endPoint: .bottom)
+            LinearGradient(colors: cover.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+            RadialGradient(colors: [.white.opacity(0.14), .clear],
+                           center: UnitPoint(x: 0.16, y: 0.04),
+                           startRadius: 0, endRadius: width * 0.95)
             leatherGrain
-            // One key rather than a verbatim wordmark concatenated onto a localized
-            // phrase: `Text + Text` is deprecated, and translators leave a brand name
-            // alone inside a string anyway.
+        }
+    }
+
+    /// What a cover actually carries: an emblem and a wordmark, foiled into the board and
+    /// nothing else. The rules either side centre it the way embossing is centred.
+    ///
+    /// One key rather than a verbatim wordmark concatenated onto a localized phrase:
+    /// `Text + Text` is deprecated, and translators leave a brand name alone inside a
+    /// string anyway.
+    private var coverWordmark: some View {
+        HStack(spacing: 9) {
+            foilRule
+            Image(systemName: "globe")
+                .font(.system(size: 11, weight: .light))
+                .foregroundStyle(cover.foil.opacity(0.92))
             Text("TripSplit · Travel passport")
                 .font(.system(size: 8.5, weight: .bold))
                 .textCase(.uppercase)
-                .tracking(2.4)
+                .tracking(2.2)
                 .foregroundStyle(cover.foil.opacity(0.92))
                 .fixedSize()
-                // Rotated text keeps its *unrotated* footprint, which would otherwise
-                // drive the spine to the full height of the card in width; the second
-                // frame takes that footprint back.
-                .frame(width: height, height: spine)
-                .rotationEffect(.degrees(-90))
-                .frame(width: spine, height: height)
+            foilRule
         }
-        .frame(width: spine, height: height)
-        .clipped()
-        .overlay(alignment: .trailing) { Rectangle().fill(cover.foil.opacity(0.55)).frame(width: 1) }
+        .padding(.horizontal, margin + 2)
+        .frame(height: coverBand)
+    }
+
+    private var foilRule: some View {
+        Rectangle().fill(cover.foil.opacity(0.3)).frame(height: 0.8)
+    }
+
+    /// The paper the page is printed on: the cover's own stock tone under its security
+    /// line work.
+    private var pageStock: some View {
+        ZStack { page; guilloche }
     }
 
     private var pageView: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            rule.padding(.top, 7)
-            identity.padding(.top, 14)
-            counts
-                .padding(.top, 16)
-                .overlay(alignment: .top) { rule }
-                .padding(.top, 14)
-            visaBand
-            endorsements
-                .overlay(alignment: .bottomTrailing) { ghostPortrait }
-                .padding(.bottom, 12)
-            machineReadableZone
+            VStack(alignment: .leading, spacing: 0) {
+                identity
+                counts
+                    .padding(.top, 14)
+                    .overlay(alignment: .top) { rule }
+                    .padding(.top, 12)
+                visaBand
+                endorsements
+                    .overlay(alignment: .bottomTrailing) { ghostPortrait }
+                    .padding(.bottom, 10)
+                machineReadableZone
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 14)
+            .padding(.bottom, 12)
         }
-        .padding(.horizontal, 18)
-        .padding(.top, 18)
-        .padding(.bottom, 14)
     }
 
     /// The open middle of the page, and the only part of it that stretches: whatever the
@@ -2061,20 +2137,14 @@ struct ProfileShareCard: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// The shadow a page throws as it curves down into the binding — the cue that makes
-    /// this read as an open book rather than a cream rectangle with a stripe down one side.
-    private var gutter: some View {
-        LinearGradient(colors: [.black.opacity(0.13), .black.opacity(0.02), .clear],
-                       startPoint: .leading, endPoint: .trailing)
-            .frame(width: 46)
-            .offset(x: spine)
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
     private var rule: some View {
         Rectangle().fill(ink.opacity(0.3)).frame(height: 1)
     }
 
+    /// The page's title line, reversed out of a band of the cover's ink across the head of
+    /// the page. A real data page prints its title in the same colour as everything else;
+    /// this one doesn't, because the band is what carries the chosen country *into* the
+    /// page rather than leaving it as a border around one.
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             chipSymbol.alignmentGuide(.firstTextBaseline) { $0[.bottom] - 0.5 }
@@ -2082,22 +2152,31 @@ struct ProfileShareCard: View {
                 .font(.system(size: 9, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(1.5)
-                .foregroundStyle(ink)
+                .foregroundStyle(page)
             Spacer()
             // The type and issuing-state codes every data page opens with.
-            Text(verbatim: "TYPE P").font(document(8.5, .medium)).foregroundStyle(ink.opacity(0.55))
-            Text(verbatim: "CODE \(cover.code)").font(document(8.5, .medium)).foregroundStyle(ink.opacity(0.55))
+            Text(verbatim: "TYPE P").font(document(8.5, .medium)).foregroundStyle(page.opacity(0.72))
+            Text(verbatim: "CODE \(cover.code)").font(document(8.5, .medium)).foregroundStyle(page.opacity(0.72))
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
+        .background {
+            LinearGradient(colors: [ink.opacity(0.9), ink], startPoint: .leading, endPoint: .trailing)
+        }
+        .overlay(alignment: .bottom) { Rectangle().fill(cover.foil.opacity(0.4)).frame(height: 0.8) }
     }
 
     /// The biometric-passport symbol a data page carries beside its title: a chip in a
     /// rectangle, radiating. Drawn from shapes because there is no SF Symbol for it, and
     /// it is the one mark that says *passport* before a word of the page has been read.
+    ///
+    /// Drawn in the page stock, not the ink: it sits inside the reversed header band.
     private var chipSymbol: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 1.6, style: .continuous)
-                .strokeBorder(ink.opacity(0.75), lineWidth: 0.9)
-            Circle().fill(ink.opacity(0.75)).frame(width: 2.4, height: 2.4).offset(x: -2.6)
+                .strokeBorder(page.opacity(0.85), lineWidth: 0.9)
+            Circle().fill(page.opacity(0.85)).frame(width: 2.4, height: 2.4).offset(x: -2.6)
             chipWave(diameter: 4.4, x: -1.2)
             chipWave(diameter: 7.6, x: -0.4)
         }
@@ -2108,7 +2187,7 @@ struct ProfileShareCard: View {
     private func chipWave(diameter: CGFloat, x: CGFloat) -> some View {
         Circle()
             .trim(from: 0, to: 0.25)
-            .stroke(ink.opacity(0.75), lineWidth: 0.8)
+            .stroke(page.opacity(0.85), lineWidth: 0.8)
             .rotationEffect(.degrees(-45))
             .frame(width: diameter, height: diameter)
             .offset(x: x)
@@ -2172,12 +2251,14 @@ struct ProfileShareCard: View {
             } else {
                 Rectangle().fill(ink.opacity(0.08)).overlay {
                     Text(verbatim: initials)
-                        .font(.system(size: 32, weight: .bold))
+                        .font(.system(size: 30, weight: .bold))
                         .foregroundStyle(ink.opacity(0.8))
                 }
             }
         }
-        .frame(width: 86, height: 124)
+        // Slightly shorter than it was: the cover band and margins take height off the
+        // page, and the visa band is where that would otherwise have come from.
+        .frame(width: 80, height: 110)
         .clipped()
         .overlay(Rectangle().strokeBorder(ink.opacity(0.32), lineWidth: 0.75))
         // Straddling the portrait's corner, the way a laminate seal is applied over the
@@ -2389,21 +2470,20 @@ struct ProfileShareCard: View {
             context.drawLayer { layer in
                 layer.translateBy(x: -(span - size.width) / 2, y: -(span - size.height) / 2)
                 family(layer, spacing: 6.5, amplitude: 5.5, wavelength: 27, skew: 0.055,
-                       phase: 0, tone: ink.opacity(0.068))
+                       phase: 0, tone: ink.opacity(0.075))
             }
-            // The second ink. Data pages are printed in two or three colours precisely so
-            // their line work interferes; one ink alone gives a flat, even hatch.
+            // The cover's second ink, laid across the first at an angle.
             context.drawLayer { layer in
                 layer.translateBy(x: size.width / 2, y: size.height / 2)
                 layer.rotate(by: .degrees(-26))
                 layer.translateBy(x: -span / 2, y: -span / 2)
                 family(layer, spacing: 6.5, amplitude: 4.2, wavelength: 17.5, skew: -0.08,
-                       phase: 1.9, tone: Color(hex: 0xB3543A).opacity(0.063))
+                       phase: 1.9, tone: cover.lineInk.opacity(0.07))
             }
         }
     }
 
-    /// Pebble grain on the spine: a jittered lattice of cells, each a lit crown sitting over
+    /// Pebble grain on the cover: a jittered lattice of cells, each a lit crown sitting over
     /// a shadow dropped down and right, so the hide reads as raised bumps divided by creases.
     ///
     /// Every pebble is *filled*, never stroked. Stroking the ellipse outlines draws a closed
@@ -2414,9 +2494,11 @@ struct ProfileShareCard: View {
     /// Overlapping subpaths union under nonzero winding instead of stacking their opacity,
     /// which is what keeps the tone even rather than mottled where cells pile up.
     ///
-    /// Cells are ~4pt, which against a 380pt card standing in for a 125mm passport is
-    /// roughly the 1mm grain real pebbled stock has — fine enough that the texture stays a
-    /// surface rather than a pattern competing with the type.
+    /// Cells are ~5pt, which against a 380pt card standing in for a 125mm passport is
+    /// roughly the 1.5mm grain real pebbled stock has — fine enough that the texture stays a
+    /// surface rather than a pattern competing with the type. Not finer: the grain covers
+    /// the whole card now rather than a 30pt spine, and a 4pt cell over that area is 23,000
+    /// ellipses to accumulate on the main actor every time the cover changes.
     ///
     /// Seeded from a fixed constant so re-sharing prints the same hide, and drawn in
     /// `Canvas` because a blur or material would rasterize empty.
@@ -2429,7 +2511,7 @@ struct ProfileShareCard: View {
                 state ^= state << 17
                 return CGFloat(state % 1000) / 1000
             }
-            let step: CGFloat = 4
+            let step: CGFloat = 5
             var shadows = Path()
             var crowns = Path()
             var rowIndex = 0
@@ -2488,13 +2570,22 @@ struct ProfileShareSheet: View {
                                 .scaledToFit()
                         } else {
                             // Holds the card's shape for the frame or two before the
-                            // renderer returns, so the sheet doesn't open on nothing.
+                            // renderer returns, so the sheet doesn't open on nothing —
+                            // cover, mounted page and header band, in that cover's colours.
                             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                                .fill(Color(hex: 0xFBF7EC))
-                                .overlay(alignment: .leading) {
-                                    LinearGradient(colors: cover.colors,
-                                                   startPoint: .top, endPoint: .bottom)
-                                        .frame(width: 30)
+                                .fill(LinearGradient(colors: cover.colors,
+                                                     startPoint: .topLeading,
+                                                     endPoint: .bottomTrailing))
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                        .fill(cover.paper)
+                                        .overlay(alignment: .top) {
+                                            Rectangle().fill(cover.ink).frame(height: 26)
+                                        }
+                                        .clipShape(.rect(cornerRadius: 5, style: .continuous))
+                                        .padding(.horizontal, 14)
+                                        .padding(.top, 30)
+                                        .padding(.bottom, 14)
                                 }
                                 .aspectRatio(0.81, contentMode: .fit)
                         }
@@ -2615,8 +2706,9 @@ struct ShareCardCoverPicker: View {
         }
     }
 
-    /// A passport cover in miniature: the stock, its foil frame and emblem, and a ring
-    /// when it is the one in use.
+    /// The card in miniature rather than a plain swatch of the cover: its foil emblem, the
+    /// page mounted on the board in that cover's own paper, and the inked header band —
+    /// the three things the choice actually changes. A ring marks the one in use.
     private func swatch(_ option: ShareCardCover) -> some View {
         let isSelected = cover == option
         return VStack(spacing: 7) {
@@ -2625,14 +2717,24 @@ struct ShareCardCoverPicker: View {
                                      startPoint: .topLeading, endPoint: .bottomTrailing))
                 .frame(height: 64)
                 .overlay {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .inset(by: 5)
-                        .strokeBorder(option.foil.opacity(0.65), lineWidth: 1)
-                }
-                .overlay {
-                    Image(systemName: "globe")
-                        .font(.app(size: 20, weight: .light))
-                        .foregroundStyle(option.foil.opacity(0.9))
+                    VStack(spacing: 0) {
+                        Image(systemName: "globe")
+                            .font(.app(size: 10, weight: .light))
+                            .foregroundStyle(option.foil.opacity(0.9))
+                            .frame(height: 15)
+                        RoundedRectangle(cornerRadius: 3, style: .continuous)
+                            .fill(option.paper)
+                            .overlay(alignment: .top) {
+                                Rectangle().fill(option.ink).frame(height: 6)
+                            }
+                            .clipShape(.rect(cornerRadius: 3, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                    .strokeBorder(option.foil.opacity(0.5), lineWidth: 0.7)
+                            }
+                    }
+                    .padding(.horizontal, 7)
+                    .padding(.bottom, 7)
                 }
                 .overlay {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
