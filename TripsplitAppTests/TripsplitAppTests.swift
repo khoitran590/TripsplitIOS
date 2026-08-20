@@ -52,14 +52,136 @@ final class TripsplitAppTests: XCTestCase {
         return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
     }
 
-    func testBackendRedirectOriginAllowlist() {
-        XCTAssertTrue(BackendSecurity.isTrustedBackendURL(URL(string: SupabaseConfig.url + "/rest/v1/trips")))
-        XCTAssertTrue(BackendSecurity.isTrustedBackendURL(URL(string: "https://ttgwzwvlochpvtxrxkoz.supabase.co:443/auth/v1/user")))
-        XCTAssertFalse(BackendSecurity.isTrustedBackendURL(URL(string: "https://attacker.example/steal")))
-        XCTAssertFalse(BackendSecurity.isTrustedBackendURL(URL(string: "http://ttgwzwvlochpvtxrxkoz.supabase.co/rest/v1/trips")))
-        XCTAssertFalse(BackendSecurity.isTrustedBackendURL(URL(string: "https://ttgwzwvlochpvtxrxkoz.supabase.co:444/rest/v1/trips")))
-        XCTAssertFalse(BackendSecurity.isTrustedBackendURL(URL(string: "not a URL")))
-        XCTAssertFalse(BackendSecurity.isTrustedBackendURL(nil))
+    func testBackendEnvironmentSelectionIsExplicit() {
+        XCTAssertEqual(BackendEnvironment.localDevelopment.url, "http://127.0.0.1:54321")
+        XCTAssertTrue(BackendEnvironment.localDevelopment.publicKey.hasPrefix("sb_publishable_"))
+        XCTAssertTrue(BackendEnvironment.localDevelopment.includesDetailedDiagnostics)
+
+        #if LOCAL_SUPABASE || LOCAL_SUPABASE_INTEGRATION || LOCAL_SUPABASE_OUTAGE
+        XCTAssertEqual(BackendEnvironment.current.url, BackendEnvironment.localDevelopment.url)
+        #else
+        XCTAssertEqual(BackendEnvironment.current.url, BackendEnvironment.production.url)
+        #endif
+    }
+
+    func testLocalBackendNetworkPolicyFailsFast() {
+        let configuration = BackendSecurity.sessionConfiguration(for: BackendEnvironment.localDevelopment)
+        XCTAssertEqual(configuration.timeoutIntervalForRequest, 5)
+        XCTAssertEqual(configuration.timeoutIntervalForResource, 5)
+        XCTAssertFalse(configuration.waitsForConnectivity)
+    }
+
+    func testProductionBackendNetworkPolicyRetainsConnectivityTolerance() {
+        let configuration = BackendSecurity.sessionConfiguration(for: BackendEnvironment.production)
+        XCTAssertEqual(configuration.timeoutIntervalForRequest, 20)
+        XCTAssertEqual(configuration.timeoutIntervalForResource, 60)
+        XCTAssertTrue(configuration.waitsForConnectivity)
+    }
+
+    func testLongRunningSessionOnlyOverridesTimeouts() {
+        let configuration = BackendSecurity.sessionConfiguration(
+            for: BackendEnvironment.localDevelopment,
+            requestTimeout: 150,
+            resourceTimeout: 150
+        )
+        XCTAssertEqual(configuration.timeoutIntervalForRequest, 150)
+        XCTAssertEqual(configuration.timeoutIntervalForResource, 150)
+        XCTAssertFalse(configuration.waitsForConnectivity)
+        XCTAssertNil(configuration.httpCookieStorage)
+        XCTAssertFalse(configuration.httpShouldSetCookies)
+    }
+
+    func testSignOutClearsLocalSessionBeforeRemoteRevocationCompletes() async throws {
+        let probe = RemoteSignOutProbe()
+        let auth = AuthStore(
+            remoteSessionRevoker: { token in
+                await probe.record(token)
+            },
+            restorePersistedSession: false
+        )
+        let session = AuthSession(
+            accessToken: "local-first-test-token",
+            refreshToken: "unused-refresh-token",
+            email: "signout-test@example.com"
+        )
+        auth.session = session
+
+        auth.signOut()
+
+        XCTAssertNil(auth.session, "Sign-out must not await Docker or Supabase before clearing the UI session.")
+        for _ in 0..<100 {
+            if await probe.token == session.accessToken { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("The best-effort remote revocation was not started.")
+    }
+
+    func testLocalBackendRedirectOriginAllowlist() {
+        let local = BackendEnvironment.localDevelopment
+        XCTAssertTrue(BackendSecurity.isTrustedBackendURL(
+            URL(string: "http://127.0.0.1:54321/rest/v1/trips"),
+            configuration: local
+        ))
+        XCTAssertFalse(BackendSecurity.isTrustedBackendURL(
+            URL(string: "http://127.0.0.1:54322/rest/v1/trips"),
+            configuration: local
+        ))
+        XCTAssertFalse(BackendSecurity.isTrustedBackendURL(
+            URL(string: "https://127.0.0.1:54321/rest/v1/trips"),
+            configuration: local
+        ))
+        XCTAssertFalse(BackendSecurity.isTrustedBackendURL(
+            URL(string: "http://localhost:54321/rest/v1/trips"),
+            configuration: local
+        ))
+        XCTAssertFalse(BackendSecurity.isTrustedBackendURL(
+            URL(string: "http://attacker.example:54321/steal"),
+            configuration: local
+        ))
+        XCTAssertFalse(BackendSecurity.isTrustedBackendURL(
+            URL(string: "http://user@127.0.0.1:54321/steal"),
+            configuration: local
+        ))
+    }
+
+    func testProductionBackendRedirectOriginAllowlist() {
+        let production = BackendEnvironment.production
+        XCTAssertTrue(BackendSecurity.isTrustedBackendURL(
+            URL(string: production.url + "/rest/v1/trips"),
+            configuration: production
+        ))
+        XCTAssertTrue(BackendSecurity.isTrustedBackendURL(
+            URL(string: "https://ttgwzwvlochpvtxrxkoz.supabase.co:443/auth/v1/user"),
+            configuration: production
+        ))
+        XCTAssertFalse(BackendSecurity.isTrustedBackendURL(
+            URL(string: "https://attacker.example/steal"),
+            configuration: production
+        ))
+        XCTAssertFalse(BackendSecurity.isTrustedBackendURL(
+            URL(string: "http://ttgwzwvlochpvtxrxkoz.supabase.co/rest/v1/trips"),
+            configuration: production
+        ))
+        XCTAssertFalse(BackendSecurity.isTrustedBackendURL(
+            URL(string: "https://ttgwzwvlochpvtxrxkoz.supabase.co:444/rest/v1/trips"),
+            configuration: production
+        ))
+        XCTAssertFalse(BackendSecurity.isTrustedBackendURL(URL(string: "not a URL"), configuration: production))
+        XCTAssertFalse(BackendSecurity.isTrustedBackendURL(nil, configuration: production))
+    }
+
+    func testInsecureTransportRequiresLoopbackConfiguration() {
+        let unsafe = BackendConfiguration(
+            url: "http://192.0.2.1:54321",
+            publicKey: "public-test-key",
+            transportPolicy: .loopbackHTTP,
+            includesDetailedDiagnostics: true,
+            networkPolicy: BackendEnvironment.localDevelopment.networkPolicy
+        )
+        XCTAssertFalse(BackendSecurity.isTrustedBackendURL(
+            URL(string: "http://192.0.2.1:54321/rest/v1/trips"),
+            configuration: unsafe
+        ))
     }
 
     func testAuthenticatedRedirectLimitIsBounded() {
@@ -373,5 +495,13 @@ final class TripsplitAppTests: XCTestCase {
         SplitEngine.calculate(total: total, method: method, people: people, payer: alice.id,
                               selected: selected, noSplitAssignee: assignee,
                               percentages: percentages, amounts: amounts)
+    }
+}
+
+private actor RemoteSignOutProbe {
+    private(set) var token: String?
+
+    func record(_ token: String) {
+        self.token = token
     }
 }

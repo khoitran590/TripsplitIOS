@@ -299,18 +299,12 @@ enum ItineraryAI {
     /// Dedicated session for plan generation: same hardening as
     /// `BackendSecurity.secureSession` (ephemeral, no cookies/cache, auth-preserving
     /// redirects) but with timeouts sized for a model that researches the web before
-    /// answering — the shared session's 20s request / 60s resource limits time out long
+    /// answering — the shared session's shorter ordinary-request limits time out long
     /// drafts. The Edge Function budgets its own providers to answer inside this window.
-    nonisolated static let session: URLSession = {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 150
-        configuration.timeoutIntervalForResource = 150
-        configuration.waitsForConnectivity = true
-        configuration.httpCookieStorage = nil
-        configuration.httpShouldSetCookies = false
-        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        return URLSession(configuration: configuration, delegate: RedirectAuthPreserver(), delegateQueue: nil)
-    }()
+    nonisolated static let session = BackendSecurity.makeSecureSession(
+        requestTimeout: 150,
+        resourceTimeout: 150
+    )
 
     static func suggest(trip: Trip, itinerary: Itinerary, accessToken: String) async throws -> ItinerarySuggestion {
         guard let url = URL(string: "\(SupabaseConfig.url)/functions/v1/suggest-itinerary") else {
@@ -478,7 +472,7 @@ struct ItineraryTripCard: View {
             ZStack(alignment: .topTrailing) {
                 TripCoverView(trip: trip)
                     .frame(height: 150)
-                    .clipShape(.rect(cornerRadius: 16))
+                    .clipShape(.rect(cornerRadius: Theme.isRuled ? Theme.RuledRadius.element : 16))
                 Text("\(dayCount) day\(dayCount == 1 ? "" : "s")")
                     .font(.app(.caption2, .bold))
                     .foregroundStyle(.white)
@@ -505,15 +499,24 @@ struct ItineraryTripCard: View {
                         .lineLimit(1)
                 }
             }
-            .padding(.horizontal, 4)
+            .padding(.horizontal, Theme.isRuled ? 0 : 4)
         }
-        .padding(8)
-        .frame(width: 260)
-        .background(Theme.surface.opacity(0.82), in: .rect(cornerRadius: 22))
-        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 22))
+        // Ruled themes carry no card around a rail entry — the cover and its caption sit
+        // on the page's own ground, the way Explore's guide entries do.
+        .padding(Theme.isRuled ? 0 : 8)
+        .frame(width: Theme.isRuled ? 220 : 260)
+        .background {
+            if !Theme.isRuled {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(Theme.surface.opacity(0.82))
+            }
+        }
+        .cardOnlyGlass(cornerRadius: 22)
         .overlay {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .strokeBorder(Theme.separator.opacity(0.9), lineWidth: 1)
+            if !Theme.isRuled {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .strokeBorder(Theme.separator.opacity(0.9), lineWidth: 1)
+            }
         }
     }
 }

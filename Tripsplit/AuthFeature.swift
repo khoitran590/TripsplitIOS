@@ -7,16 +7,75 @@ import CryptoKit
 
 // MARK: - Supabase configuration
 
-/// Your Supabase project's connection details.
-///
-/// Fill these in from the Supabase dashboard → Project Settings → API.
-/// The anon (public) key is safe to ship in a client app. Until both values are
-/// set, the auth screens show a "not configured" message instead of failing silently.
+enum BackendTransportPolicy: Sendable {
+    case httpsOnly
+    case loopbackHTTP
+}
+
+struct BackendNetworkPolicy: Sendable {
+    let requestTimeout: TimeInterval
+    let resourceTimeout: TimeInterval
+    let waitsForConnectivity: Bool
+}
+
+struct BackendConfiguration: Sendable {
+    let url: String
+    let publicKey: String
+    let transportPolicy: BackendTransportPolicy
+    let includesDetailedDiagnostics: Bool
+    let networkPolicy: BackendNetworkPolicy
+}
+
+/// The one build-time boundary between local development and the hosted backend.
+/// Both client keys are public identifiers; privileged service/provider secrets must
+/// remain in Supabase Edge Function configuration and never enter the app bundle.
+enum BackendEnvironment {
+    nonisolated static let localDevelopment = BackendConfiguration(
+        url: "http://127.0.0.1:54321",
+        publicKey: "sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH",
+        transportPolicy: .loopbackHTTP,
+        includesDetailedDiagnostics: true,
+        // A stopped/restarting local stack should behave like an immediate development
+        // outage, not leave sign-in and startup sync waiting for a production-sized retry.
+        networkPolicy: BackendNetworkPolicy(
+            requestTimeout: 5,
+            resourceTimeout: 5,
+            waitsForConnectivity: false
+        )
+    )
+
+    nonisolated static let production = BackendConfiguration(
+        url: "https://ttgwzwvlochpvtxrxkoz.supabase.co",
+        publicKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR0Z3d6d3Zsb2NocHZ0eHJ4a296Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIyNTUxMzksImV4cCI6MjA5NzgzMTEzOX0.IfrhBTPNEozGUHJb2J_IH2E5RABFK4PlQihZAOx79f4",
+        transportPolicy: .httpsOnly,
+        includesDetailedDiagnostics: false,
+        networkPolicy: BackendNetworkPolicy(
+            requestTimeout: 20,
+            resourceTimeout: 60,
+            waitsForConnectivity: true
+        )
+    )
+
+    #if DEBUG
+    #if LOCAL_SUPABASE || LOCAL_SUPABASE_INTEGRATION || LOCAL_SUPABASE_OUTAGE
+    // Local Supabase is intentionally opt-in. Making every Debug build use loopback
+    // breaks ordinary sign-in whenever Docker is stopped and can never work on a
+    // physical iPhone, where 127.0.0.1 is the phone rather than the development Mac.
+    nonisolated static let current = localDevelopment
+    #else
+    nonisolated static let current = production
+    #endif
+    #else
+    nonisolated static let current = production
+    #endif
+}
+
+/// The configured Supabase connection used by existing service clients.
 enum SupabaseConfig {
-    /// The project's API URL (derived from the project ref), no trailing slash.
-    nonisolated static let url = "https://ttgwzwvlochpvtxrxkoz.supabase.co"
-    /// The project's anon/public API key.
-    nonisolated static let anonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR0Z3d6d3Zsb2NocHZ0eHJ4a296Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIyNTUxMzksImV4cCI6MjA5NzgzMTEzOX0.IfrhBTPNEozGUHJb2J_IH2E5RABFK4PlQihZAOx79f4"
+    nonisolated static let url = BackendEnvironment.current.url
+    /// Kept as `anonKey` for compatibility with existing call sites. Supabase accepts
+    /// both legacy anon JWTs and current publishable keys in the `apikey` header.
+    nonisolated static let anonKey = BackendEnvironment.current.publicKey
 
     nonisolated static var isConfigured: Bool {
         !url.contains("YOUR-PROJECT-REF") && !anonKey.contains("YOUR-SUPABASE-ANON-KEY")
@@ -48,21 +107,47 @@ struct AuthError: Error, LocalizedError {
 enum BackendSecurity {
     nonisolated static let logger = Logger(subsystem: "com.tripsplit.app", category: "backend")
 
+    /// Builds the hardened session configuration shared by backend clients. Tests use
+    /// this seam to verify that local outages fail quickly without weakening Release.
+    nonisolated static func sessionConfiguration(
+        for backend: BackendConfiguration = BackendEnvironment.current,
+        requestTimeout: TimeInterval? = nil,
+        resourceTimeout: TimeInterval? = nil
+    ) -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = requestTimeout ?? backend.networkPolicy.requestTimeout
+        configuration.timeoutIntervalForResource = resourceTimeout ?? backend.networkPolicy.resourceTimeout
+        configuration.waitsForConnectivity = backend.networkPolicy.waitsForConnectivity
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return configuration
+    }
+
+    /// Creates a credential-preserving session. Long-running, user-initiated AI calls
+    /// can override only their timeouts while retaining the environment's connectivity
+    /// and redirect security policies.
+    nonisolated static func makeSecureSession(
+        for backend: BackendConfiguration = BackendEnvironment.current,
+        requestTimeout: TimeInterval? = nil,
+        resourceTimeout: TimeInterval? = nil
+    ) -> URLSession {
+        URLSession(
+            configuration: sessionConfiguration(
+                for: backend,
+                requestTimeout: requestTimeout,
+                resourceTimeout: resourceTimeout
+            ),
+            delegate: RedirectAuthPreserver(),
+            delegateQueue: nil
+        )
+    }
+
     /// One shared session for every backend call. A `let` (not a computed property) so
     /// TLS connections and HTTP/2 streams are reused across requests — building a fresh
     /// URLSession per call forces a new handshake every time and makes each tap-triggered
     /// save/upload noticeably slower.
-    nonisolated static let secureSession: URLSession = {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 20
-        configuration.timeoutIntervalForResource = 60
-        configuration.waitsForConnectivity = true
-        configuration.httpCookieStorage = nil
-        configuration.httpShouldSetCookies = false
-        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        // A delegate that re-attaches auth headers across redirects — see the type below.
-        return URLSession(configuration: configuration, delegate: RedirectAuthPreserver(), delegateQueue: nil)
-    }()
+    nonisolated static let secureSession = makeSecureSession()
 
     nonisolated static func normalizedEmail(_ email: String) -> String {
         email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -84,18 +169,40 @@ enum BackendSecurity {
         return path.range(of: #"^[a-f0-9-]+/[A-Za-z0-9._-]+\.(jpg|jpeg)$"#, options: [.regularExpression, .caseInsensitive]) != nil
     }
 
-    /// Authenticated requests and redirects are only allowed to use the configured
-    /// Supabase HTTPS origin. Comparing the effective port closes the subtle gap where
-    /// `https://host` and `https://host:444` otherwise look like the same backend.
-    nonisolated static func isTrustedBackendURL(_ url: URL?) -> Bool {
+    /// Authenticated requests and redirects must stay on the exact configured origin.
+    /// Production accepts HTTPS only. Local HTTP is a narrowly scoped Debug policy whose
+    /// configured and requested hosts must both be loopback addresses.
+    nonisolated static func isTrustedBackendURL(
+        _ url: URL?,
+        configuration: BackendConfiguration = BackendEnvironment.current
+    ) -> Bool {
         guard let url,
-              let expected = URL(string: SupabaseConfig.url),
-              url.scheme?.lowercased() == "https",
-              expected.scheme?.lowercased() == "https",
-              url.host?.lowercased() == expected.host?.lowercased() else {
+              let expected = URL(string: configuration.url),
+              let scheme = url.scheme?.lowercased(),
+              let expectedScheme = expected.scheme?.lowercased(),
+              let host = url.host?.lowercased(),
+              let expectedHost = expected.host?.lowercased(),
+              scheme == expectedScheme,
+              host == expectedHost,
+              url.user == nil,
+              url.password == nil else {
             return false
         }
+
+        switch configuration.transportPolicy {
+        case .httpsOnly:
+            guard expectedScheme == "https" else { return false }
+        case .loopbackHTTP:
+            guard expectedScheme == "http",
+                  isLoopbackHost(expectedHost),
+                  isLoopbackHost(host) else { return false }
+        }
+
         return effectivePort(for: url) == effectivePort(for: expected)
+    }
+
+    nonisolated private static func isLoopbackHost(_ host: String) -> Bool {
+        host == "localhost" || host == "127.0.0.1" || host == "::1"
     }
 
     nonisolated private static func effectivePort(for url: URL) -> Int? {
@@ -108,12 +215,18 @@ enum BackendSecurity {
     }
 
     nonisolated static func log(_ message: String, statusCode: Int? = nil, error: Error? = nil) {
-        if let statusCode {
-            logger.error("\(message, privacy: .public) status=\(statusCode, privacy: .public)")
-        } else if let error {
-            logger.error("\(message, privacy: .public) error=\(String(describing: error), privacy: .private)")
+        if BackendEnvironment.current.includesDetailedDiagnostics {
+            if let statusCode {
+                logger.error("\(message, privacy: .public) status=\(statusCode, privacy: .public)")
+            } else if let error {
+                logger.error("\(message, privacy: .public) error=\(String(describing: error), privacy: .private)")
+            } else {
+                logger.error("\(message, privacy: .public)")
+            }
+        } else if let statusCode {
+            logger.error("Backend request failed status=\(statusCode, privacy: .public)")
         } else {
-            logger.error("\(message, privacy: .public)")
+            logger.error("Backend request failed")
         }
     }
 }
@@ -472,6 +585,10 @@ final class AuthStore {
 
     var session: AuthSession?
 
+    /// Injectable only so the local-first sign-out contract can be tested without
+    /// contacting Docker or production. App instances use Supabase global revocation.
+    @ObservationIgnored private let remoteSessionRevoker: @Sendable (String) async throws -> Void
+
     /// The in-flight token refresh, if any. Concurrent callers (e.g. the several saves a
     /// single trip creation fires) share one refresh instead of each hitting Supabase —
     /// its refresh-token rotation invalidates the old token, so parallel refreshes would
@@ -481,7 +598,14 @@ final class AuthStore {
     var isAuthenticated: Bool { session != nil }
     var email: String? { session?.email }
 
-    init() {
+    init(
+        remoteSessionRevoker: @escaping @Sendable (String) async throws -> Void = { accessToken in
+            try await AuthService.shared.signOut(accessToken: accessToken)
+        },
+        restorePersistedSession: Bool = true
+    ) {
+        self.remoteSessionRevoker = remoteSessionRevoker
+        guard restorePersistedSession else { return }
         if AppStoreDemoData.isEnabled {
             session = AuthSession(
                 accessToken: AppStoreDemoData.localAccessToken,
@@ -561,15 +685,22 @@ final class AuthStore {
         persist(verified)
     }
 
-    func signOut() async {
-        if let accessToken = session?.accessToken {
-            do {
-                try await AuthService.shared.signOut(accessToken: accessToken)
-            } catch {
-                BackendSecurity.log("Remote session revocation failed during sign-out", error: error)
+    /// Removes device credentials synchronously so the UI leaves the account immediately.
+    /// Supabase's global token revocation remains best-effort and continues independently;
+    /// a stopped local development stack can no longer hold the user on Settings.
+    func signOut() {
+        let accessToken = session?.accessToken
+        clearLocalSession()
+
+        if let accessToken {
+            Task { [remoteSessionRevoker] in
+                do {
+                    try await remoteSessionRevoker(accessToken)
+                } catch {
+                    BackendSecurity.log("Remote session revocation failed during sign-out", error: error)
+                }
             }
         }
-        clearLocalSession()
     }
 
     /// Requires the current password so deletion is backed by recent authentication.

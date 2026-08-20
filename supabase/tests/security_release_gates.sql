@@ -5,7 +5,7 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select plan(28);
+select plan(38);
 
 select has_table('public', 'financial_audit_events', 'financial audit table exists');
 select has_table('public', 'storage_attachments', 'storage attachment ACL table exists');
@@ -24,6 +24,32 @@ select ok(not has_table_privilege('authenticated', 'public.settlement_records', 
           'authenticated cannot update settlements directly');
 select ok(not has_table_privilege('authenticated', 'public.expense_comments', 'DELETE'),
           'authenticated cannot delete comments directly');
+
+select has_trigger('public', 'trip_expenses', 'enforce_expense_delete_trigger',
+                   'expense deletion has a dedicated cascade-aware guard');
+select has_trigger('public', 'expense_comments', 'enforce_comment_delete_trigger',
+                   'comment deletion has a dedicated cascade-aware guard');
+select has_trigger('public', 'settlement_records', 'enforce_settlement_delete_trigger',
+                   'settlement deletion has a dedicated cascade-aware guard');
+
+select ok(has_table_privilege('authenticated', 'public.profiles', 'SELECT'),
+          'authenticated can read profiles through RLS');
+select ok(has_table_privilege('authenticated', 'public.profiles', 'UPDATE'),
+          'authenticated can update profiles through RLS');
+select ok(has_table_privilege('authenticated', 'public.trips', 'DELETE'),
+          'authenticated owners can delete trips through RLS');
+select ok(has_table_privilege('authenticated', 'public.trip_invitations', 'SELECT'),
+          'authenticated owners can list invitations through RLS');
+select ok(has_table_privilege('authenticated', 'public.trip_feed_posts', 'SELECT'),
+          'authenticated trip members can read feed posts through RLS');
+select ok(
+    has_column_privilege('authenticated', 'public.trip_feed_posts', 'id', 'INSERT')
+    and has_column_privilege('authenticated', 'public.trip_feed_posts', 'body', 'INSERT')
+    and not has_column_privilege('authenticated', 'public.trip_feed_posts', 'comments', 'INSERT'),
+    'feed insert access remains column-scoped'
+);
+select ok(has_table_privilege('authenticated', 'public.trip_feed_posts', 'DELETE'),
+          'authenticated authors and owners can delete feed posts through RLS');
 
 select is((select count(*)::integer from pg_policies
            where schemaname = 'public' and tablename = 'trip_expenses'

@@ -252,6 +252,11 @@ struct ContentView: View {
             // Wire the friends store to the session before any awaits so the Profile
             // tab's own refresh never races an unset store reference.
             friends.store = store
+            guard auth.isAuthenticated else {
+                onboarding.update(userID: nil, displayName: "")
+                friends.reset()
+                return
+            }
             // Load the cloud profile first so `loadFromCloud`'s member healing uses
             // the authoritative name/avatar rather than the local cache.
             await store.loadProfileFromCloud()
@@ -263,14 +268,12 @@ struct ContentView: View {
                 userID: auth.isAuthenticated ? store.currentUser.id : nil,
                 displayName: store.currentUser.name
             )
+            // Friends are secondary to painting the user's cached/current trips. Run
+            // that independent fetch alongside trip synchronization so it does not add
+            // another full network round-trip to the post-sign-in refresh sequence.
+            async let friendsRefresh: Void = friends.refresh()
             await store.loadFromCloud()
-            // Keep the friends graph in sync with the session: load it when signed in,
-            // clear it on sign-out so one account's friends never linger for the next.
-            if auth.isAuthenticated {
-                await friends.refresh()
-            } else {
-                friends.reset()
-            }
+            await friendsRefresh
         }
         .onOpenURL { url in
             // Profile share links open a viewable profile card; they don't need to be

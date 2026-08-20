@@ -146,7 +146,7 @@ struct SettingsScreen: View {
                         guard !isSigningOut else { return }
                         isSigningOut = true
                         let userID = store.currentUser.id
-                        await auth.signOut()
+                        auth.signOut()
                         await store.purgeLocalData(for: userID)
                         isSigningOut = false
                     }
@@ -554,6 +554,10 @@ struct ProfileAvatar: View {
     let imageData: Data?
     var initials: String = ""
     var size: CGFloat = 48
+    /// Clip shape override. `nil` keeps the circle every existing call site draws;
+    /// ruled themes pass a radius so the avatar reads as a rounded square alongside the
+    /// rest of that theme's shapes.
+    var cornerRadius: CGFloat? = nil
 
     /// Decoded once per `imageData` value rather than on every render. Avatars appear in
     /// the always-visible header, so re-decoding the JPEG on each body pass is wasteful.
@@ -586,7 +590,7 @@ struct ProfileAvatar: View {
             }
         }
         .frame(width: size, height: size)
-        .clipShape(.circle)
+        .clipShape(cornerRadius.map { AnyShape(.rect(cornerRadius: $0)) } ?? AnyShape(.circle))
     }
 }
 

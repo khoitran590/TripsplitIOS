@@ -57,6 +57,11 @@ struct RecScreen: View {
     @State private var pendingAction: ExploreGatedAction?
     @State private var showSignIn = false
 
+    /// The ruled opening title's size. Smaller than BalanceCard's 56 — that one is a
+    /// figure read at a glance, this is a sentence — and scaled so Dynamic Type still
+    /// moves it.
+    @ScaledMetric(relativeTo: .largeTitle) private var ruledHeroSize: CGFloat = 40
+
     /// Built from the profile's stored array. Every read allocates a fresh `Set`, so
     /// call sites that test it once per card bind it to a local first — reading it
     /// straight from inside a `ForEach` or `filter` body rebuilt the set per element.
@@ -318,49 +323,60 @@ struct RecScreen: View {
                 // navigation bar and the page — content stays visible in the strip above
                 // them — and they cost ~110pt of permanent height on a browse screen
                 // whose whole point is the imagery.
-                LazyVStack(alignment: .leading, spacing: 24) {
+                LazyVStack(alignment: .leading, spacing: Theme.isRuled ? 0 : 24) {
                     // Header, field and chips are one unit at 12pt, not four sections at
                     // 24 — the controls belong together, and the gap is reserved for the
                     // boundaries between actual content sections.
-                    VStack(alignment: .leading, spacing: 12) {
-                        exploreHeader
-                        searchBar
-                        filterBar
-                        activeFilterTokens
+                    //
+                    // Ruled themes take their rhythm from each block's own rule and
+                    // padding instead, so they can't share this container.
+                    if Theme.isRuled {
+                        ruledControlBlock
+                    } else {
+                        VStack(alignment: .leading, spacing: 12) {
+                            exploreHeader
+                            searchBar
+                            filterBar
+                            activeFilterTokens
+                        }
                     }
 
                     // Each of these derived collections is computed once here and handed
                     // down. Read as properties from inside the section builders, they
                     // were re-derived several times per render (and on every keystroke).
                     if isSearchFocused && !isSearching {
-                        searchShortcuts
+                        searchShortcuts.ruledSection()
                     } else if isSearching {
-                        searchResultsList(searchResults)
+                        searchResultsList(searchResults).ruledSection()
                     } else {
                         // A returning user's own plans come before the editorial page.
-                        if hasContinueContent { continueSection }
+                        if hasContinueContent { continueSection.ruledSection() }
 
                         if isFiltering {
-                            matchingTripsSection(filteredDestinations)
+                            matchingTripsSection(filteredDestinations).ruledSection()
                         } else {
                             // Three sizes, in order: one full-width hero, then rails of
                             // medium cards, then the compact grid. The page used to be
                             // five near-identical carousels stacked on the directory,
                             // which gave it no shape and nothing to anchor on.
-                            featuredHero
+                            featuredHero.ruledSection()
                             ForEach(collectionRails) { rail in
                                 collectionSection(
                                     title: rail.title,
                                     subtitle: rail.subtitle,
                                     destinations: rail.destinations
                                 )
+                                .ruledSection()
                             }
-                            destinationDirectory(continentSections)
+                            destinationDirectory(continentSections).ruledSection()
                         }
                     }
                 }
-                .padding()
-                .padding(.bottom, 80)
+                // Ruled themes inset the content column themselves so their rules can
+                // bleed past it; the opening block supplies the air the top padding gave.
+                .padding(.horizontal, Theme.contentInset)
+                .padding(.top, Theme.isRuled ? 0 : 16)
+                .padding(.bottom, 96)
             }
             .background { AppBackground() }
             .navigationTitle("")
@@ -384,7 +400,8 @@ struct RecScreen: View {
                         ProfileAvatar(
                             imageData: store.profileImageData,
                             initials: store.currentUser.initials,
-                            size: 34
+                            size: 34,
+                            cornerRadius: Theme.isRuled ? Theme.RuledRadius.avatar : nil
                         )
                         .frame(width: 44, height: 44)
                         .contentShape(.rect)
@@ -501,6 +518,25 @@ struct RecScreen: View {
         }
     }
 
+    /// The ruled header, field and chips: an opening title block closed by the screen's
+    /// one chapter rule, then the field and the chip strip as sections bounded by their
+    /// own. Card themes keep the four-view stack in `exploreContent` — the rules are what
+    /// give this one its rhythm, which is why it can't be the same container.
+    private var ruledControlBlock: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            exploreHeader
+                .padding(.vertical, Theme.RuleWeight.opening.space)
+            RuledDivider(weight: .chapter)
+            searchBar
+                .padding(.top, 14)
+                .padding(.bottom, 16)
+            RuledDivider(weight: .section)
+            filterBar
+            RuledDivider(weight: .section)
+            activeFilterTokens
+        }
+    }
+
     private var appearanceToggle: some View {
         Menu {
             Picker("Appearance", selection: $appearance) {
@@ -521,7 +557,57 @@ struct RecScreen: View {
     /// one row. The previous version spent ~180pt before any content on an eyebrow
     /// label, a 42pt "Explore" (a word already in the tab bar), a subtitle and a
     /// full-width button, which is why the screen opened on chrome instead of trips.
+    @ViewBuilder
     private var exploreHeader: some View {
+        if Theme.isRuled { ruledHeader } else { cardHeader }
+    }
+
+    /// The ruled opening: greeting, the question at hero scale, the theme's own accent
+    /// mark, and the primary action set as an inscription. A gradient capsule is the one
+    /// shape a ruled screen never draws.
+    private var ruledHeader: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(verbatim: greeting)
+                .inscription()
+                .foregroundStyle(Theme.textSecondary)
+
+            Text("Where to next?")
+                .font(.app(size: ruledHeroSize, weight: .medium))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .padding(.top, 10)
+                .accessibilityAddTraits(.isHeader)
+
+            // The mark BalanceCard already draws: the one place accent fills a shape on a
+            // ruled screen, its ends rounded with the rest of the theme.
+            RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                .fill(Theme.accent)
+                .frame(width: 44, height: 3)
+                .padding(.top, 14)
+
+            Button { requireAccount(.createItinerary(prefill: nil)) } label: {
+                HStack(spacing: 7) {
+                    Text("Create a trip")
+                    Image(systemName: "arrow.right")
+                }
+                .inscription()
+                .foregroundStyle(Theme.accent)
+                .padding(.bottom, 4)
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(Theme.accent).frame(height: 1)
+                }
+                .frame(minHeight: 44)
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 4)
+            .accessibilityLabel("Create your own trip")
+            .accessibilityHint("Opens the trip builder")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var cardHeader: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(verbatim: greeting)
@@ -578,7 +664,7 @@ struct RecScreen: View {
     }
 
     private var continueSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: Theme.isRuled ? 10 : 14) {
             sectionTitle("Continue", subtitle: "Resume a plan or revisit a guide you saved.")
 
             if !store.itineraryTrips.isEmpty {
@@ -592,18 +678,22 @@ struct RecScreen: View {
                         }
                     }
                     .scrollTargetLayout()
-                    .padding(.horizontal)
+                    .padding(.horizontal, Theme.isRuled ? Theme.ruledInset : 16)
                 }
                 .scrollTargetBehavior(.viewAligned)
-                .padding(.horizontal, -16)
+                .padding(.horizontal, Theme.isRuled ? -Theme.ruledInset : -16)
             }
 
             if !saved.isEmpty {
-                ForEach(saved) { destination in
-                    NavigationLink(value: destination.id) {
-                        DestinationRow(destination: destination)
+                VStack(spacing: Theme.isRuled ? 0 : 14) {
+                    ForEach(saved) { destination in
+                        // A hairline bounds a ruled row where a card bounds the others.
+                        if Theme.isRuled, destination.id != saved.first?.id { RuledDivider() }
+                        NavigationLink(value: destination.id) {
+                            DestinationRow(destination: destination)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
             }
         }
@@ -694,7 +784,7 @@ struct RecScreen: View {
         return VStack(alignment: .leading, spacing: 12) {
             sectionTitle(title, subtitle: subtitle)
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 14) {
+                LazyHStack(alignment: Theme.isRuled ? .top : .center, spacing: Theme.isRuled ? 16 : 14) {
                     ForEach(destinations) { destination in
                         NavigationLink(value: destination.id) {
                             CountryTripCard(
@@ -707,15 +797,15 @@ struct RecScreen: View {
                     }
                 }
                 .scrollTargetLayout()
-                .padding(.horizontal)
+                .padding(.horizontal, Theme.isRuled ? Theme.ruledInset : 16)
             }
             .scrollTargetBehavior(.viewAligned)
-            .padding(.horizontal, -16)
+            .padding(.horizontal, Theme.isRuled ? -Theme.ruledInset : -16)
         }
     }
 
     private func matchingTripsSection(_ destinations: [Destination]) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: Theme.isRuled ? 10 : 14) {
             // Search reports its result count; filtering used to leave the user to
             // count tiles themselves.
             sectionTitle("Matching trips", subtitle: matchCountSubtitle(destinations.count))
@@ -736,7 +826,7 @@ struct RecScreen: View {
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 24)
-                .readableSurface(cornerRadius: 20)
+                .homePanel(cornerRadius: 20)
             } else {
                 destinationGrid(destinations)
             }
@@ -746,16 +836,21 @@ struct RecScreen: View {
     private func destinationDirectory(
         _ sections: [(continent: String, destinations: [Destination])]
     ) -> some View {
-        VStack(alignment: .leading, spacing: 22) {
+        VStack(alignment: .leading, spacing: Theme.isRuled ? 0 : 22) {
             sectionTitle("Browse by destination", subtitle: "Every curated guide, grouped by region.")
             ForEach(sections, id: \.continent) { section in
-                VStack(alignment: .leading, spacing: 12) {
+                // Every region after the first opens with its own rule. The first sits
+                // straight under the heading block, which already separates it.
+                if Theme.isRuled, section.continent != sections.first?.continent {
+                    RuledDivider(weight: .section)
+                }
+                VStack(alignment: .leading, spacing: Theme.isRuled ? 8 : 12) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         // A rung below `sectionHeader`: these are regions *inside*
                         // "Browse by destination", and at the same title2/bold they
                         // read as top-level sections in their own right.
                         Text(LocalizedStringKey(section.continent))
-                            .font(.app(.title3, .bold))
+                            .font(.app(.title3, Theme.isRuled ? .semibold : .bold))
                         Text("\(section.destinations.count)")
                             .font(.app(.subheadline, .bold))
                             .foregroundStyle(.secondary)
@@ -763,6 +858,7 @@ struct RecScreen: View {
                         Spacer()
                     }
                     .accessibilityElement(children: .combine)
+                    .padding(.top, Theme.isRuled ? 16 : 0)
 
                     destinationGrid(section.destinations)
                 }
@@ -772,7 +868,43 @@ struct RecScreen: View {
 
     /// The shared two-column result grid, used for both filtered results and the
     /// region directory so the two never drift apart visually.
+    @ViewBuilder
     private func destinationGrid(_ destinations: [Destination]) -> some View {
+        if Theme.isRuled {
+            destinationIndex(destinations)
+        } else {
+            cardDestinationGrid(destinations)
+        }
+    }
+
+    /// The ruled directory: one row per guide, ruled off from the next, with the figures
+    /// set to the trailing edge. A two-column tile grid is a card-theme shape — these
+    /// rows carry the same facts, and the region headings above them do the grouping.
+    private func destinationIndex(_ destinations: [Destination]) -> some View {
+        let savedSet = savedIDs
+        return VStack(spacing: 0) {
+            ForEach(destinations) { destination in
+                RuledDivider()
+                NavigationLink(value: destination.id) {
+                    DestinationIndexRow(destination: destination)
+                }
+                .buttonStyle(.plain)
+                // Outside the link for the same reason the grid's heart is: nested
+                // inside, VoiceOver folds it into the link and saving from the
+                // directory becomes impossible.
+                .overlay(alignment: .trailing) {
+                    HeartButton(
+                        isSaved: savedSet.contains(destination.id),
+                        action: { requireAccount(.save(destinationID: destination.id)) },
+                        onGround: true
+                    )
+                    .padding(.trailing, -10)
+                }
+            }
+        }
+    }
+
+    private func cardDestinationGrid(_ destinations: [Destination]) -> some View {
         let savedSet = savedIDs
         return LazyVGrid(
             columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible())],
@@ -797,7 +929,52 @@ struct RecScreen: View {
         }
     }
 
+    @ViewBuilder
     private var filterBar: some View {
+        if Theme.isRuled { ruledFilterBar } else { cardFilterBar }
+    }
+
+    /// The ruled chip strip: rounded shapes with air between them, the active one filled
+    /// with the theme's field colour so state still reads as ink rather than as a tint.
+    /// The symbols come off — a tracked-caps label is the whole chip here.
+    private var ruledFilterBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(ExploreQuickFilter.allCases) { filter in
+                    let isOn = isQuickFilterOn(filter)
+                    Button {
+                        toggleQuickFilter(filter)
+                    } label: {
+                        Text(filter.title)
+                            .inscription()
+                            .foregroundStyle(isOn ? Color.primary : Theme.textSecondary)
+                            .lineLimit(1)
+                            .padding(.horizontal, 14)
+                            .frame(height: 40)
+                            .background {
+                                if isOn {
+                                    RoundedRectangle(
+                                        cornerRadius: Theme.RuledRadius.element,
+                                        style: .continuous
+                                    )
+                                    .fill(Theme.fieldBackground)
+                                }
+                            }
+                            // The shape is 40pt for rhythm; the target stays 44.
+                            .frame(minHeight: 44)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(isOn ? [.isSelected] : [])
+                }
+            }
+            .padding(.horizontal, 12)
+            .frame(minHeight: 56)
+        }
+        .padding(.horizontal, -Theme.ruledInset)
+    }
+
+    private var cardFilterBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(ExploreQuickFilter.allCases) { filter in
@@ -830,53 +1007,153 @@ struct RecScreen: View {
     @ViewBuilder
     private var activeFilterTokens: some View {
         if isFiltering {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    if tripLength != .any {
-                        filterToken(tripLength.label) { tripLength = .any }
-                    }
-                    if let style = selectedStyle {
-                        filterToken(style.title) { selectedStyle = nil }
-                    }
-                    if let continent = selectedContinent {
-                        filterToken(LocalizedStringKey(continent)) { selectedContinent = nil }
-                    }
-                    if maxBudget < Self.budgetCap {
-                        filterToken("Up to $\(Int(maxBudget))") { maxBudget = Self.budgetCap }
-                    }
+            VStack(spacing: 0) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        if tripLength != .any {
+                            filterToken(tripLength.label) { tripLength = .any }
+                        }
+                        if let style = selectedStyle {
+                            filterToken(style.title) { selectedStyle = nil }
+                        }
+                        if let continent = selectedContinent {
+                            filterToken(LocalizedStringKey(continent)) { selectedContinent = nil }
+                        }
+                        if maxBudget < Self.budgetCap {
+                            filterToken("Up to $\(Int(maxBudget))") { maxBudget = Self.budgetCap }
+                        }
 
-                    Button("Clear all", action: resetFilters)
-                        .font(.app(.subheadline, .semibold))
-                        .foregroundStyle(Theme.accent)
-                        .buttonStyle(.plain)
-                        .padding(.horizontal, 8)
-                        .frame(minHeight: 36)
+                        Button("Clear all", action: resetFilters)
+                            .inscription(orFont: .app(.subheadline, .semibold))
+                            .foregroundStyle(Theme.isRuled ? Theme.textSecondary : Theme.accent)
+                            .buttonStyle(.plain)
+                            .padding(.horizontal, 8)
+                            .frame(minHeight: Theme.isRuled ? 44 : 36)
+                    }
+                    .padding(.horizontal, Theme.isRuled ? 12 : 16)
+                    .frame(minHeight: Theme.isRuled ? 52 : 0)
                 }
-                .padding(.horizontal)
+                .padding(.horizontal, Theme.isRuled ? -Theme.ruledInset : -16)
+
+                // The strip is a section of its own on a ruled page, so it closes with
+                // a rule the way the field and the chips above it do.
+                if Theme.isRuled { RuledDivider(weight: .section) }
             }
-            .padding(.horizontal, -16)
         }
     }
 
     private func filterToken(_ label: LocalizedStringKey, remove: @escaping () -> Void) -> some View {
         Button(action: remove) {
-            HStack(spacing: 5) {
+            HStack(spacing: Theme.isRuled ? 7 : 5) {
                 Text(label)
                 Image(systemName: "xmark")
                     .font(.app(.caption2, .bold))
             }
-            .font(.app(.subheadline, .medium))
-            .foregroundStyle(Theme.accent)
+            .inscription(orFont: .app(.subheadline, .medium))
+            .foregroundStyle(Theme.isRuled ? Color.primary : Theme.accent)
             .padding(.horizontal, 12)
-            .frame(minHeight: 36)
-            .background(Theme.accent.opacity(0.12), in: .capsule)
+            .frame(minHeight: Theme.isRuled ? 38 : 36)
+            // No accent tint on a ruled page: a warm field shape says "active" without
+            // colouring it, the same trade `pillTint()` makes by dropping its fill.
+            .background(
+                Theme.isRuled
+                    ? AnyShapeStyle(Theme.fieldBackground)
+                    : AnyShapeStyle(Theme.accent.opacity(0.12)),
+                in: Theme.isRuled
+                    ? AnyShape(.rect(cornerRadius: Theme.RuledRadius.element))
+                    : AnyShape(.capsule)
+            )
+            .frame(minHeight: Theme.isRuled ? 44 : 36)
+            .contentShape(.rect)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(Text(label))
         .accessibilityHint("Removes this filter")
     }
 
+    @ViewBuilder
     private var searchBar: some View {
+        if Theme.isRuled { ruledSearchBar } else { cardSearchBar }
+    }
+
+    /// The ruled field: a warm well in the theme's own field colour behind a hairline,
+    /// with focus marked by the accent border and a soft ring. Glass is the card themes'
+    /// material, and a bare band across the page was too hard a note to open the screen on.
+    private var ruledSearchBar: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .font(.app(.subheadline))
+                .foregroundStyle(isSearchFocused ? Color.primary : Theme.textSecondary)
+
+            TextField("Tokyo, beaches, ramen…", text: $searchText)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.words)
+                .submitLabel(.search)
+                .focused($isSearchFocused)
+                .onSubmit { recordSearch(searchQuery) }
+
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.app(.footnote, .semibold))
+                        .foregroundStyle(Theme.textSecondary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
+
+            // Focusing swaps the page for shortcuts, so there has to be a way back that
+            // doesn't rely on the user guessing that scrolling dismisses the keyboard.
+            if isSearchFocused {
+                Button("Cancel") {
+                    searchText = ""
+                    isSearchFocused = false
+                }
+                .inscription()
+                .foregroundStyle(Theme.accent)
+                .buttonStyle(.plain)
+                .frame(minHeight: 44)
+            } else {
+                Button {
+                    isSearchFocused = false
+                    showFilterSheet = true
+                } label: {
+                    Text(activeFilterCount > 0 ? "Filters · \(activeFilterCount)" : "Filters")
+                        .inscription()
+                        .foregroundStyle(activeFilterCount > 0 ? Theme.accent : Color.primary)
+                        .frame(minHeight: 44)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(activeFilterCount > 0 ? "Filters · \(activeFilterCount)" : "Filters")
+            }
+        }
+        .padding(.horizontal, 16)
+        .frame(minHeight: 52)
+        .background(Theme.fieldBackground, in: .rect(cornerRadius: Theme.RuledRadius.well))
+        .overlay {
+            RoundedRectangle(cornerRadius: Theme.RuledRadius.well, style: .continuous)
+                .strokeBorder(
+                    isSearchFocused ? Theme.accent : Theme.separator.opacity(0.7),
+                    lineWidth: 1
+                )
+        }
+        .background {
+            if isSearchFocused {
+                RoundedRectangle(cornerRadius: Theme.RuledRadius.well + 3, style: .continuous)
+                    .fill(Theme.accent.opacity(0.10))
+                    .padding(-3)
+            }
+        }
+        .animation(.snappy(duration: 0.2), value: isSearchFocused)
+        .accessibilityElement(children: .contain)
+    }
+
+    private var cardSearchBar: some View {
         HStack(spacing: 12) {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass")
@@ -985,8 +1262,13 @@ struct RecScreen: View {
                             Spacer(minLength: 0)
                         }
                         .padding(.horizontal, 12)
-                        .frame(minHeight: 40)
-                        .background(Theme.fieldBackground, in: .capsule)
+                        .frame(minHeight: Theme.isRuled ? 44 : 40)
+                        .background(
+                            Theme.fieldBackground,
+                            in: Theme.isRuled
+                                ? AnyShape(.rect(cornerRadius: Theme.RuledRadius.element))
+                                : AnyShape(.capsule)
+                        )
                     }
                     .buttonStyle(.plain)
                 }
@@ -1025,21 +1307,23 @@ struct RecScreen: View {
                             .frame(minHeight: 44)
                     }
                     .buttonStyle(.plain)
-                    .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+                    .exploreActionFill(tint: Theme.accent)
                 }
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 32)
-            .glassEffect(.regular, in: .rect(cornerRadius: 24))
+            .homeGlassPanel(cornerRadius: 24)
         } else {
             let query = searchQuery
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: Theme.isRuled ? 0 : 12) {
                 // Two explicit keys instead of an inline "s" — the old form baked
                 // English plural rules into the localization key.
                 Text(results.count == 1 ? "1 result" : "\(results.count) results")
-                    .font(.app(.subheadline, .semibold))
+                    .inscription(orFont: .app(.subheadline, .semibold))
                     .foregroundStyle(.secondary)
+                    .padding(.vertical, Theme.isRuled ? 12 : 0)
                 ForEach(results) { destination in
+                    if Theme.isRuled { RuledDivider() }
                     NavigationLink(value: destination.id) {
                         DestinationRow(
                             destination: destination,
@@ -1073,13 +1357,20 @@ struct RecScreen: View {
         }
     }
 
+    @ViewBuilder
     private func sectionHeader(_ title: LocalizedStringKey) -> some View {
-        Text(title)
-            .font(.app(.title2, .bold))
+        // Ruled themes set section titles in sentence case rather than as inscriptions.
+        // Tracked caps on every heading was the coldest thing on the page, and these are
+        // the page's real titles — the short labels around them keep the inscription.
+        if Theme.isRuled {
+            Text(title).font(.app(.headline))
+        } else {
+            Text(title).font(.app(.title2, .bold))
+        }
     }
 
     private func sectionTitle(_ title: LocalizedStringKey, subtitle: LocalizedStringKey) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: Theme.isRuled ? 6 : 3) {
             sectionHeader(title)
             Text(subtitle)
                 .font(.app(.subheadline))
@@ -1610,8 +1901,91 @@ struct AdventureCard: View {
     /// Grows with Dynamic Type so the city/country/budget stack and the CTA still fit
     /// at large sizes, but clamped — an unbounded carousel card would run off screen.
     @ScaledMetric(relativeTo: .body) private var cardHeight: CGFloat = 380
+    /// The plate's own height and title size — shorter than the card, because the caption
+    /// below it now needs room that the card reversed out of the image.
+    @ScaledMetric(relativeTo: .body) private var plateHeight: CGFloat = 248
+    @ScaledMetric(relativeTo: .largeTitle) private var plateTitleSize: CGFloat = 34
 
+    /// Two stops by name, plus a count of the rest — the same line the rail cards carry.
+    /// The plate has the width for it, and names are what separate a real itinerary from
+    /// a stock photo with a price on it.
+    private var stopPreview: String? {
+        let names = destination.places.prefix(2).map(\.name)
+        guard !names.isEmpty else { return nil }
+        let remainder = destination.stops - names.count
+        return remainder > 0
+            ? names.joined(separator: " · ") + " · +\(remainder)"
+            : names.joined(separator: " · ")
+    }
+
+    @ViewBuilder
     var body: some View {
+        if Theme.isRuled { ruledPlate } else { cardBody }
+    }
+
+    /// Ruled themes caption the photograph rather than printing on it: the image is
+    /// rounded and inset into the content column, and the city, country and figures are
+    /// set below it on the theme's own ground — a plate in a printed guide.
+    private var ruledPlate: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Text("Editor's pick")
+                    .inscription()
+                    .foregroundStyle(Theme.textSecondary)
+                Spacer(minLength: 0)
+                HeartButton(isSaved: isSaved, action: onToggleSave, onGround: true)
+                    .padding(.trailing, -10)
+            }
+
+            DestinationPhoto(destination: destination, symbolSize: 88)
+                .frame(height: min(plateHeight, 320))
+                .clipShape(.rect(cornerRadius: Theme.RuledRadius.plate))
+
+            Text(verbatim: destination.city)
+                .font(.app(size: plateTitleSize, weight: .medium))
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+                .padding(.top, 16)
+
+            Text(LocalizedStringKey(destination.country))
+                .font(.app(.body))
+                .foregroundStyle(Theme.textSecondary)
+                .lineLimit(1)
+                .padding(.top, 3)
+
+            Text("\(destination.days) days · \(destination.price) · \(destination.stops) stops")
+                .inscription()
+                .foregroundStyle(Theme.textSecondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .padding(.top, 14)
+
+            if let stopPreview {
+                Text(verbatim: stopPreview)
+                    .font(.app(.caption))
+                    .foregroundStyle(Theme.accentSecondary)
+                    .lineLimit(1)
+                    .padding(.top, 8)
+            }
+
+            if showsCTA {
+                HStack(spacing: 7) {
+                    Text("Open guide")
+                    Image(systemName: "arrow.right")
+                }
+                .inscription()
+                .foregroundStyle(Theme.accent)
+                .padding(.bottom, 4)
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(Theme.accent).frame(height: 1)
+                }
+                .padding(.top, 12)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var cardBody: some View {
         ZStack {
             DestinationPhoto(destination: destination, symbolSize: 110)
 
@@ -1687,6 +2061,9 @@ struct CountryTripCard: View {
 
     @ScaledMetric(relativeTo: .body) private var cardWidth: CGFloat = 250
     @ScaledMetric(relativeTo: .body) private var cardHeight: CGFloat = 274
+    /// Narrower than the card: with no surface to fill, the entry is only as wide as its
+    /// photograph needs to be, and more of the rail is visible at once.
+    @ScaledMetric(relativeTo: .body) private var entryWidth: CGFloat = 158
 
     /// Two stops by name, plus a count of everything else in the guide. Names are what
     /// distinguish a real itinerary from a stock photo with a price on it.
@@ -1699,7 +2076,51 @@ struct CountryTripCard: View {
             : names.joined(separator: " · ")
     }
 
+    @ViewBuilder
     var body: some View {
+        if Theme.isRuled { ruledEntry } else { cardBody }
+    }
+
+    /// The ruled rail entry: bare content in a column of its own, separated from its
+    /// neighbours by the gap rather than by a card edge.
+    private var ruledEntry: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            DestinationPhoto(destination: destination, symbolSize: 56)
+                .frame(height: 104)
+                .clipShape(.rect(cornerRadius: Theme.RuledRadius.element))
+
+            HStack(alignment: .top, spacing: 4) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(verbatim: destination.city)
+                        .font(.app(.headline))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    Text(LocalizedStringKey(destination.country))
+                        .font(.app(.caption))
+                        .foregroundStyle(Theme.textSecondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                // The heart comes off the photograph: on a ruled page it has no white
+                // disc to sit in, and bare over an image it would be unreadable.
+                HeartButton(isSaved: isSaved, action: onToggleSave, onGround: true)
+                    .padding(.trailing, -12)
+                    .padding(.top, -10)
+            }
+            .padding(.top, 10)
+
+            Text("\(destination.days) days · \(destination.price)")
+                .inscription()
+                .foregroundStyle(Theme.textSecondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .padding(.top, 4)
+        }
+        .frame(width: min(entryWidth, 200), alignment: .leading)
+    }
+
+    private var cardBody: some View {
         VStack(alignment: .leading, spacing: 0) {
             DestinationPhoto(destination: destination, symbolSize: 64)
                 .frame(height: 148)
@@ -1804,7 +2225,44 @@ struct DestinationRow: View {
         String(localized: String.LocalizationValue(destination.country))
     }
 
+    @ViewBuilder
     var body: some View {
+        if Theme.isRuled { ruledRow } else { cardRow }
+    }
+
+    /// The ruled row: the same content bounded by the caller's hairline instead of by a
+    /// surface, and without the chevron — the rule and the row's own target say it opens.
+    private var ruledRow: some View {
+        HStack(spacing: 14) {
+            DestinationPhoto(destination: destination, symbolSize: 22)
+                .frame(width: 56, height: 56)
+                .clipShape(.rect(cornerRadius: Theme.RuledRadius.element))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: "\(destination.city), \(localizedCountry)")
+                    .font(.app(.body, .semibold))
+                    .foregroundStyle(.primary)
+                Text("\(destination.tags.joined(separator: " · ")) · \(destination.price)")
+                    .font(.app(.caption))
+                    .foregroundStyle(Theme.textSecondary)
+                if let matchedStop {
+                    Label("Includes \(matchedStop)", systemImage: "mappin")
+                        .font(.app(.caption))
+                        .foregroundStyle(Theme.accentSecondary)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: 8)
+        }
+        .padding(.vertical, 12)
+        .frame(minHeight: 76)
+        .contentShape(.rect)
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("Opens the curated guide")
+    }
+
+    private var cardRow: some View {
         HStack(spacing: 14) {
             DestinationPhoto(destination: destination, symbolSize: 22)
                 .frame(width: 56, height: 56)
@@ -1849,18 +2307,97 @@ struct DestinationRow: View {
 struct HeartButton: View {
     let isSaved: Bool
     let action: () -> Void
+    /// True where the button sits on the page's own ground rather than over a
+    /// photograph. Ruled themes then drop the white disc — a floating circle there is
+    /// card chrome — and mark "saved" in the theme accent instead of in red.
+    var onGround = false
+
+    private var isBare: Bool { Theme.isRuled && onGround }
+
+    private var mark: AnyShapeStyle {
+        if isBare {
+            AnyShapeStyle(isSaved ? Theme.accent : Theme.textSecondary)
+        } else {
+            isSaved ? AnyShapeStyle(.red) : AnyShapeStyle(.black)
+        }
+    }
 
     var body: some View {
         Button(action: action) {
             Image(systemName: isSaved ? "heart.fill" : "heart")
                 .font(.app(size: 16, weight: .semibold))
-                .foregroundStyle(isSaved ? AnyShapeStyle(.red) : AnyShapeStyle(.black))
+                .foregroundStyle(mark)
                 .frame(width: 44, height: 44)
-                .background(.white.opacity(0.95), in: .circle)
+                .background {
+                    if !isBare { Circle().fill(.white.opacity(0.95)) }
+                }
         }
         .buttonStyle(.plain)
         .sensoryFeedback(.impact(flexibility: .soft), trigger: isSaved)
         .accessibilityLabel(Text(isSaved ? "Remove from saved" : "Save"))
+    }
+}
+
+/// The ruled directory row: thumbnail, place, and the guide's figures set to the
+/// trailing edge in tabular figures. Like `MatchingTripCard`, the save mark is *not*
+/// part of it — the caller overlays one outside the enclosing `NavigationLink`, or
+/// VoiceOver folds it into the link and it can't be reached.
+struct DestinationIndexRow: View {
+    let destination: Destination
+
+    var body: some View {
+        HStack(spacing: 14) {
+            DestinationPhoto(destination: destination, symbolSize: 22)
+                .frame(width: 56, height: 56)
+                .clipShape(.rect(cornerRadius: Theme.RuledRadius.element))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: destination.city)
+                    .font(.app(.headline))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                Text(LocalizedStringKey(destination.country))
+                    .font(.app(.caption))
+                    .foregroundStyle(Theme.textSecondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+
+            VStack(alignment: .trailing, spacing: 3) {
+                Text(verbatim: destination.price)
+                    .inscription()
+                    .foregroundStyle(.primary)
+                Text("\(destination.days) days · \(destination.stops) stops")
+                    .inscription()
+                    .foregroundStyle(Theme.textSecondary)
+            }
+            .monospacedDigit()
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+        }
+        // Room for the save mark the caller overlays on the trailing edge.
+        .padding(.trailing, 40)
+        .padding(.vertical, 10)
+        .frame(minHeight: 76)
+        .contentShape(.rect)
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("Opens the curated guide")
+    }
+}
+
+private extension View {
+    /// A primary action's fill on Explore: the tinted glass capsule on card themes, and
+    /// a rounded accent block on ruled ones. `Theme.actionFill` squares its block, which
+    /// is the shape this theme has moved away from.
+    @ViewBuilder
+    func exploreActionFill(tint: Color) -> some View {
+        if Theme.isRuled {
+            background(tint, in: .rect(cornerRadius: Theme.RuledRadius.well))
+        } else {
+            glassEffect(.regular.tint(tint).interactive(), in: .capsule)
+        }
     }
 }
 

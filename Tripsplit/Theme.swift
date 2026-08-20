@@ -629,6 +629,21 @@ enum Theme {
     /// its full-bleed hairlines something to run past.
     static let ruledInset: CGFloat = 26
 
+    /// The ruled style's corner scale. It used to square every shape it drew, which read
+    /// as brutalist next to the rest of the app. Every value here is deliberately well
+    /// under `cardRadius`, so a rounded ruled theme still reads apart from the card
+    /// family rather than becoming a ninth member of it.
+    enum RuledRadius {
+        /// The one large image on a screen — Explore's plate.
+        static let plate: CGFloat = 16
+        /// A filled well: search fields and the blocks a primary action fills.
+        static let well: CGFloat = 14
+        /// Chips, filter tokens, and thumbnail imagery.
+        static let element: CGFloat = 12
+        /// The avatar, as a rounded square rather than a circle.
+        static let avatar: CGFloat = 9
+    }
+
     /// Horizontal inset for the home screen's content column. `nil` on card themes so
     /// they keep SwiftUI's default padding rather than a hard-coded stand-in for it.
     static var contentInset: CGFloat? { isRuled ? ruledInset : nil }
@@ -674,10 +689,12 @@ enum Theme {
 
     static func ruleColor(_ contrast: ColorSchemeContrast, _ weight: RuleWeight = .section) -> Color {
         switch weight {
-        // Near-black rather than the separator: a chapter rule is ink, not a hairline.
-        case .chapter: Color.primary
-        case .section: separator.opacity(contrast == .increased ? 1 : 0.9)
-        case .hairline: separator.opacity(contrast == .increased ? 1 : 0.55)
+        // Ink rather than the separator — but held back: at full strength a chapter rule
+        // read as a bar drawn across the page instead of as the end of a title block.
+        // Increased Contrast still gets the solid one.
+        case .chapter: Color.primary.opacity(contrast == .increased ? 1 : 0.4)
+        case .section: separator.opacity(contrast == .increased ? 1 : 0.8)
+        case .hairline: separator.opacity(contrast == .increased ? 1 : 0.45)
         case .opening: .clear
         }
     }
@@ -809,7 +826,7 @@ private struct InscriptionModifier: ViewModifier {
         // `tracking` is absolute — it does not grow with the type — so the spacing that
         // reads as air at default sizes reads as gaps at accessibility ones.
         let tracking: CGFloat = inscribed
-            ? (dynamicTypeSize.isAccessibilitySize ? 1.2 : 2.2)
+            ? (dynamicTypeSize.isAccessibilitySize ? 1.0 : 1.5)
             : 0.5
         content
             .font(.app(.caption2, .semibold))

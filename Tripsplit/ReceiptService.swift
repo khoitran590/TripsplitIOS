@@ -116,6 +116,13 @@ struct ParsedReceipt: Decodable {
 enum ReceiptParser {
     private static let maxImageBytes = 4_000_000
     private static let maxImageDimension: CGFloat = 2_200
+    /// Provider inference can legitimately take longer than ordinary Auth/PostgREST
+    /// calls. Preserve that budget while still failing immediately when local Supabase
+    /// has no listener (`waitsForConnectivity` comes from the active environment).
+    private static let session = BackendSecurity.makeSecureSession(
+        requestTimeout: 60,
+        resourceTimeout: 60
+    )
 
     /// Sends the receipt image to the `parse-receipt` Edge Function (authenticated as the
     /// signed-in user) and decodes the structured receipt it returns. Provider keys and
@@ -148,7 +155,7 @@ enum ReceiptParser {
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
-        let (data, response) = try await BackendSecurity.secureSession.data(for: request)
+        let (data, response) = try await Self.session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw ReceiptScanError.invalidResponse
         }
