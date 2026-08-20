@@ -20,6 +20,8 @@
 //  - Output: the model's JSON is re-validated/normalized before it reaches the client.
 //  - No dependencies: plain fetch only.
 
+import { localProviderMocksEnabled } from "../_shared/local-provider-mock.ts";
+
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -49,12 +51,25 @@ const LEGACY_GOOGLE_CONSENT_VERSION = "2026-08-02";
 
 const CLAUDE_MAX_TOKENS = 32_000; // Covers thinking + a 30-day plan.
 const CLAUDE_SEARCH_MAX_USES = 6; // Bounds search cost and latency.
-// Wall-clock ceiling for the whole Claude attempt. The client gives up at 150s, so
-// abandoning Claude here still leaves room for the Gemini fallback to answer. A
-// mistyped override must not become NaN — that would abort every request instantly.
+// Supabase's hosted request idle limit and the app's resource timeout are both 150s.
+// Keep a hard deadline below that platform limit, then give every provider attempt a
+// slice of the same budget. This prevents a slow Claude call followed by an unbounded
+// Gemini fallback from letting Supabase terminate the worker with a 546/504 response.
+const REQUEST_BUDGET_MS = 120_000;
+const RESPONSE_RESERVE_MS = 8_000;
+const GEMINI_FALLBACK_RESERVE_MS = 55_000;
+const GEMINI_SEARCH_BUDGET_MS = 30_000;
+const GEMINI_PLAIN_BUDGET_MS = 40_000;
+const GEMINI_MODEL_FALLBACK_BUDGET_MS = 25_000;
+const MIN_PROVIDER_ATTEMPT_MS = 3_000;
+
+// Claude is the quality-first provider, but it cannot own most of the request window.
+// Clamp a dashboard override so an old 80s setting cannot reintroduce the production
+// wall-clock failure. A mistyped override must not become NaN either.
 const CLAUDE_BUDGET_MS = (() => {
   const configured = Number(Deno.env.get("CLAUDE_SUGGEST_BUDGET_MS"));
-  return Number.isFinite(configured) && configured > 0 ? configured : 80_000;
+  const requested = Number.isFinite(configured) && configured > 0 ? configured : 40_000;
+  return Math.min(Math.max(requested, 10_000), 50_000);
 })();
 // Server tools can pause a turn mid-search; each resume costs one round trip.
 const CLAUDE_MAX_TURNS = 4;
@@ -65,10 +80,32 @@ function jsonResponse(body: unknown, status = 200, headers: Record<string, strin
   return new Response(JSON.stringify(body), { status, headers: { ...JSON_HEADERS, ...headers } });
 }
 
+function attemptDeadline(overallDeadline: number, attemptBudgetMs: number): number {
+  return Math.min(overallDeadline, Date.now() + attemptBudgetMs);
+}
+
+function timedOut(error: unknown, deadline: number): boolean {
+  if (Date.now() >= deadline) return true;
+  return error instanceof DOMException && (error.name === "TimeoutError" || error.name === "AbortError");
+}
+
+function logProviderTimeout(
+  provider: "claude" | "gemini",
+  detail: Record<string, unknown>,
+): void {
+  console.error(JSON.stringify({
+    function: "suggest-itinerary",
+    outcome: "provider_timeout",
+    provider,
+    ...detail,
+  }));
+}
+
 Deno.serve(async (req) => {
   if (req.method !== "POST") {
     return jsonResponse({ error: "Method not allowed" }, 405);
   }
+  const requestDeadline = Date.now() + REQUEST_BUDGET_MS;
 
   // 1. Require a valid, signed-in user (not just any project JWT such as the anon key).
   const token = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
@@ -107,7 +144,8 @@ Deno.serve(async (req) => {
   // 3. At least one provider must be usable before reserving quota: our own
   // configuration outage is never charged. Claude is primary whenever its key exists and
   // the user granted the current, Anthropic-inclusive consent.
-  if ((!hasCurrentConsent || !ANTHROPIC_API_KEY) && !GEMINI_API_KEY) {
+  const mocksEnabled = localProviderMocksEnabled();
+  if ((!hasCurrentConsent || !ANTHROPIC_API_KEY) && !GEMINI_API_KEY && !mocksEnabled) {
     return jsonResponse({ error: "AI suggestions are not configured." }, 503);
   }
 
@@ -125,23 +163,54 @@ Deno.serve(async (req) => {
     return rateLimitResponse(usage);
   }
 
+  if (mocksEnabled) {
+    const plan = normalizePlan({
+      days: [{
+        title: `Day 1 in ${location}`,
+        stops: [{
+          kind: "activity",
+          name: "Local smoke-test stop",
+          time: "09:00",
+          notes: "Deterministic local provider mock",
+          cost: 0,
+        }],
+      }],
+    });
+    await completeUsage(usage.reservationId, true);
+    logUsage("local_mock_success", 200, usage, "gemini");
+    return jsonResponse(plan, 200);
+  }
+
   const prompt = buildPrompt({ location, days, currency, totalBudget, startDate, existingPlan });
   let plan: Record<string, unknown> | null = null;
   let provider: "claude" | "gemini" | undefined;
   let quotaExhausted = false;
+  let providerTimedOut = false;
+  let claudeAttempted = false;
 
   // 5. Claude first: adaptive thinking plans the geography and the route, the web_search
   // tool checks that the places are real, open, and currently priced as claimed.
   if (hasCurrentConsent && ANTHROPIC_API_KEY) {
-    const first = await callClaude(prompt, { structured: true });
+    claudeAttempted = true;
+    // Set this once and reuse it for the optional compatibility retry. Giving each
+    // retry a fresh timeout was the path that could consume the entire worker lifetime.
+    const claudeDeadline = Math.min(
+      Date.now() + CLAUDE_BUDGET_MS,
+      requestDeadline - (GEMINI_API_KEY ? GEMINI_FALLBACK_RESERVE_MS : RESPONSE_RESERVE_MS),
+    );
+    const first = await callClaude(prompt, { structured: true }, claudeDeadline);
     plan = first.plan;
+    providerTimedOut ||= first.timedOut;
     if (!plan && first.status === 400) {
       // Constrained decoding can be rejected in combination with server tools on some
       // models. The prompt already specifies the exact shape, so retry unconstrained
       // before writing Claude off — `normalizePlan` re-validates either way.
-      plan = (await callClaude(prompt, { structured: false })).plan;
-    } else if (!plan && first.status === 429) {
-      quotaExhausted = true;
+      const retry = await callClaude(prompt, { structured: false }, claudeDeadline);
+      plan = retry.plan;
+      providerTimedOut ||= retry.timedOut;
+      quotaExhausted ||= retry.status === 429;
+    } else {
+      quotaExhausted ||= first.status === 429;
     }
     if (plan) {
       provider = "claude";
@@ -155,17 +224,40 @@ Deno.serve(async (req) => {
   // JSON-schema combination), then the fallback model — but don't burn retries when the
   // failure was quota (429): that hits every variant alike.
   if (!plan && GEMINI_API_KEY) {
-    const first = await callGemini(SUGGEST_MODEL, prompt, { useSearch: true });
+    const geminiDeadline = requestDeadline - RESPONSE_RESERVE_MS;
+    // Claude already performed the quality-first research attempt. If it timed out or
+    // returned invalid output, prefer a fast constrained Gemini response over starting
+    // another slow web-search turn. Gemini remains search-grounded when it is primary.
+    const useSearch = !claudeAttempted;
+    const first = await callGemini(
+      SUGGEST_MODEL,
+      prompt,
+      { useSearch },
+      attemptDeadline(geminiDeadline, useSearch ? GEMINI_SEARCH_BUDGET_MS : GEMINI_PLAIN_BUDGET_MS),
+    );
     plan = first.plan;
     let upstreamStatus = first.status;
-    if (!plan && upstreamStatus !== 429) {
-      const second = await callGemini(SUGGEST_MODEL, prompt, { useSearch: false });
+    providerTimedOut ||= first.timedOut;
+    if (!plan && upstreamStatus !== 429 && useSearch) {
+      const second = await callGemini(
+        SUGGEST_MODEL,
+        prompt,
+        { useSearch: false },
+        attemptDeadline(geminiDeadline, GEMINI_PLAIN_BUDGET_MS),
+      );
       plan = second.plan;
+      providerTimedOut ||= second.timedOut;
       if (!plan) upstreamStatus = second.status;
     }
     if (!plan && upstreamStatus !== 429 && SUGGEST_MODEL !== FALLBACK_MODEL) {
-      const third = await callGemini(FALLBACK_MODEL, prompt, { useSearch: false });
+      const third = await callGemini(
+        FALLBACK_MODEL,
+        prompt,
+        { useSearch: false },
+        attemptDeadline(geminiDeadline, GEMINI_MODEL_FALLBACK_BUDGET_MS),
+      );
       plan = third.plan;
+      providerTimedOut ||= third.timedOut;
       if (!plan) upstreamStatus = third.status;
     }
     if (plan) provider = "gemini";
@@ -174,13 +266,19 @@ Deno.serve(async (req) => {
 
   if (!plan || !provider) {
     await completeUsage(usage.reservationId, true);
-    logUsage("post_call_failure", quotaExhausted ? 503 : 502);
+    logUsage("post_call_failure", quotaExhausted ? 503 : providerTimedOut ? 504 : 502);
     // Surface quota exhaustion distinctly — it's an account/billing condition the
     // owner must fix (or wait out), not a transient service bug.
     if (quotaExhausted) {
       return jsonResponse(
         { error: "The AI planner is over its usage limit right now. Try again later." },
         503,
+      );
+    }
+    if (providerTimedOut) {
+      return jsonResponse(
+        { error: "The AI planner took too long to respond. Try again." },
+        504,
       );
     }
     return jsonResponse({ error: "Suggestion service error" }, 502);
@@ -400,16 +498,19 @@ const PLAN_JSON_SCHEMA = {
 async function callClaude(
   prompt: string,
   options: { structured: boolean },
-): Promise<{ plan: Record<string, unknown> | null; status: number }> {
-  if (!ANTHROPIC_API_KEY) return { plan: null, status: 0 };
+  deadline: number,
+): Promise<{ plan: Record<string, unknown> | null; status: number; timedOut: boolean }> {
+  if (!ANTHROPIC_API_KEY) return { plan: null, status: 0, timedOut: false };
 
-  const deadline = Date.now() + CLAUDE_BUDGET_MS;
   const messages: unknown[] = [{ role: "user", content: prompt }];
 
   for (let turn = 0; turn < CLAUDE_MAX_TURNS; turn++) {
     const remainingMs = deadline - Date.now();
     // Too little left to be worth a round trip — hand over to the fallback instead.
-    if (remainingMs < 5_000) return { plan: null, status: 0 };
+    if (remainingMs < MIN_PROVIDER_ATTEMPT_MS) {
+      logProviderTimeout("claude", { model: CLAUDE_MODEL, turn, phase: "before_fetch" });
+      return { plan: null, status: 0, timedOut: true };
+    }
 
     let response: Response;
     try {
@@ -436,19 +537,23 @@ async function callClaude(
           messages,
         }),
       });
-    } catch {
-      return { plan: null, status: 0 };
+    } catch (error) {
+      const didTimeOut = timedOut(error, deadline);
+      if (didTimeOut) {
+        logProviderTimeout("claude", { model: CLAUDE_MODEL, turn, phase: "fetch" });
+      }
+      return { plan: null, status: 0, timedOut: didTimeOut };
     }
     if (!response.ok) {
       // Log status only — never the upstream body (avoid leaking key-adjacent detail).
       console.error("Claude call failed:", CLAUDE_MODEL, response.status);
-      return { plan: null, status: response.status };
+      return { plan: null, status: response.status, timedOut: false };
     }
 
     const body = await response.json().catch(() => null);
-    if (!body || !Array.isArray(body.content)) return { plan: null, status: 200 };
+    if (!body || !Array.isArray(body.content)) return { plan: null, status: 200, timedOut: false };
     // Safety classifiers can decline (HTTP 200) — there is no plan to read.
-    if (body.stop_reason === "refusal") return { plan: null, status: 200 };
+    if (body.stop_reason === "refusal") return { plan: null, status: 200, timedOut: false };
     // The server-side search loop hit its iteration limit: echo the turn back to resume.
     if (body.stop_reason === "pause_turn") {
       messages.push({ role: "assistant", content: body.content });
@@ -461,15 +566,15 @@ async function callClaude(
       )
       .map((block: Record<string, unknown>) => (typeof block.text === "string" ? block.text : ""))
       .join("");
-    if (rawText.length === 0) return { plan: null, status: 200 };
+    if (rawText.length === 0) return { plan: null, status: 200, timedOut: false };
 
     try {
-      return { plan: normalizePlan(JSON.parse(stripFences(rawText))), status: 200 };
+      return { plan: normalizePlan(JSON.parse(stripFences(rawText))), status: 200, timedOut: false };
     } catch {
-      return { plan: null, status: 200 };
+      return { plan: null, status: 200, timedOut: false };
     }
   }
-  return { plan: null, status: 0 };
+  return { plan: null, status: 0, timedOut: false };
 }
 
 // Calls Gemini once with constrained JSON decoding, optionally grounded with Google
@@ -480,7 +585,14 @@ async function callGemini(
   model: string,
   prompt: string,
   options: { useSearch: boolean },
-): Promise<{ plan: Record<string, unknown> | null; status: number }> {
+  deadline: number,
+): Promise<{ plan: Record<string, unknown> | null; status: number; timedOut: boolean }> {
+  const remainingMs = deadline - Date.now();
+  if (remainingMs < MIN_PROVIDER_ATTEMPT_MS) {
+    logProviderTimeout("gemini", { model, useSearch: options.useSearch, phase: "before_fetch" });
+    return { plan: null, status: 0, timedOut: true };
+  }
+
   let geminiResponse: Response;
   try {
     geminiResponse = await fetch(
@@ -488,6 +600,7 @@ async function callGemini(
       {
         method: "POST",
         headers: JSON_HEADERS,
+        signal: AbortSignal.timeout(remainingMs),
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
           ...(options.useSearch ? { tools: [{ google_search: {} }] } : {}),
@@ -528,13 +641,17 @@ async function callGemini(
         }),
       },
     );
-  } catch {
-    return { plan: null, status: 0 };
+  } catch (error) {
+    const didTimeOut = timedOut(error, deadline);
+    if (didTimeOut) {
+      logProviderTimeout("gemini", { model, useSearch: options.useSearch, phase: "fetch" });
+    }
+    return { plan: null, status: 0, timedOut: didTimeOut };
   }
   if (!geminiResponse.ok) {
     // Log status only — never the upstream body (avoid leaking key-adjacent detail).
     console.error("Gemini call failed:", model, geminiResponse.status);
-    return { plan: null, status: geminiResponse.status };
+    return { plan: null, status: geminiResponse.status, timedOut: false };
   }
 
   const geminiJson = await geminiResponse.json().catch(() => null);
@@ -543,12 +660,14 @@ async function callGemini(
   const rawText = Array.isArray(parts)
     ? parts.map((p) => (typeof p?.text === "string" ? p.text : "")).join("")
     : null;
-  if (typeof rawText !== "string" || rawText.length === 0) return { plan: null, status: 200 };
+  if (typeof rawText !== "string" || rawText.length === 0) {
+    return { plan: null, status: 200, timedOut: false };
+  }
 
   try {
-    return { plan: normalizePlan(JSON.parse(stripFences(rawText))), status: 200 };
+    return { plan: normalizePlan(JSON.parse(stripFences(rawText))), status: 200, timedOut: false };
   } catch {
-    return { plan: null, status: 200 };
+    return { plan: null, status: 200, timedOut: false };
   }
 }
 

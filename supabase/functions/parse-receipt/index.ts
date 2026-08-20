@@ -17,6 +17,8 @@
 //  - No dependencies: plain fetch only, to minimize supply-chain surface.
 //  - Privacy: receipt images/text are never logged.
 
+import { localProviderMocksEnabled } from "../_shared/local-provider-mock.ts";
+
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -82,7 +84,8 @@ Deno.serve(async (req) => {
 
   // 3. At least one cloud provider must be configured before reserving quota: our own
   // configuration outage is never charged. Claude is primary whenever its key exists.
-  if ((!hasCurrentConsent || !ANTHROPIC_API_KEY) && !GEMINI_API_KEY) {
+  const mocksEnabled = localProviderMocksEnabled();
+  if ((!hasCurrentConsent || !ANTHROPIC_API_KEY) && !GEMINI_API_KEY && !mocksEnabled) {
     return jsonResponse({ error: "Receipt parsing is not configured." }, 503);
   }
 
@@ -99,6 +102,19 @@ Deno.serve(async (req) => {
   if (!usage.allowed || !usage.reservationId) {
     logUsage("rate_limited", 429, usage);
     return rateLimitResponse(usage);
+  }
+
+  if (mocksEnabled) {
+    await completeUsage(usage.reservationId, true);
+    logUsage("local_mock_success", 200, usage, "gemini");
+    return jsonResponse(normalizeReceipt({
+      merchant: "TripSplit Local Cafe",
+      date: "2026-08-20",
+      items: [{ name: "Coffee", price: 4.5, quantity: 1 }],
+      tax: 0,
+      tip: 0,
+      total: 4.5,
+    }), 200);
   }
 
   // 5. Ask Claude to read and structure the receipt directly from the image. If Claude is

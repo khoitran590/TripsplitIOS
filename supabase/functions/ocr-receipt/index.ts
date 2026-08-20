@@ -18,6 +18,8 @@
 // Deploy: supabase functions deploy ocr-receipt
 // Secret: supabase secrets set GOOGLE_VISION_API_KEY=<key>
 
+import { localProviderMocksEnabled } from "../_shared/local-provider-mock.ts";
+
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -63,7 +65,8 @@ Deno.serve(async (req) => {
   if ("error" in image) return jsonResponse({ error: image.error }, image.status);
 
   // 3. Missing server configuration is our outage and must not consume user quota.
-  if (!GOOGLE_VISION_API_KEY) {
+  const mocksEnabled = localProviderMocksEnabled();
+  if (!GOOGLE_VISION_API_KEY && !mocksEnabled) {
     return jsonResponse({ error: "Receipt OCR is not configured." }, 503);
   }
 
@@ -79,6 +82,15 @@ Deno.serve(async (req) => {
   if (!usage.allowed || !usage.reservationId) {
     logUsage("rate_limited", 429, usage);
     return rateLimitResponse(usage);
+  }
+
+  if (mocksEnabled) {
+    await completeUsage(usage.reservationId, true);
+    logUsage("local_mock_success", 200, usage);
+    return jsonResponse({
+      text: "Coffee 4.50\nTotal 4.50",
+      lines: ["Coffee 4.50", "Total 4.50"],
+    }, 200);
   }
 
   // 5. Call Cloud Vision with the server-side key. DOCUMENT_TEXT_DETECTION is the dense-

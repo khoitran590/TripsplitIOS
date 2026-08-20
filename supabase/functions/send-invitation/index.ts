@@ -1,6 +1,8 @@
 // Authenticated invitation email delivery. Raw invitation tokens exist only inside this
 // function and the recipient's HTTPS link; the iOS client receives a generic response.
 
+import { localProviderMocksEnabled } from "../_shared/local-provider-mock.ts";
+
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -20,15 +22,21 @@ type DeliveryInvitation = {
 
 Deno.serve(async (request) => {
   if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
-  if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !SUPABASE_SERVICE_ROLE_KEY ||
-      !RESEND_API_KEY || !INVITATION_BASE_URL || !INVITATION_FROM_EMAIL) {
+
+  const authorization = request.headers.get("Authorization") ?? "";
+  if (!authorization.startsWith("Bearer ")) return json({ error: "Unauthorized" }, 401);
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !SUPABASE_SERVICE_ROLE_KEY) {
+    console.error(JSON.stringify({ function: "send-invitation", outcome: "missing_backend_configuration" }));
+    return json({ error: "Invitations are temporarily unavailable." }, 503);
+  }
+  const actorID = await currentUserID(authorization);
+  if (!actorID) return json({ error: "Unauthorized" }, 401);
+
+  const mocksEnabled = localProviderMocksEnabled();
+  if ((!RESEND_API_KEY && !mocksEnabled) || !INVITATION_BASE_URL || !INVITATION_FROM_EMAIL) {
     console.error(JSON.stringify({ function: "send-invitation", outcome: "missing_configuration" }));
     return json({ error: "Invitations are temporarily unavailable." }, 503);
   }
-
-  const authorization = request.headers.get("Authorization") ?? "";
-  const actorID = await currentUserID(authorization);
-  if (!actorID) return json({ error: "Unauthorized" }, 401);
 
   let payload: { tripID?: unknown; email?: unknown };
   try {
@@ -49,20 +57,22 @@ Deno.serve(async (request) => {
     if (!invitation) return json({ pending: true }, 202);
 
     const link = invitationURL(invitation.token);
-    const delivered = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${RESEND_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from: INVITATION_FROM_EMAIL,
-        to: [email],
-        subject: `${invitation.inviter_name} invited you to ${invitation.trip_name}`,
-        text: `${invitation.inviter_name} invited you to join ${invitation.trip_name} in TripSplit. This invitation expires in 72 hours. Open: ${link}`,
-        html: invitationHTML(invitation, link),
-      }),
-    });
+    const delivered = mocksEnabled
+      ? new Response(null, { status: 202 })
+      : await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${RESEND_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          from: INVITATION_FROM_EMAIL,
+          to: [email],
+          subject: `${invitation.inviter_name} invited you to ${invitation.trip_name}`,
+          text: `${invitation.inviter_name} invited you to join ${invitation.trip_name} in TripSplit. This invitation expires in 72 hours. Open: ${link}`,
+          html: invitationHTML(invitation, link),
+        }),
+      });
     if (!delivered.ok) {
       await revokeInvitation(invitation.invitation_id);
       console.error(JSON.stringify({ function: "send-invitation", outcome: "provider_failure", status: delivered.status }));

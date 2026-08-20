@@ -40,6 +40,9 @@ node_modules/
 # Local Supabase CLI link/runtime state
 supabase/.temp/
 supabase/.branches/
+supabase/.test-results/
+supabase/functions/.env.local
+supabase/functions/.env.*.local
 
 # CocoaPods
 #
