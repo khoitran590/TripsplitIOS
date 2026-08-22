@@ -807,6 +807,8 @@ extension View {
             inscription().foregroundStyle(Theme.textSecondary)
         } else {
             font(.app(.headline))
+                .foregroundStyle(Color(light: 0x111827, dark: 0xF9FAFB))
+                .background(Theme.surfaceSubtle, in: .rect(cornerRadius: 4))
         }
     }
 }
@@ -1079,12 +1081,11 @@ private struct ReadableSurfaceModifier: ViewModifier {
     let cornerRadius: CGFloat
     let elevated: Bool
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     func body(content: Content) -> some View {
         content
             .background(
-                Theme.surface.opacity(reduceTransparency ? 1 : 0.96),
+                Theme.surface,
                 in: .rect(cornerRadius: cornerRadius)
             )
             .overlay {

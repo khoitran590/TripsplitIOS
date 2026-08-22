@@ -76,6 +76,7 @@ fastlane/test_output
 
 # Docs / AI assistant local files (keep out of GitHub)
 *.md
+!/README.md
 .claude/
 .agent/
 Claude.md

@@ -1583,6 +1583,11 @@ struct ItineraryDetailView: View {
                 Text("Let AI draft your whole trip: a day-by-day timeline of places to go, activities worth checking out, and where to eat — with times and estimated costs. You decide whether to use it.")
                     .font(.app(.footnote))
                     .foregroundStyle(.secondary)
+                if itinerary.totalBudget > 0 {
+                    Label("It plans to about 80% of your budget, leaving the rest as a cushion for taxes, tips, and surprises.", systemImage: "shield.lefthalf.filled")
+                        .font(.app(.caption))
+                        .foregroundStyle(.secondary)
+                }
                 Button {
                     generateSuggestion(trip, itinerary)
                 } label: {

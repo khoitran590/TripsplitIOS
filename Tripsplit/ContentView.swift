@@ -386,9 +386,12 @@ struct ContentView: View {
     private func mountedScreen(for tab: DockTab) -> some View {
         if visitedTabs.contains(tab) {
             screen(for: tab)
+                // Apply this directly to the cached screen before wrapping it in
+                // opacity. With the reverse order SwiftUI kept the invisible
+                // NavigationStack's descendants in the accessibility tree.
+                .accessibilityHidden(tab != selectedTab)
                 .opacity(tab == selectedTab ? 1 : 0)
                 .allowsHitTesting(tab == selectedTab)
-                .accessibilityHidden(tab != selectedTab)
                 .animation(nil, value: selectedTab)
         }
     }

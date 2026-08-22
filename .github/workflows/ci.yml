@@ -1,0 +1,165 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  local-backend:
+    name: Local backend and Edge Functions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      # Intentionally empty: CI must never call paid or hosted providers.
+      RESEND_API_KEY: ""
+      GOOGLE_VISION_API_KEY: ""
+      ANTHROPIC_API_KEY: ""
+      GEMINI_API_KEY: ""
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install the pinned Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.115.0
+
+      - name: Install the pinned Deno runtime
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: 2.9.5
+
+      - name: Prepare the provider-free function environment
+        run: cp supabase/functions/.env.example supabase/functions/.env.local
+
+      - name: Type-check Edge Functions
+        run: make functions-check
+
+      - name: Start local Supabase
+        run: make backend-up
+
+      - name: Rebuild the database from migrations
+        run: make backend-reset
+
+      - name: Run PostgreSQL security tests
+        run: make backend-test
+
+      - name: Run authenticated Edge Function smoke tests
+        run: make functions-test
+
+      - name: Collect local backend diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          mkdir -p supabase/.test-results
+          docker info > supabase/.test-results/docker-info.log 2>&1 || true
+          docker ps -a > supabase/.test-results/docker-containers.log 2>&1 || true
+          while IFS= read -r container; do
+            docker logs "$container" > "supabase/.test-results/${container}.log" 2>&1 || true
+          done < <(docker ps -a --filter name=supabase_ --format '{{.Names}}')
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-backend-diagnostics
+          path: supabase/.test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Stop local Supabase
+        if: always()
+        run: supabase stop --no-backup || true
+
+  ios:
+    name: iOS build and tests
+    runs-on: macos-26
+    timeout-minutes: 35
+    env:
+      DERIVED_DATA: ${{ runner.temp }}/TripsplitDerivedData
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Verify Xcode
+        shell: bash
+        run: |
+          xcodebuild -version
+          xcodebuild -version | head -n 1 | grep -Eq '^Xcode 26[.]'
+
+      - name: Boot the newest iPhone 17 Simulator
+        shell: bash
+        run: |
+          simulator_id="$(xcrun simctl list devices available -j | jq -r '[.devices | to_entries[] | .value[] | select(.name == "iPhone 17")] | last | .udid')"
+          test -n "$simulator_id" && test "$simulator_id" != "null"
+          xcrun simctl shutdown all || true
+          xcrun simctl boot "$simulator_id"
+          xcrun simctl bootstatus "$simulator_id" -b
+          echo "SIMULATOR_ID=$simulator_id" >> "$GITHUB_ENV"
+          echo "DESTINATION=platform=iOS Simulator,id=$simulator_id" >> "$GITHUB_ENV"
+
+      - name: Build the app without production access
+        run: >-
+          xcodebuild
+          -project Tripsplit.xcodeproj
+          -scheme Tripsplit
+          -configuration Debug
+          -destination "$DESTINATION"
+          -derivedDataPath "$DERIVED_DATA"
+          'SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG LOCAL_SUPABASE'
+          CODE_SIGNING_ALLOWED=NO
+          build
+
+      - name: Run Swift unit tests without Docker
+        run: >-
+          xcodebuild
+          -project Tripsplit.xcodeproj
+          -scheme Tripsplit
+          -configuration Debug
+          -destination "$DESTINATION"
+          -derivedDataPath "$DERIVED_DATA"
+          -resultBundlePath "${RUNNER_TEMP}/UnitTests.xcresult"
+          -parallel-testing-enabled NO
+          -only-testing:TripsplitAppTests
+          'SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG LOCAL_SUPABASE'
+          test
+
+      - name: Reset Simulator state before UI tests
+        shell: bash
+        run: |
+          xcrun simctl shutdown "$SIMULATOR_ID" || true
+          xcrun simctl boot "$SIMULATOR_ID"
+          xcrun simctl bootstatus "$SIMULATOR_ID" -b
+
+      - name: Run provider-free UI tests
+        run: >-
+          xcodebuild
+          -project Tripsplit.xcodeproj
+          -scheme Tripsplit
+          -configuration Debug
+          -destination "$DESTINATION"
+          -derivedDataPath "$DERIVED_DATA"
+          -resultBundlePath "${RUNNER_TEMP}/UITests.xcresult"
+          -parallel-testing-enabled NO
+          -only-testing:TripsplitAppUITests
+          'SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG LOCAL_SUPABASE'
+          test
+
+      - name: Upload failing Xcode results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcode-test-results
+          path: ${{ runner.temp }}/*.xcresult
+          if-no-files-found: ignore
+          retention-days: 7

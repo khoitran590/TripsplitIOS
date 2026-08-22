@@ -10,6 +10,7 @@ struct FloatingDock: View {
     @AppStorage("navbarTransparency") private var navbarTransparency = 0.0
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
@@ -20,40 +21,24 @@ struct FloatingDock: View {
         return 1 - min(max(navbarTransparency, 0), 0.55)
     }
 
-    var body: some View {
-        HStack(spacing: 4) {
-            ForEach(DockTab.allCases, id: \.self) { tab in
-                let isActive = tab == selectedTab
+    private var highContrastInk: Color { colorScheme == .dark ? .white : .black }
 
-                Button { select(tab) } label: {
-                    VStack(spacing: 2) {
-                        Image(systemName: tab.systemImage)
-                            .font(.app(.body, .semibold))
-                        Text(LocalizedStringKey(tab.rawValue))
-                            .font(.app(.caption2, isActive ? .bold : .medium))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.85)
-                    }
-                    .foregroundStyle(
-                        isActive ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.secondary)
-                    )
-                    .frame(minWidth: 44, minHeight: 44)
-                    .padding(.horizontal, dynamicTypeSize.isAccessibilitySize ? 4 : 8)
-                    .background(
-                        isActive ? Theme.accent.opacity(0.13) : Color.clear,
-                        in: .capsule
-                    )
-                    .contentShape(.capsule)
+    var body: some View {
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                ScrollView(.horizontal) {
+                    dockButtons
+                        .fixedSize(horizontal: true, vertical: false)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(Text(LocalizedStringKey(tab.rawValue)))
-                .accessibilityAddTraits(isActive ? .isSelected : [])
+                .scrollIndicators(.hidden)
+            } else {
+                dockButtons
             }
         }
         .padding(6)
         .background {
             Capsule()
-                .fill(Theme.surface.opacity(0.82 * backgroundVisibility))
+                .fill(Theme.surface.opacity(backgroundVisibility))
         }
         .background {
             Capsule()
@@ -88,6 +73,43 @@ struct FloatingDock: View {
                 }
         )
         .accessibilityHint("Swipe left or right on the dock to change tabs")
+    }
+
+    private var dockButtons: some View {
+        HStack(spacing: 4) {
+            ForEach(DockTab.allCases, id: \.self) { tab in
+                let isActive = tab == selectedTab
+
+                Button { select(tab) } label: {
+                    VStack(spacing: 2) {
+                        Image(systemName: tab.systemImage)
+                            .font(.app(.body, .semibold))
+                        Text(LocalizedStringKey(tab.rawValue))
+                            .font(.app(.caption2, isActive ? .bold : .medium))
+                            .multilineTextAlignment(.center)
+                    }
+                    // The selected capsule and accessibility trait already carry
+                    // state. Keeping every label/icon on the primary foreground
+                    // avoids accent-on-accent contrast at caption sizes.
+                    .foregroundStyle(highContrastInk)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .padding(.horizontal, dynamicTypeSize.isAccessibilitySize ? 4 : 8)
+                    .background {
+                        Capsule()
+                            .fill(Theme.surface)
+                            .overlay {
+                                if isActive {
+                                    Capsule().fill(Theme.accent.opacity(0.13))
+                                }
+                            }
+                    }
+                    .contentShape(.capsule)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text(LocalizedStringKey(tab.rawValue)))
+                .accessibilityAddTraits(isActive ? .isSelected : [])
+            }
+        }
     }
 
     private func moveSelection(for horizontalTranslation: CGFloat) {

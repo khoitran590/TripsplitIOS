@@ -18,6 +18,20 @@ struct RootView: View {
 
     init() {
         let arguments = ProcessInfo.processInfo.arguments
+        let isUITest = arguments.contains("-ui-test-reset-onboarding")
+            || arguments.contains("-ui-test-skip-onboarding")
+
+        // Accessibility audits must be repeatable on a clean CI runner and on a
+        // developer Simulator that may have unrelated personal appearance settings.
+        if isUITest {
+            UserDefaults.standard.set(AppearancePreference.light.rawValue, forKey: "appearancePreference")
+            UserDefaults.standard.set(0.0, forKey: "navbarTransparency")
+            UserDefaults.standard.set(AppTheme.classic.rawValue, forKey: "appTheme")
+            UserDefaults.standard.set(AppFontChoice.system.rawValue, forKey: "appFont")
+            ThemeManager.shared.selection = .classic
+            FontManager.shared.selection = .system
+        }
+
         if AppStoreDemoData.isEnabled {
             UserDefaults.standard.set(true, forKey: "hasSeenWelcome")
         } else if arguments.contains("-ui-test-reset-onboarding") {

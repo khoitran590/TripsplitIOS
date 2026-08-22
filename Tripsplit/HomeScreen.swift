@@ -7,6 +7,7 @@ struct HomeScreen: View {
     var onBrowseIdeas: () -> Void = {}
     @Environment(TripStore.self) private var store
     @Environment(AuthStore.self) private var auth
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @State private var showAddTrip = false
     @State private var showSignInAlert = false
@@ -26,6 +27,9 @@ struct HomeScreen: View {
     @State private var isSelectingTransactions = false
     @State private var selectedTransactionIDs: Set<Transaction.ID> = []
     @State private var transactionsPendingDelete: [Transaction]?
+
+    private var highContrastInk: Color { colorScheme == .dark ? .white : .black }
+    private var highContrastSurface: Color { colorScheme == .dark ? .black : .white }
 
     var body: some View {
         Group {
@@ -264,13 +268,15 @@ struct HomeScreen: View {
         VStack(spacing: 12) {
             Image(systemName: "suitcase")
                 .font(.app(.largeTitle))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(Theme.textSecondary)
+                .accessibilityHidden(true)
             Text("No trips yet")
                 .font(.app(.subheadline, .medium))
             Text("Start with a guide or create an empty trip when you already know where you're going.")
                 .font(.app(.caption))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(highContrastInk)
                 .multilineTextAlignment(.center)
+                .background(highContrastSurface)
             RuledInlineButton(title: "Browse trip ideas", tint: Theme.accent, action: onBrowseIdeas) {
                 Button {
                     onBrowseIdeas()
@@ -292,13 +298,17 @@ struct HomeScreen: View {
             } label: {
                 Label("Create empty trip", systemImage: "plus")
                     .font(.app(.subheadline, .semibold))
-                    .frame(minHeight: 44)
+                    .foregroundStyle(highContrastInk)
+                    .padding(.horizontal, 12)
+                    .frame(minHeight: 48)
+                    .background(highContrastSurface, in: .capsule)
+                    .contentShape(.rect)
             }
             .buttonStyle(.plain)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, Theme.isRuled ? 14 : 28)
-        .homeGlassPanel()
+        .homePanel()
     }
 
     private func cloudLoadFailure(_ message: String) -> some View {
@@ -350,8 +360,7 @@ struct HomeScreen: View {
         HStack(spacing: Theme.isRuled ? 0 : 12) {
             QuickActionButton(
                 title: "Split Expense",
-                icon: "divide.circle.fill",
-                colors: [Color(hex: 0x818CF8), Color(hex: 0x4F46E5)]
+                icon: "divide.circle.fill"
             ) { startQuickAction(.split) }
 
             // Ruled style divides the two actions with a hairline instead of a gap,
@@ -364,8 +373,7 @@ struct HomeScreen: View {
 
             QuickActionButton(
                 title: "Add Expense",
-                icon: "plus.circle.fill",
-                colors: [Color(hex: 0x34D399), Color(hex: 0x059669)]
+                icon: "plus.circle.fill"
             ) { startQuickAction(.addExpense) }
         }
         // A hairline keeps this strip attached to the budget block it acts on, rather
@@ -472,16 +480,21 @@ struct HomeScreen: View {
                 VStack(spacing: 12) {
                     Image(systemName: "tray")
                         .font(.app(.largeTitle))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(Theme.textSecondary)
+                        .accessibilityHidden(true)
                     Text("No transactions yet")
                         .font(.app(.subheadline, .medium))
                     Text("Add an expense to a trip to see it here.")
                         .font(.app(.caption))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(highContrastInk)
+                        .background(highContrastSurface)
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, Theme.isRuled ? 14 : 28)
-                .homeGlassPanel()
+                // Keep the instruction above iOS's bottom scroll-edge fade and the
+                // floating dock. At the old height the system faded the last line,
+                // reducing its rendered contrast even over an opaque card.
+                .padding(.vertical, Theme.isRuled ? 14 : 12)
+                .homePanel()
             } else {
                 GlassEffectContainer(spacing: 12) {
                     // Lazy so expanding a large trip only builds the rows scrolled into view.
@@ -1706,12 +1719,15 @@ struct CurrencyConverterCard: View {
 
 // MARK: - Quick Action Button
 
-/// A compact pill action: a small gradient icon and a single label, on liquid glass.
+/// A compact pill action with a decorative icon and a single accessible label.
 struct QuickActionButton: View {
     let title: LocalizedStringKey
     let icon: String
-    let colors: [Color]
     let action: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var highContrastInk: Color { colorScheme == .dark ? .white : .black }
+    private var highContrastSurface: Color { colorScheme == .dark ? .black : .white }
 
     @ViewBuilder
     var body: some View {
@@ -1731,13 +1747,15 @@ struct QuickActionButton: View {
                 HStack(spacing: 10) {
                     Image(systemName: icon)
                         .font(.app(.body, .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(highContrastInk)
                         .frame(width: 34, height: 34)
-                        .background(
-                            LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing),
-                            in: .circle
-                        )
-                    Text(title).font(.app(.subheadline, .semibold))
+                        // The title labels the whole button. Keeping the icon
+                        // monochrome also avoids exposing a decorative gradient
+                        // as an unnamed low-contrast accessibility node.
+                        .accessibilityHidden(true)
+                    Text(title)
+                        .font(.app(.subheadline, .semibold))
+                        .foregroundStyle(highContrastInk)
                     Spacer(minLength: 0)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1748,7 +1766,10 @@ struct QuickActionButton: View {
                 .contentShape(.capsule)
             }
             .buttonStyle(.plain)
-            .glassEffect(.regular.interactive(), in: .capsule)
+            .background(highContrastSurface, in: .capsule)
+            .overlay {
+                Capsule().strokeBorder(Theme.separator, lineWidth: 1)
+            }
         }
     }
 }

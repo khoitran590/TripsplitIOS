@@ -301,14 +301,19 @@ struct RecScreen: View {
         }
     }
 
-    /// Explore stays mounted while other tabs are on top. `ContentView` already hides
-    /// inactive tabs behind `opacity`/`allowsHitTesting`, so swapping this body out for
-    /// a placeholder only destroyed the `ScrollView` — which meant returning from Map or
-    /// Trips snapped the user back to the top of Explore and re-decoded every visible
-    /// photo. `isActive` now gates the one thing that genuinely depends on visibility:
-    /// presenting the walkthrough.
+    /// Keep this view's state mounted while removing the inactive NavigationStack from
+    /// rendering and accessibility. Opacity alone left the entire invisible Explore
+    /// hierarchy exposed to VoiceOver (and kept it participating in updates). Search,
+    /// filters and the navigation path remain `@State` on `RecScreen`, while decoded
+    /// photos remain in `DestinationImageCache` for the next visit.
+    @ViewBuilder
     var body: some View {
-        exploreContent
+        if isActive {
+            exploreContent
+        } else {
+            Color.clear
+                .accessibilityHidden(true)
+        }
     }
 
     private var exploreContent: some View {
@@ -1901,10 +1906,9 @@ struct AdventureCard: View {
     /// Grows with Dynamic Type so the city/country/budget stack and the CTA still fit
     /// at large sizes, but clamped — an unbounded carousel card would run off screen.
     @ScaledMetric(relativeTo: .body) private var cardHeight: CGFloat = 380
-    /// The plate's own height and title size — shorter than the card, because the caption
-    /// below it now needs room that the card reversed out of the image.
+    /// The plate is shorter than the card because the caption below it needs room that
+    /// the card reversed out of the image.
     @ScaledMetric(relativeTo: .body) private var plateHeight: CGFloat = 248
-    @ScaledMetric(relativeTo: .largeTitle) private var plateTitleSize: CGFloat = 34
 
     /// Two stops by name, plus a count of the rest — the same line the rail cards carry.
     /// The plate has the width for it, and names are what separate a real itinerary from
@@ -1942,7 +1946,7 @@ struct AdventureCard: View {
                 .clipShape(.rect(cornerRadius: Theme.RuledRadius.plate))
 
             Text(verbatim: destination.city)
-                .font(.app(size: plateTitleSize, weight: .medium))
+                .font(.app(.largeTitle, .medium))
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
                 .padding(.top, 16)
@@ -2019,7 +2023,7 @@ struct AdventureCard: View {
                 // styles used to disagree, so a country localized in one list and not
                 // in the other.
                 Text(verbatim: destination.city)
-                    .font(.app(size: 32, weight: .bold))
+                    .font(.app(.largeTitle, .bold))
                     .foregroundStyle(.white)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)

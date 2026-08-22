@@ -42,6 +42,11 @@ const FALLBACK_MODEL = Deno.env.get("GEMINI_MODEL") ?? "gemini-2.5-flash";
 const MAX_DAYS = 30;
 const MAX_STOPS_PER_DAY = 10;
 const MAX_EXISTING_CHARS = 4_000;
+// The planner spends against only this fraction of the traveler's stated budget,
+// holding the rest back as a cushion for taxes, tips, transit, and the extra charges a
+// plan on paper never captures. Kept server-side so the client keeps showing and
+// splitting the full budget the user set while the model targets the reduced figure.
+const BUDGET_PLANNING_RATIO = 0.8;
 const RATE_LIMIT = 10; // Max plan generations ...
 const RATE_WINDOW_SECONDS = 300; // ... per user per this window.
 const RATE_KIND = "itinerary";
@@ -402,10 +407,17 @@ function buildPrompt(input: {
   startDate: string;
   existingPlan: string;
 }): string {
-  const perDay = input.totalBudget > 0 ? input.totalBudget / input.days : 0;
-  const budgetLine = input.totalBudget > 0
-    ? `Total budget: ${input.totalBudget.toFixed(2)} ${input.currency} (about ${perDay.toFixed(2)} ${input.currency} per day, per person).`
+  const hasBudget = input.totalBudget > 0;
+  const targetPct = Math.round(BUDGET_PLANNING_RATIO * 100); // 80
+  const reservePct = 100 - targetPct; // 20
+  const planningBudget = input.totalBudget * BUDGET_PLANNING_RATIO;
+  const perDayTarget = hasBudget ? planningBudget / input.days : 0;
+  const budgetLine = hasBudget
+    ? `Budget: the traveler set aside ${input.totalBudget.toFixed(2)} ${input.currency} for this trip. Plan comfortably within about ${planningBudget.toFixed(2)} ${input.currency} — roughly ${targetPct}%, or about ${perDayTarget.toFixed(2)} ${input.currency} per day, per person — keeping the other ~${reservePct}% as a buffer for taxes, tips, transit, and surprises. Use that ${targetPct}% as a realistic guide, not a quota: where the budget comfortably allows, favor genuinely better experiences over the cheapest option, but keep every price real. It is completely fine to land under the target when that is what an honest, well-chosen plan actually costs; just never exceed ${planningBudget.toFixed(2)} ${input.currency}.`
     : `No fixed budget — still keep costs reasonable and realistic.`;
+  const budgetDisciplineLine = hasBudget
+    ? `- Budget discipline: keep the trip's total estimated cost within about ${planningBudget.toFixed(2)} ${input.currency} (~${targetPct}% of the ${input.totalBudget.toFixed(2)} ${input.currency} budget) — around ${perDayTarget.toFixed(2)} ${input.currency} per day, per person — without going over. Where the budget comfortably allows, prefer quality (a standout restaurant, a worthwhile paid tour, a cooking class, a day trip) over bare-bones picks, so a generous budget isn't spent on a needlessly cheap plan. But realism wins: every cost must be a real current price for a real place — never inflate prices or add stops just to spend more, and landing under the target is fine when that is what a genuinely good plan costs.`
+    : `- Budget discipline: keep each day's combined stop costs reasonable and realistic for ${input.location}; don't pad the plan with unnecessary paid stops.`;
   const dateLine = input.startDate ? `The trip starts on ${input.startDate}.` : "";
   const existingBlock = input.existingPlan
     ? `Already planned by the traveler (do NOT suggest these again — schedule around them):\n${input.existingPlan}`
@@ -449,7 +461,7 @@ PLANNING RULES — how a professional builds a day
 - Respect reality: don't schedule museums on their typical closing days, night markets in the morning, or sunrise/sunset spots at the wrong time.
 - Meals: vary cuisine and price level across the trip — never suggest the same restaurant twice, and don't make every meal a famous tourist spot; include local favorites.
 - Balance each day: roughly 2–3 sights/locations, 1–2 activities, 2 meals. Never a full day of only museums or only food.
-- Budget discipline: keep each day's combined stop costs at or under the per-day amount. Splurge days are fine only if offset by cheaper days, and the whole trip must total at or under the overall budget.
+${budgetDisciplineLine}
 - Trip arc: put the unmissable icons in the first two-thirds of the trip; for trips of 5+ days, make the first day slightly lighter (arrival) and vary the rhythm — a packed day followed by a gentler one. For long trips (8+ days), include at least one slower "local life" day (parks, neighborhoods, cafés) and consider a classic day trip out of the city if there is an obvious one.
 - If stops are already planned (listed above), never repeat them; fill the same day's remaining hours around their times and keep that day's geography coherent with them.`;
 }

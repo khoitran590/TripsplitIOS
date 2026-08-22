@@ -155,10 +155,20 @@ struct WelcomeView: View {
             VStack(spacing: dynamicTypeSize.isAccessibilitySize ? 12 : 20) {
                 HStack {
                     Spacer()
-                    Button("Browse now") { onFinish(.browse) }
-                        .font(.app(.subheadline, .semibold))
-                        .foregroundStyle(Theme.textSecondary)
-                        .frame(minWidth: 44, minHeight: 44)
+                    Button { onFinish(.browse) } label: {
+                        Text("Browse now")
+                            .font(.app(.subheadline, .semibold))
+                            .foregroundStyle(.primary)
+                            .padding(.horizontal, 10)
+                            .frame(minWidth: 88, minHeight: 48)
+                            .background(Theme.surface, in: .capsule)
+                            .overlay {
+                                Capsule()
+                                    .strokeBorder(Theme.separator, lineWidth: 1)
+                            }
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 8)
@@ -190,9 +200,20 @@ struct WelcomeView: View {
                                 .multilineTextAlignment(.center)
                             Text("Discover a destination, build the plan with friends, and keep every shared expense fair in one place.")
                                 .font(.app(.body))
-                                .foregroundStyle(Theme.textSecondary)
+                                .foregroundStyle(.primary)
                                 .multilineTextAlignment(.center)
                                 .lineSpacing(3)
+                        }
+                        // Keep the welcome copy on one known, opaque surface. The
+                        // decorative background changes luminance under the blur,
+                        // which made otherwise-dark body text fail iOS's contrast
+                        // audit at some sampling points.
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 18)
+                        .background(Theme.surface, in: .rect(cornerRadius: Theme.cardRadius))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: Theme.cardRadius)
+                                .strokeBorder(Theme.separator, lineWidth: 1)
                         }
                         .padding(.horizontal, 28)
                         .accessibilityElement(children: .combine)
@@ -223,9 +244,18 @@ struct WelcomeView: View {
                 Text("Browse without an account")
                     .font(.app(.subheadline, .semibold))
                     .foregroundStyle(.primary)
-                    .frame(maxWidth: .infinity, minHeight: 48)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, minHeight: 56)
+                    .background(Theme.surface, in: .capsule)
+                    .overlay {
+                        Capsule()
+                            .strokeBorder(Theme.separator, lineWidth: 1)
+                    }
+                    .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, minHeight: 56)
+            .contentShape(.rect)
             .accessibilityHint("Opens Explore signed out. Account-only actions will offer sign in when needed.")
         }
     }
