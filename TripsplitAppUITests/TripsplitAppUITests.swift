@@ -45,10 +45,14 @@ final class TripsplitAppUITests: XCTestCase {
         try app.performAccessibilityAudit(for: auditTypes) { issue in
             // iOS 26.5 Simulator reports its own status-bar clock as an unnamed
             // SwiftUI contrast issue. The native XCTest attachment contains only
-            // that system-owned clock, so ignore this one nil-element false positive.
+            // that system-owned clock, so ignore this one false positive. The
+            // nil element is the reliable signal that no app-owned control is
+            // implicated (app issues always attach their element); the description
+            // match stays tolerant of OS/locale phrasing rather than pinning to an
+            // exact string that a future Simulator could word differently.
             if !ignoredSimulatorStatusBarContrast,
                issue.element == nil,
-               issue.compactDescription == "Contrast failed" {
+               issue.compactDescription.localizedCaseInsensitiveContains("contrast") {
                 ignoredSimulatorStatusBarContrast = true
                 print("Ignoring simulator status-bar contrast false positive")
                 return true

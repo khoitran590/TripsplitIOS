@@ -52,6 +52,10 @@ struct RecScreen: View {
     /// which that chip reads as selected.
     static let budgetPreset: Double = 1500
 
+    /// Scroll anchor for the top of the page, so the toolbar's search button can bring
+    /// the demoted search field back into view before focusing it.
+    private static let topAnchor = "explore-top"
+
     /// An account-gated action parked while the sign-in sheet is up, replayed once
     /// authentication succeeds.
     @State private var pendingAction: ExploreGatedAction?
@@ -186,7 +190,20 @@ struct RecScreen: View {
         let ids = savedIDs
         return Destination.popularFirst.filter { ids.contains($0.id) }
     }
-    private var hasContinueContent: Bool { !saved.isEmpty || !store.itineraryTrips.isEmpty }
+
+    /// The user's planned trips, ordered for the "your trips" surface: soonest upcoming
+    /// first (which becomes the hero), then anything ongoing, past, or undated. Explore
+    /// only surfaces trips that carry a day-by-day plan.
+    private var plannedTrips: [Trip] {
+        let trips = store.itineraryTrips
+        let upcoming = trips
+            .filter { ($0.daysUntilStart ?? -1) >= 0 }
+            .sorted { ($0.startDate ?? .distantFuture) < ($1.startDate ?? .distantFuture) }
+        let rest = trips
+            .filter { ($0.daysUntilStart ?? -1) < 0 }
+            .sorted { ($0.startDate ?? .distantPast) > ($1.startDate ?? .distantPast) }
+        return upcoming + rest
+    }
 
     /// Sort is deliberately *not* counted as a filter: it never removes a result, so
     /// showing it as an active "filter" would misreport why a list looks the way it does.
@@ -301,61 +318,62 @@ struct RecScreen: View {
         }
     }
 
-    /// Keep this view's state mounted while removing the inactive NavigationStack from
-    /// rendering and accessibility. Opacity alone left the entire invisible Explore
-    /// hierarchy exposed to VoiceOver (and kept it participating in updates). Search,
-    /// filters and the navigation path remain `@State` on `RecScreen`, while decoded
-    /// photos remain in `DestinationImageCache` for the next visit.
-    @ViewBuilder
+    /// Explore stays mounted while other tabs are on top. `ContentView` hides inactive
+    /// tabs behind `opacity`/`allowsHitTesting` and removes them from the accessibility
+    /// tree with `accessibilityHidden` (applied to the cached screen before the opacity),
+    /// so swapping this body out for a placeholder only destroyed the `ScrollView` —
+    /// which meant returning from Map or Trips snapped the user back to the top of
+    /// Explore and re-decoded every visible photo. `isActive` gates the one thing that
+    /// genuinely depends on visibility: presenting the walkthrough (see `.task(id:)`).
     var body: some View {
-        if isActive {
-            exploreContent
-        } else {
-            Color.clear
-                .accessibilityHidden(true)
-        }
+        exploreContent
     }
 
     private var exploreContent: some View {
         NavigationStack(path: $navigationPath) {
+            ScrollViewReader { proxy in
             ScrollView {
-                // One page: the search field and filter bar are always present, and
-                // refining never tears the screen down. "Continue" in particular used
-                // to vanish the moment any filter was applied.
-                //
-                // Search and the chips deliberately scroll with the content rather than
-                // pinning. Pinned, they read as a slab floating between the transparent
-                // navigation bar and the page — content stays visible in the strip above
-                // them — and they cost ~110pt of permanent height on a browse screen
-                // whose whole point is the imagery.
+                // One page, personal content first: the greeting and the user's trips,
+                // then the discovery half. The filter chips scroll with the content
+                // rather than pinning — pinned, they read as a slab floating between the
+                // transparent navigation bar and the page, and cost permanent height on a
+                // browse screen whose whole point is the imagery. The search field is not
+                // permanent chrome at all now: it's summoned by the toolbar's magnifying
+                // glass, and steps aside once the user leaves search.
                 LazyVStack(alignment: .leading, spacing: Theme.isRuled ? 0 : 24) {
-                    // Header, field and chips are one unit at 12pt, not four sections at
-                    // 24 — the controls belong together, and the gap is reserved for the
-                    // boundaries between actual content sections.
-                    //
-                    // Ruled themes take their rhythm from each block's own rule and
-                    // padding instead, so they can't share this container.
-                    if Theme.isRuled {
-                        ruledControlBlock
-                    } else {
-                        VStack(alignment: .leading, spacing: 12) {
-                            exploreHeader
-                            searchBar
-                            filterBar
-                            activeFilterTokens
-                        }
-                    }
+                    // The tab opens on personal content — the greeting, then the user's
+                    // own trips. The search field and filter chips are the *browse* tools;
+                    // they used to sit at the very top, so the first impression was a slab
+                    // of search chrome above any trip. They now follow the trips, as the
+                    // head of the discovery half of the page.
+                    exploreHeaderBlock
+                        .id(Self.topAnchor)
 
                     // Each of these derived collections is computed once here and handed
                     // down. Read as properties from inside the section builders, they
                     // were re-derived several times per render (and on every keystroke).
                     if isSearchFocused && !isSearching {
+                        // Active search: the field jumps up under the header and the trips
+                        // step aside — the user is browsing now, not resuming a plan.
+                        discoveryControls(showsHeading: false)
                         searchShortcuts.ruledSection()
                     } else if isSearching {
+                        discoveryControls(showsHeading: false)
                         searchResultsList(searchResults).ruledSection()
                     } else {
-                        // A returning user's own plans come before the editorial page.
-                        if hasContinueContent { continueSection.ruledSection() }
+                        // A returning user's own plans lead: the next trip at hero scale,
+                        // the rest as an upcoming rail, then any saved guides.
+                        if let heroTrip = plannedTrips.first {
+                            nextTripSection(heroTrip).ruledSection()
+                            let upcoming = Array(plannedTrips.dropFirst())
+                            if !upcoming.isEmpty {
+                                upcomingTripsSection(upcoming).ruledSection()
+                            }
+                        }
+                        if !saved.isEmpty { savedGuidesSection.ruledSection() }
+
+                        // The discovery half: search, filter chips, then the editorial page.
+                        discoveryControls(showsHeading: true)
 
                         if isFiltering {
                             matchingTripsSection(filteredDestinations).ruledSection()
@@ -388,6 +406,16 @@ struct RecScreen: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        // Search now lives below the fold; this brings the field back up
+                        // and focuses it so the top toolbar still gets you there in one tap.
+                        withAnimation { proxy.scrollTo(Self.topAnchor, anchor: .top) }
+                        isSearchFocused = true
+                    } label: {
+                        Image(systemName: "magnifyingglass")
+                    }
+                    .accessibilityLabel("Search")
+
                     Button {
                         isSearchFocused = false
                         showExploreOnboarding = true
@@ -520,25 +548,65 @@ struct RecScreen: View {
                 // that action's own screen is closed.
                 if depth == 0 { onboarding.isPaused = false }
             }
+            }
         }
     }
 
-    /// The ruled header, field and chips: an opening title block closed by the screen's
-    /// one chapter rule, then the field and the chip strip as sections bounded by their
-    /// own. Card themes keep the four-view stack in `exploreContent` — the rules are what
-    /// give this one its rhythm, which is why it can't be the same container.
-    private var ruledControlBlock: some View {
-        VStack(alignment: .leading, spacing: 0) {
+    /// The opening block: the greeting and the create action. Ruled themes give it the
+    /// screen's opening air; the following section carries the rule that closes it off,
+    /// the way every `ruledSection` owns its own top rule. Card themes let the 24pt
+    /// section spacing do the work.
+    @ViewBuilder
+    private var exploreHeaderBlock: some View {
+        if Theme.isRuled {
             exploreHeader
                 .padding(.vertical, Theme.RuleWeight.opening.space)
-            RuledDivider(weight: .chapter)
-            searchBar
-                .padding(.top, 14)
-                .padding(.bottom, 16)
-            RuledDivider(weight: .section)
-            filterBar
-            RuledDivider(weight: .section)
-            activeFilterTokens
+        } else {
+            exploreHeader
+        }
+    }
+
+    /// The browse tools — the "Discover" heading, quick-filter chips, and any active
+    /// filter tokens. They sit *below* the user's own trips so the tab opens on personal
+    /// content rather than a slab of search chrome. The search field itself is only
+    /// mounted while the user is actually searching; the rest of the time search lives in
+    /// the toolbar's magnifying glass, which keeps browse mode down to a heading and the
+    /// chips. `showsHeading` prints the title in browse mode; the searching states drop it
+    /// because the field is then the subject.
+    ///
+    /// Ruled themes take their rhythm from rules; card themes from a 12pt stack.
+    @ViewBuilder
+    private func discoveryControls(showsHeading: Bool) -> some View {
+        let showsField = isSearchFocused || isSearching
+        if Theme.isRuled {
+            VStack(alignment: .leading, spacing: 0) {
+                if showsHeading {
+                    RuledDivider(weight: .chapter)
+                    sectionTitle("Discover", subtitle: "Browse curated guides, or search from the top.")
+                        .padding(.vertical, Theme.RuleWeight.opening.space)
+                }
+                if showsField {
+                    RuledDivider(weight: .chapter)
+                    searchBar
+                        .padding(.top, 14)
+                        .padding(.bottom, 16)
+                }
+                RuledDivider(weight: .section)
+                filterBar
+                RuledDivider(weight: .section)
+                activeFilterTokens
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 12) {
+                if showsHeading {
+                    sectionTitle("Discover", subtitle: "Browse curated guides, or search from the top.")
+                }
+                if showsField {
+                    searchBar
+                }
+                filterBar
+                activeFilterTokens
+            }
         }
     }
 
@@ -668,37 +736,50 @@ struct RecScreen: View {
         return first.isEmpty ? localized : "\(localized), \(first)"
     }
 
-    private var continueSection: some View {
+    /// The next trip, at hero scale: the one card the returning user's own plans open on,
+    /// the way `featuredHero` anchors the editorial page below it.
+    private func nextTripSection(_ trip: Trip) -> some View {
+        NavigationLink(value: trip.id) {
+            NextTripHeroCard(trip: trip)
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("Opens the itinerary")
+    }
+
+    /// The trips after the next one, as a horizontal rail of countdown cards.
+    private func upcomingTripsSection(_ trips: [Trip]) -> some View {
         VStack(alignment: .leading, spacing: Theme.isRuled ? 10 : 14) {
-            sectionTitle("Continue", subtitle: "Resume a plan or revisit a guide you saved.")
-
-            if !store.itineraryTrips.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    LazyHStack(spacing: 14) {
-                        ForEach(store.itineraryTrips) { trip in
-                            NavigationLink(value: trip.id) {
-                                ItineraryTripCard(trip: trip)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .scrollTargetLayout()
-                    .padding(.horizontal, Theme.isRuled ? Theme.ruledInset : 16)
-                }
-                .scrollTargetBehavior(.viewAligned)
-                .padding(.horizontal, Theme.isRuled ? -Theme.ruledInset : -16)
-            }
-
-            if !saved.isEmpty {
-                VStack(spacing: Theme.isRuled ? 0 : 14) {
-                    ForEach(saved) { destination in
-                        // A hairline bounds a ruled row where a card bounds the others.
-                        if Theme.isRuled, destination.id != saved.first?.id { RuledDivider() }
-                        NavigationLink(value: destination.id) {
-                            DestinationRow(destination: destination)
+            sectionTitle("Upcoming trips", subtitle: "The rest of what you've got planned.")
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(alignment: .top, spacing: Theme.isRuled ? 16 : 14) {
+                    ForEach(trips) { trip in
+                        NavigationLink(value: trip.id) {
+                            UpcomingTripCard(trip: trip)
                         }
                         .buttonStyle(.plain)
                     }
+                }
+                .scrollTargetLayout()
+                .padding(.horizontal, Theme.isRuled ? Theme.ruledInset : 16)
+            }
+            .scrollTargetBehavior(.viewAligned)
+            .padding(.horizontal, Theme.isRuled ? -Theme.ruledInset : -16)
+        }
+    }
+
+    /// Guides the user saved for later — unchanged in behaviour, now under their own
+    /// heading rather than sharing the old "Continue" block with planned trips.
+    private var savedGuidesSection: some View {
+        VStack(alignment: .leading, spacing: Theme.isRuled ? 10 : 14) {
+            sectionTitle("Saved guides", subtitle: "Revisit a destination you saved.")
+            VStack(spacing: Theme.isRuled ? 0 : 14) {
+                ForEach(saved) { destination in
+                    // A hairline bounds a ruled row where a card bounds the others.
+                    if Theme.isRuled, destination.id != saved.first?.id { RuledDivider() }
+                    NavigationLink(value: destination.id) {
+                        DestinationRow(destination: destination)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }
@@ -1892,6 +1973,279 @@ struct DestinationPhoto: View {
                     image = await DestinationImageCache.shared.thumbnail(request)
                 }
             }
+    }
+}
+
+/// The returning user's next trip, at hero scale. Card themes lay it out the way the
+/// reference does — a panel of type beside the cover photo, with a countdown strip
+/// beneath — while ruled themes caption the photograph on the page's own ground.
+struct NextTripHeroCard: View {
+    let trip: Trip
+
+    @ScaledMetric(relativeTo: .body) private var coverWidth: CGFloat = 150
+    @ScaledMetric(relativeTo: .body) private var cardHeight: CGFloat = 208
+
+    private var dayCount: Int { trip.itinerary?.days.count ?? 0 }
+
+    /// The eyebrow above the name, keyed to where the trip sits in time.
+    private var eyebrow: LocalizedStringKey {
+        if trip.isOngoing { return "HAPPENING NOW" }
+        if let days = trip.daysUntilStart, days >= 0 { return "NEXT TRIP" }
+        return "YOUR TRIP"
+    }
+
+    var body: some View {
+        if Theme.isRuled { ruledPlate } else { cardBody }
+    }
+
+    // MARK: Card
+
+    private var cardBody: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 0) {
+                textPanel
+                TripCoverView(trip: trip)
+                    .frame(width: coverWidth)
+            }
+            .frame(height: cardHeight)
+            .background(Theme.surface.opacity(0.96))
+            .clipShape(.rect(cornerRadius: Theme.cardRadius))
+            .overlay {
+                RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                    .strokeBorder(Theme.separator.opacity(0.85), lineWidth: 1)
+            }
+            .shadow(color: Theme.elevatedShadow, radius: 10, y: 4)
+
+            statStrip
+        }
+    }
+
+    private var textPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(eyebrow)
+                .font(.app(.caption2, .bold))
+                .tracking(1.4)
+                .foregroundStyle(Theme.accent)
+
+            Text(verbatim: trip.name)
+                .font(.app(.title, .bold))
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+                .minimumScaleFactor(0.65)
+                .padding(.top, 6)
+
+            if let range = trip.dateRangeText {
+                Text(verbatim: range)
+                    .font(.app(.subheadline, .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .padding(.top, 4)
+            }
+
+            Spacer(minLength: 12)
+
+            HStack(spacing: 7) {
+                Text("View itinerary")
+                Image(systemName: "arrow.right")
+            }
+            .font(.app(.subheadline, .semibold))
+            .foregroundStyle(Theme.onAccent)
+            .padding(.horizontal, 16)
+            .frame(height: 40)
+            .background(Theme.accent, in: .capsule)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+    }
+
+    /// The three-fact strip under the card, shown only for a genuinely upcoming trip so
+    /// "days to go" is always meaningful. Values are figures (verbatim); the labels are
+    /// the only localized keys.
+    @ViewBuilder
+    private var statStrip: some View {
+        if let days = trip.daysUntilStart, days >= 1 {
+            HStack(spacing: 0) {
+                statColumn("\(days)", days == 1 ? "day to go" : "days to go")
+                statDivider
+                statColumn("\(dayCount)", dayCount == 1 ? "day planned" : "days planned")
+                statDivider
+                budgetColumn
+            }
+            .padding(.vertical, 12)
+            .padding(.horizontal, 8)
+            .readableSurface(cornerRadius: 16)
+        }
+    }
+
+    @ViewBuilder
+    private var budgetColumn: some View {
+        if let itinerary = trip.itinerary, itinerary.totalBudget > 0 {
+            statColumn(money(itinerary.totalBudget, trip.currencyCode), "budget")
+        } else {
+            let count = trip.members.count
+            statColumn("\(count)", count == 1 ? "traveler" : "travelers")
+        }
+    }
+
+    private func statColumn(_ value: String, _ label: LocalizedStringKey) -> some View {
+        VStack(spacing: 3) {
+            Text(verbatim: value)
+                .font(.app(.headline, .bold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+            Text(label)
+                .font(.app(.caption2))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var statDivider: some View {
+        Rectangle()
+            .fill(Theme.separator.opacity(0.6))
+            .frame(width: 1, height: 26)
+    }
+
+    // MARK: Ruled
+
+    /// Ruled themes caption the photograph rather than printing on it, mirroring
+    /// `AdventureCard.ruledPlate`.
+    private var ruledPlate: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(eyebrow)
+                .inscription()
+                .foregroundStyle(Theme.accent)
+
+            TripCoverView(trip: trip)
+                .frame(height: 220)
+                .clipShape(.rect(cornerRadius: Theme.RuledRadius.plate))
+                .padding(.top, 12)
+
+            Text(verbatim: trip.name)
+                .font(.app(.largeTitle, .medium))
+                .lineLimit(2)
+                .minimumScaleFactor(0.6)
+                .padding(.top, 16)
+
+            if let range = trip.dateRangeText {
+                Text(verbatim: range)
+                    .font(.app(.body))
+                    .foregroundStyle(Theme.textSecondary)
+                    .padding(.top, 3)
+            }
+
+            if let days = trip.daysUntilStart, days >= 1 {
+                Text(days == 1 ? "1 day to go" : "\(days) days to go")
+                    .inscription()
+                    .foregroundStyle(Theme.textSecondary)
+                    .padding(.top, 12)
+            }
+
+            HStack(spacing: 7) {
+                Text("View itinerary")
+                Image(systemName: "arrow.right")
+            }
+            .inscription()
+            .foregroundStyle(Theme.accent)
+            .padding(.bottom, 4)
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Theme.accent).frame(height: 1)
+            }
+            .padding(.top, 14)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// A rail card for one upcoming trip: cover photo with a countdown badge, and the name
+/// and dates set over it (card themes) or captioned beneath it (ruled themes).
+struct UpcomingTripCard: View {
+    let trip: Trip
+
+    @ScaledMetric(relativeTo: .body) private var cardWidth: CGFloat = 230
+    @ScaledMetric(relativeTo: .body) private var cardHeight: CGFloat = 196
+
+    /// The badge over (or above) the photo — "In N days" while it's ahead, the plan
+    /// length once it isn't.
+    private var badgeText: LocalizedStringKey {
+        if trip.isOngoing { return "Happening now" }
+        if let days = trip.daysUntilStart {
+            if days == 0 { return "Today" }
+            if days == 1 { return "Tomorrow" }
+            if days > 1 { return "In \(days) days" }
+        }
+        let count = trip.itinerary?.days.count ?? 0
+        return count == 1 ? "1 day" : "\(count) days"
+    }
+
+    var body: some View {
+        if Theme.isRuled { ruledEntry } else { cardBody }
+    }
+
+    private var cardBody: some View {
+        ZStack(alignment: .bottomLeading) {
+            TripCoverView(trip: trip)
+            LinearGradient(
+                colors: [.clear, .black.opacity(0.65)],
+                startPoint: .center,
+                endPoint: .bottom
+            )
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: trip.name)
+                    .font(.app(.headline, .bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                if let range = trip.dateRangeText {
+                    Text(verbatim: range)
+                        .font(.app(.caption, .medium))
+                        .foregroundStyle(.white.opacity(0.9))
+                        .lineLimit(1)
+                }
+            }
+            .padding(14)
+        }
+        .frame(width: cardWidth, height: cardHeight)
+        .overlay(alignment: .topLeading) {
+            Text(badgeText)
+                .font(.app(.caption2, .bold))
+                .foregroundStyle(.black)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(.white.opacity(0.92), in: .capsule)
+                .padding(12)
+        }
+        .clipShape(.rect(cornerRadius: Theme.cardRadius))
+    }
+
+    private var ruledEntry: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            TripCoverView(trip: trip)
+                .frame(height: 140)
+                .clipShape(.rect(cornerRadius: Theme.RuledRadius.element))
+
+            Text(badgeText)
+                .inscription()
+                .foregroundStyle(Theme.accentSecondary)
+                .padding(.top, 10)
+
+            Text(verbatim: trip.name)
+                .font(.app(.subheadline, .semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .padding(.top, 4)
+
+            if let range = trip.dateRangeText {
+                Text(verbatim: range)
+                    .font(.app(.caption))
+                    .foregroundStyle(Theme.textSecondary)
+                    .lineLimit(1)
+                    .padding(.top, 2)
+            }
+        }
+        .frame(width: 220)
     }
 }
 

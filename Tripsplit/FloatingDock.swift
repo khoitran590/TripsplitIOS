@@ -87,6 +87,12 @@ struct FloatingDock: View {
                         Text(LocalizedStringKey(tab.rawValue))
                             .font(.app(.caption2, isActive ? .bold : .medium))
                             .multilineTextAlignment(.center)
+                            // Clamp to one line in the fixed pill layout so a longer
+                            // localized label ('Explorar', 'Viajes') can't wrap and grow
+                            // the dock. The accessibility branch scrolls horizontally, so
+                            // there labels keep their natural width instead.
+                            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+                            .minimumScaleFactor(dynamicTypeSize.isAccessibilitySize ? 1 : 0.85)
                     }
                     // The selected capsule and accessibility trait already carry
                     // state. Keeping every label/icon on the primary foreground
@@ -95,8 +101,13 @@ struct FloatingDock: View {
                     .frame(minWidth: 44, minHeight: 44)
                     .padding(.horizontal, dynamicTypeSize.isAccessibilitySize ? 4 : 8)
                     .background {
+                        // Scale the button backing with the same visibility the outer
+                        // capsule uses, so the navbar-transparency slider still reaches
+                        // the button area. `backgroundVisibility` pins to 1 under Reduce
+                        // Transparency / Increased Contrast, keeping the ink's backing
+                        // fully opaque in the modes that need the contrast.
                         Capsule()
-                            .fill(Theme.surface)
+                            .fill(Theme.surface.opacity(backgroundVisibility))
                             .overlay {
                                 if isActive {
                                     Capsule().fill(Theme.accent.opacity(0.13))

@@ -339,6 +339,24 @@ struct Trip: Identifiable, Codable {
             return nil
         }
     }
+
+    /// Whole days from today until `startDate`: 0 the day it departs, negative once it
+    /// has passed, `nil` when the trip has no start date. Drives the "days to go" /
+    /// "In N days" countdowns on the Explore trip cards.
+    var daysUntilStart: Int? {
+        guard let startDate else { return nil }
+        let cal = Calendar.current
+        return cal.dateComponents([.day], from: cal.startOfDay(for: .now), to: cal.startOfDay(for: startDate)).day
+    }
+
+    /// True while the trip is under way: it has started (today or earlier) and has an
+    /// end date that hasn't passed yet.
+    var isOngoing: Bool {
+        guard let startDate, let endDate else { return false }
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: .now)
+        return cal.startOfDay(for: startDate) <= today && cal.startOfDay(for: endDate) >= today
+    }
 }
 
 extension Trip {

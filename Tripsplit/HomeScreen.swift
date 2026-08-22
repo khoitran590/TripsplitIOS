@@ -276,7 +276,9 @@ struct HomeScreen: View {
                 .font(.app(.caption))
                 .foregroundStyle(highContrastInk)
                 .multilineTextAlignment(.center)
-                .background(highContrastSurface)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(highContrastSurface, in: .rect(cornerRadius: 12))
             RuledInlineButton(title: "Browse trip ideas", tint: Theme.accent, action: onBrowseIdeas) {
                 Button {
                     onBrowseIdeas()
@@ -487,7 +489,10 @@ struct HomeScreen: View {
                     Text("Add an expense to a trip to see it here.")
                         .font(.app(.caption))
                         .foregroundStyle(highContrastInk)
-                        .background(highContrastSurface)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(highContrastSurface, in: .rect(cornerRadius: 12))
                 }
                 .frame(maxWidth: .infinity)
                 // Keep the instruction above iOS's bottom scroll-edge fade and the

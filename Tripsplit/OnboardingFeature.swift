@@ -254,8 +254,6 @@ struct WelcomeView: View {
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .frame(maxWidth: .infinity, minHeight: 56)
-            .contentShape(.rect)
             .accessibilityHint("Opens Explore signed out. Account-only actions will offer sign in when needed.")
         }
     }

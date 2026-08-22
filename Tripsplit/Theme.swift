@@ -1081,11 +1081,12 @@ private struct ReadableSurfaceModifier: ViewModifier {
     let cornerRadius: CGFloat
     let elevated: Bool
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     func body(content: Content) -> some View {
         content
             .background(
-                Theme.surface,
+                Theme.surface.opacity(reduceTransparency ? 1 : 0.96),
                 in: .rect(cornerRadius: cornerRadius)
             )
             .overlay {

@@ -42,7 +42,7 @@ backend-test:
 
 functions-check:
 	@command -v "$(DENO)" >/dev/null 2>&1 || { echo "error: Deno is unavailable. Install it or set DENO=/path/to/deno." >&2; exit 1; }
-	$(DENO) check --unstable $(FUNCTION_ENTRIES)
+	$(DENO) check $(FUNCTION_ENTRIES)
 
 functions-serve:
 	@$(CHECK_BACKEND)
