@@ -968,7 +968,8 @@ actor ImageCache {
     private let memory = NSCache<NSString, UIImage>()
     /// Paths already re-downloaded this launch (no need to revalidate again).
     private var refreshedPaths: Set<String> = []
-    private var downloadTasks: [String: Task<Data?, Never>] = [:]
+    private var downloadTasks: [String: (id: UUID, task: Task<UIImage?, Never>)] = [:]
+    private let loader: @Sendable (URL) async -> Data?
     private let directory: URL
     private var didPruneDisk = false
     private var diskBytes = 0
@@ -983,15 +984,20 @@ actor ImageCache {
     private let maxDecodedPixelSize = 1_600
     private let maxDiskAge: TimeInterval = 30 * 24 * 60 * 60
 
-    init() {
+    init(directory: URL? = nil, loader: (@Sendable (URL) async -> Data?)? = nil) {
+        self.loader = loader ?? { url in
+            guard let (data, response) = try? await BackendSecurity.secureSession.data(from: url),
+                  let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
+            return data
+        }
         memory.countLimit = 80
         memory.totalCostLimit = memoryLimit
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        directory = caches.appendingPathComponent("StorageImages", isDirectory: true)
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        self.directory = directory ?? caches.appendingPathComponent("StorageImages", isDirectory: true)
+        try? FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true)
         try? FileManager.default.setAttributes(
             [.protectionKey: FileProtectionType.complete],
-            ofItemAtPath: directory.path
+            ofItemAtPath: self.directory.path
         )
     }
 
@@ -1018,24 +1024,24 @@ actor ImageCache {
     /// Downloads the object at `url` and caches it under `path`. Returns nil on any
     /// network/decode failure so callers keep whatever they were already showing.
     func download(from url: URL, for path: String) async -> UIImage? {
-        let data: Data?
-        if let task = downloadTasks[path] {
-            data = await task.value
-        } else {
-            let task = Task<Data?, Never> {
-                guard let (data, response) = try? await BackendSecurity.secureSession.data(from: url),
-                      let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                    return nil
-                }
-                return data
-            }
-            downloadTasks[path] = task
-            data = await task.value
-            downloadTasks[path] = nil
-        }
-        refreshedPaths.insert(path)
+        if let pending = downloadTasks[path] { return await pending.task.value }
+        if refreshedPaths.contains(path), let hit = image(for: path) { return hit }
+        let id = UUID()
+        let task = Task { await downloadAndCache(from: url, for: path, operationID: id) }
+        downloadTasks[path] = (id, task)
+        let image = await task.value
+        if downloadTasks[path]?.id == id { downloadTasks[path] = nil }
+        return image
+    }
+
+    /// A single actor-isolated operation owns decoding and disk writes. Eviction or
+    /// sign-out invalidates its ID even if the transport ignores cancellation.
+    private func downloadAndCache(from url: URL, for path: String, operationID: UUID) async -> UIImage? {
+        let data = await loader(url)
+        guard !Task.isCancelled, downloadTasks[path]?.id == operationID else { return nil }
         guard let data, data.count <= maxDownloadBytes,
               let image = Self.decodedImage(from: data, maxPixelSize: maxDecodedPixelSize) else { return nil }
+        refreshedPaths.insert(path)
         memory.setObject(image, forKey: path as NSString, cost: Self.memoryCost(of: image))
 
         pruneDiskIfNeeded()
@@ -1056,7 +1062,7 @@ actor ImageCache {
     /// Purges all private media when the account signs out or is deleted.
     func removeAll() {
         memory.removeAllObjects()
-        downloadTasks.values.forEach { $0.cancel() }
+        downloadTasks.values.forEach { $0.task.cancel() }
         downloadTasks = [:]
         refreshedPaths = []
         try? FileManager.default.removeItem(at: directory)
@@ -1073,7 +1079,7 @@ actor ImageCache {
     func evict(_ path: String) {
         memory.removeObject(forKey: path as NSString)
         refreshedPaths.remove(path)
-        downloadTasks[path]?.cancel()
+        downloadTasks[path]?.task.cancel()
         downloadTasks[path] = nil
         let url = fileURL(for: path)
         let removedBytes = Self.fileSize(at: url)

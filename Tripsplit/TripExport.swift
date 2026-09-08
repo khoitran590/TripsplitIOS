@@ -140,7 +140,7 @@ enum TripExport {
         return name.isEmpty ? String(localized: "Unnamed trip") : name
     }
 
-    private static func displayName(_ person: Person) -> String {
+    nonisolated private static func displayName(_ person: Person) -> String {
         let name = person.name.trimmingCharacters(in: .whitespacesAndNewlines)
         return name.isEmpty ? String(localized: "Tripmate") : name
     }

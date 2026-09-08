@@ -6,7 +6,7 @@ import PhotosUI
 // MARK: - Models
 
 /// What kind of place a planned stop is, driving its icon and tint in the timeline.
-enum ItineraryStopKind: String, Codable, CaseIterable, Identifiable {
+nonisolated enum ItineraryStopKind: String, Codable, CaseIterable, Identifiable {
     case location
     case activity
     case restaurant
@@ -41,7 +41,7 @@ enum ItineraryStopKind: String, Codable, CaseIterable, Identifiable {
 /// One planned entry in a day's timeline: a location to visit, a thing to do, or a
 /// restaurant to eat at, optionally pinned to a time of day with an estimated cost
 /// in the trip's currency.
-struct ItineraryStop: Identifiable, Codable {
+nonisolated struct ItineraryStop: Identifiable, Codable, Equatable {
     var id = UUID()
     var name: String
     var kind: ItineraryStopKind = .activity
@@ -108,7 +108,7 @@ struct ItineraryStop: Identifiable, Codable {
 }
 
 /// One day of the plan, holding that day's timeline of stops.
-struct ItineraryDay: Identifiable, Codable {
+nonisolated struct ItineraryDay: Identifiable, Codable, Equatable {
     var id = UUID()
     var stops: [ItineraryStop] = []
 
@@ -136,7 +136,7 @@ struct ItineraryDay: Identifiable, Codable {
 /// One AI-suggested stop, kept separate from `ItineraryStop` because it isn't part of
 /// the plan yet: the time is the model's "HH:mm" string and nothing has an anchor in
 /// the user's timeline until the suggestion is applied.
-struct ItinerarySuggestionStop: Identifiable, Codable {
+nonisolated struct ItinerarySuggestionStop: Identifiable, Codable, Equatable {
     var id = UUID()
     var kind: ItineraryStopKind = .activity
     var name: String = ""
@@ -171,7 +171,7 @@ struct ItinerarySuggestionStop: Identifiable, Codable {
 }
 
 /// One AI-suggested day: a short theme title plus its proposed timeline.
-struct ItinerarySuggestionDay: Identifiable, Codable {
+nonisolated struct ItinerarySuggestionDay: Identifiable, Codable, Equatable {
     var id = UUID()
     var title: String = ""
     var stops: [ItinerarySuggestionStop] = []
@@ -195,7 +195,7 @@ struct ItinerarySuggestionDay: Identifiable, Codable {
 /// A full AI-drafted day-by-day plan. Persisted inside the itinerary (and therefore the
 /// trip blob) so an unused suggestion survives app restarts and syncs across devices —
 /// the user can come back and apply it later.
-struct ItinerarySuggestion: Codable {
+nonisolated struct ItinerarySuggestion: Codable, Equatable {
     var generatedAt = Date()
     var days: [ItinerarySuggestionDay] = []
 
@@ -219,7 +219,7 @@ struct ItinerarySuggestion: Codable {
 /// across the days, each day holding a timeline of locations, activities, and
 /// restaurants. Lives inside the trip's JSON blob so it syncs (and is shared with
 /// invited members) exactly like expenses do.
-struct Itinerary: Codable {
+nonisolated struct Itinerary: Codable, Equatable {
     /// Planning budget for the whole itinerary, in the trip's currency.
     var totalBudget: Double = 0
     var days: [ItineraryDay] = []

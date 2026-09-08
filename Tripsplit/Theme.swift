@@ -14,7 +14,7 @@ extension Color {
 
     /// The color's 24-bit RGB value, used to persist member colors (which are not
     /// directly `Codable`) as a compact hex integer.
-    var hexValue: UInt32 {
+    nonisolated var hexValue: UInt32 {
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
         UIColor(self).getRed(&r, green: &g, blue: &b, alpha: &a)
         let clamp = { (v: CGFloat) in UInt32((min(max(v, 0), 1) * 255).rounded()) }

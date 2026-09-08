@@ -332,7 +332,7 @@ final class TripStore {
         await ImageCache.shared.removeAll()
         if currentUser.id == userID {
             resetProfile()
-            feedPostsByTrip = [:]
+            resetFeedState()
             blockedUserIDs = []
             resetSignedImageURLs()
             trips = []
@@ -597,7 +597,7 @@ final class TripStore {
     }
 
     /// All four home-card figures, aggregated in USD. Computed in a single pass over the
-    /// trips so `settlements()` (the expensive part, O(members² × expenses)) runs once per
+    /// trips so `settlements()` (expense aggregation plus member sorting) runs once per
     /// trip per render instead of once per figure.
     struct HomeBudgetTrip: Identifiable {
         let id: Trip.ID
@@ -956,7 +956,7 @@ final class TripStore {
             cancelScheduledTripSaves()
             cancelPendingCacheWrite()
             resetProfile()
-            feedPostsByTrip = [:]
+            resetFeedState()
             blockedUserIDs = []
             resetSignedImageURLs()
             trips = []
@@ -969,7 +969,7 @@ final class TripStore {
         if currentUser.id != uuid {
             cancelScheduledTripSaves()
             cancelPendingCacheWrite()
-            feedPostsByTrip = [:]
+            resetFeedState()
             blockedUserIDs = []
             resetSignedImageURLs()
             cloudLoadRevision += 1
@@ -1497,5 +1497,16 @@ final class TripStore {
     /// table (see `FeedFeature.swift`), loaded on demand when the Feed tab opens and
     /// mutated optimistically by the feed methods in that file. State lives here (not
     /// in the extension) because extensions can't add storage to an @Observable class.
+    var feedNextCursors: [Trip.ID: FeedRepository.Cursor] = [:]
+    var feedRequests: [Trip.ID: UUID] = [:]
+    @ObservationIgnored var feedEpoch = UUID()
+
+    func resetFeedState() {
+        feedEpoch = UUID()
+        feedPostsByTrip = [:]
+        feedNextCursors = [:]
+        feedRequests = [:]
+    }
+
     var feedPostsByTrip: [Trip.ID: [FeedPost]] = [:]
 }

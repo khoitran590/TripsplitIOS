@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - Models
 
 /// A trip member who can pay for or share in an expense.
-struct Person: Identifiable, Hashable, Codable {
+nonisolated struct Person: Identifiable, Hashable, Codable {
     var id = UUID()
     var name: String
     var color: Color
@@ -44,7 +44,7 @@ struct Person: Identifiable, Hashable, Codable {
 }
 
 /// The supported ways to split an expense, mirroring TripSplit's `splitMethods`.
-enum SplitMethod: String, CaseIterable, Identifiable, Codable {
+nonisolated enum SplitMethod: String, CaseIterable, Identifiable, Codable {
     case equalAll = "Split Equally (All)"
     case equalSelected = "Split Equally (Selected)"
     case noSplit = "No Split (Single Payer)"

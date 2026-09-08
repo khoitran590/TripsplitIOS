@@ -4,7 +4,7 @@ import SwiftUI
 
 /// A profile viewed through its share link. Decoded from the `profile_by_token` RPC,
 /// which returns identity + a lightweight trip summary regardless of trip membership.
-struct PublicProfile: Decodable {
+nonisolated struct PublicProfile: Decodable {
     let userID: UUID
     var isSelf: Bool = false
     /// Relationship of the viewer to this profile: `none`, `requested` (I sent a
@@ -41,13 +41,13 @@ struct PublicProfile: Decodable {
     var name: String { displayName.trimmingCharacters(in: .whitespaces).isEmpty ? "TripSplit User" : displayName }
 
     /// A `Person` shim so the shared avatar/initials views can render this profile.
-    var person: Person {
+    @MainActor var person: Person {
         Person(id: userID, name: name, color: personColor(for: userID), avatarURL: avatarPath)
     }
 
     /// Stored place names first, then trip locations not already listed — mirrors the
     /// owner's own "Where I've been" merge, with trip dates attached where known.
-    var visitedPlaces: [VisitedPlace] {
+    @MainActor var visitedPlaces: [VisitedPlace] {
         var places = visitedPlaceNames.map { VisitedPlace(name: $0, date: nil) }
         for trip in trips {
             guard let location = trip.location?.trimmingCharacters(in: .whitespaces), !location.isEmpty else { continue }
@@ -65,7 +65,7 @@ struct PublicProfile: Decodable {
 }
 
 /// A trip as shown on someone else's profile: just enough to render a cover card.
-struct PublicTripSummary: Identifiable, Decodable {
+nonisolated struct PublicTripSummary: Identifiable, Decodable {
     let id: UUID
     var name: String = "Trip"
     var location: String?
@@ -78,15 +78,14 @@ struct PublicTripSummary: Identifiable, Decodable {
     }
 
     /// Trip dates round-trip through the blob as ISO-8601 strings (`.iso8601` strategy).
-    private static let iso: ISO8601DateFormatter = ISO8601DateFormatter()
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
         name = try c.decodeIfPresent(String.self, forKey: .name) ?? "Trip"
         location = try c.decodeIfPresent(String.self, forKey: .location)
-        if let raw = try c.decodeIfPresent(String.self, forKey: .startDate) { startDate = Self.iso.date(from: raw) }
-        if let raw = try c.decodeIfPresent(String.self, forKey: .endDate) { endDate = Self.iso.date(from: raw) }
+        if let raw = try c.decodeIfPresent(String.self, forKey: .startDate) { startDate = BackendDate.parse(raw) }
+        if let raw = try c.decodeIfPresent(String.self, forKey: .endDate) { endDate = BackendDate.parse(raw) }
         coverImageURL = try c.decodeIfPresent(String.self, forKey: .coverImageURL)
     }
 
@@ -98,7 +97,7 @@ struct PublicTripSummary: Identifiable, Decodable {
 
 /// An accepted friend, from the `friends_overview` RPC. Carries the friend's own
 /// share token so tapping their row opens their full profile.
-struct Friend: Identifiable, Decodable {
+nonisolated struct Friend: Identifiable, Decodable {
     let userID: UUID
     var displayName: String = ""
     var avatarPath: String?
@@ -107,11 +106,11 @@ struct Friend: Identifiable, Decodable {
     var id: UUID { userID }
 
     var name: String { displayName.trimmingCharacters(in: .whitespaces).isEmpty ? "TripSplit User" : displayName }
-    var person: Person { Person(id: userID, name: name, color: personColor(for: userID), avatarURL: avatarPath) }
+    @MainActor var person: Person { Person(id: userID, name: name, color: personColor(for: userID), avatarURL: avatarPath) }
 }
 
 /// A pending friend request (incoming or outgoing).
-struct FriendRequest: Identifiable, Decodable {
+nonisolated struct FriendRequest: Identifiable, Decodable {
     let friendshipID: UUID
     let userID: UUID
     var displayName: String = ""
@@ -119,10 +118,10 @@ struct FriendRequest: Identifiable, Decodable {
     var id: UUID { friendshipID }
 
     var name: String { displayName.trimmingCharacters(in: .whitespaces).isEmpty ? "TripSplit User" : displayName }
-    var person: Person { Person(id: userID, name: name, color: personColor(for: userID), avatarURL: avatarPath) }
+    @MainActor var person: Person { Person(id: userID, name: name, color: personColor(for: userID), avatarURL: avatarPath) }
 }
 
-struct FriendsOverview: Decodable {
+nonisolated struct FriendsOverview: Decodable {
     var friends: [Friend] = []
     var incoming: [FriendRequest] = []
     var outgoing: [FriendRequest] = []

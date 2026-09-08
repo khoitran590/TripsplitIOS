@@ -1,3 +1,4 @@
+import { withTiming } from "../_shared/request-timing.ts";
 // suggest-itinerary — server-side proxy for the AI day-by-day itinerary planner.
 //
 // Why this exists: the app must NOT ship provider API keys (same posture as
@@ -106,7 +107,7 @@ function logProviderTimeout(
   }));
 }
 
-Deno.serve(async (req) => {
+Deno.serve(withTiming("suggest-itinerary", async (req, timing) => {
   if (req.method !== "POST") {
     return jsonResponse({ error: "Method not allowed" }, 405);
   }
@@ -115,15 +116,15 @@ Deno.serve(async (req) => {
   // 1. Require a valid, signed-in user (not just any project JWT such as the anon key).
   const token = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
   if (!token) return jsonResponse({ error: "Unauthorized" }, 401);
-  const user = await getUser(token);
+  const user = await timing.measure("auth", () => getUser(token));
   if (!user) return jsonResponse({ error: "Unauthorized" }, 401);
   // A legacy Google-only grant can continue using Gemini during app rollout, but can
   // never authorize sending the trip context to Anthropic. New clients collect the
   // current version before Claude becomes eligible.
-  const hasCurrentConsent = await hasAIConsent(token, CONSENT_PURPOSE, CONSENT_VERSION);
+  const hasCurrentConsent = await timing.measure("consent", () => hasAIConsent(token, CONSENT_PURPOSE, CONSENT_VERSION));
   const hasLegacyGoogleConsent = hasCurrentConsent
     ? false
-    : await hasAIConsent(token, CONSENT_PURPOSE, LEGACY_GOOGLE_CONSENT_VERSION);
+    : await timing.measure("consent", () => hasAIConsent(token, CONSENT_PURPOSE, LEGACY_GOOGLE_CONSENT_VERSION));
   if (!hasCurrentConsent && !hasLegacyGoogleConsent) {
     return jsonResponse({ error: "Current AI consent is required." }, 403);
   }
@@ -158,7 +159,7 @@ Deno.serve(async (req) => {
   // remains charged even if every variant returns invalid/error output.
   let usage: UsageReservation;
   try {
-    usage = await reserveUsage(user.id);
+    usage = await timing.measure("quota", () => reserveUsage(user.id));
   } catch {
     logUsage("rate_check_failure", 500);
     return jsonResponse({ error: "Rate limit check failed" }, 500);
@@ -167,6 +168,7 @@ Deno.serve(async (req) => {
     logUsage("rate_limited", 429, usage);
     return rateLimitResponse(usage);
   }
+  const reservationId = usage.reservationId;
 
   if (mocksEnabled) {
     const plan = normalizePlan({
@@ -181,7 +183,7 @@ Deno.serve(async (req) => {
         }],
       }],
     });
-    await completeUsage(usage.reservationId, true);
+    await timing.measure("completion", () => completeUsage(reservationId, true));
     logUsage("local_mock_success", 200, usage, "gemini");
     return jsonResponse(plan, 200);
   }
@@ -203,14 +205,14 @@ Deno.serve(async (req) => {
       Date.now() + CLAUDE_BUDGET_MS,
       requestDeadline - (GEMINI_API_KEY ? GEMINI_FALLBACK_RESERVE_MS : RESPONSE_RESERVE_MS),
     );
-    const first = await callClaude(prompt, { structured: true }, claudeDeadline);
+    const first = await timing.measure("claude", () => callClaude(prompt, { structured: true }, claudeDeadline));
     plan = first.plan;
     providerTimedOut ||= first.timedOut;
     if (!plan && first.status === 400) {
       // Constrained decoding can be rejected in combination with server tools on some
       // models. The prompt already specifies the exact shape, so retry unconstrained
       // before writing Claude off — `normalizePlan` re-validates either way.
-      const retry = await callClaude(prompt, { structured: false }, claudeDeadline);
+      const retry = await timing.measure("claude", () => callClaude(prompt, { structured: false }, claudeDeadline));
       plan = retry.plan;
       providerTimedOut ||= retry.timedOut;
       quotaExhausted ||= retry.status === 429;
@@ -234,33 +236,33 @@ Deno.serve(async (req) => {
     // returned invalid output, prefer a fast constrained Gemini response over starting
     // another slow web-search turn. Gemini remains search-grounded when it is primary.
     const useSearch = !claudeAttempted;
-    const first = await callGemini(
+    const first = await timing.measure("gemini", () => callGemini(
       SUGGEST_MODEL,
       prompt,
       { useSearch },
       attemptDeadline(geminiDeadline, useSearch ? GEMINI_SEARCH_BUDGET_MS : GEMINI_PLAIN_BUDGET_MS),
-    );
+    ));
     plan = first.plan;
     let upstreamStatus = first.status;
     providerTimedOut ||= first.timedOut;
     if (!plan && upstreamStatus !== 429 && useSearch) {
-      const second = await callGemini(
+      const second = await timing.measure("gemini", () => callGemini(
         SUGGEST_MODEL,
         prompt,
         { useSearch: false },
         attemptDeadline(geminiDeadline, GEMINI_PLAIN_BUDGET_MS),
-      );
+      ));
       plan = second.plan;
       providerTimedOut ||= second.timedOut;
       if (!plan) upstreamStatus = second.status;
     }
     if (!plan && upstreamStatus !== 429 && SUGGEST_MODEL !== FALLBACK_MODEL) {
-      const third = await callGemini(
+      const third = await timing.measure("gemini", () => callGemini(
         FALLBACK_MODEL,
         prompt,
         { useSearch: false },
         attemptDeadline(geminiDeadline, GEMINI_MODEL_FALLBACK_BUDGET_MS),
-      );
+      ));
       plan = third.plan;
       providerTimedOut ||= third.timedOut;
       if (!plan) upstreamStatus = third.status;
@@ -270,7 +272,7 @@ Deno.serve(async (req) => {
   }
 
   if (!plan || !provider) {
-    await completeUsage(usage.reservationId, true);
+    await timing.measure("completion", () => completeUsage(reservationId, true));
     logUsage("post_call_failure", quotaExhausted ? 503 : providerTimedOut ? 504 : 502);
     // Surface quota exhaustion distinctly — it's an account/billing condition the
     // owner must fix (or wait out), not a transient service bug.
@@ -288,10 +290,10 @@ Deno.serve(async (req) => {
     }
     return jsonResponse({ error: "Suggestion service error" }, 502);
   }
-  await completeUsage(usage.reservationId, true);
+  await timing.measure("completion", () => completeUsage(reservationId, true));
   logUsage("success", 200, usage, provider);
   return jsonResponse(plan, 200);
-});
+}));
 
 async function getUser(token: string): Promise<{ id: string } | null> {
   const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {

@@ -61,7 +61,8 @@ nonisolated struct FeedPost: Identifiable, Codable {
 actor FeedRepository {
     static let shared = FeedRepository()
 
-    private let session = BackendSecurity.secureSession
+    private let session: URLSession
+    init(session: URLSession = BackendSecurity.secureSession) { self.session = session }
 
     /// One table row. `comments`/`reactions` round-trip through the same Codable shapes
     /// the app uses elsewhere; dates inside them are client-encoded ISO 8601.
@@ -94,6 +95,23 @@ actor FeedRepository {
             case comments
             case reactions
             case createdAt = "created_at"
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            id = try c.decode(UUID.self, forKey: .id)
+            tripID = try c.decode(UUID.self, forKey: .tripID)
+            authorID = try c.decode(UUID.self, forKey: .authorID)
+            authorName = try c.decode(String.self, forKey: .authorName)
+            body = try c.decode(String.self, forKey: .body)
+            photoPaths = try c.decode([String].self, forKey: .photoPaths)
+            locationName = try c.decodeIfPresent(String.self, forKey: .locationName)
+            locationLatitude = try c.decodeIfPresent(Double.self, forKey: .locationLatitude)
+            locationLongitude = try c.decodeIfPresent(Double.self, forKey: .locationLongitude)
+            locationAddress = try c.decodeIfPresent(String.self, forKey: .locationAddress)
+            comments = try c.decodeIfPresent([ExpenseComment].self, forKey: .comments) ?? []
+            reactions = try c.decodeIfPresent([String: [UUID]].self, forKey: .reactions) ?? [:]
+            createdAt = try c.decode(Date.self, forKey: .createdAt)
         }
 
         init(post: FeedPost, tripID: UUID) {
@@ -189,32 +207,68 @@ actor FeedRepository {
     /// wrote inside jsonb have none — accept both.
     private let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .custom { decoder in
-            let raw = try decoder.singleValueContainer().decode(String.self)
-            // Formatters are built per call (they're not Sendable, so they can't be
-            // captured into this @Sendable closure); feed payloads are small enough
-            // that this stays negligible.
-            let fractional = ISO8601DateFormatter()
-            fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            if let date = fractional.date(from: raw) ?? ISO8601DateFormatter().date(from: raw) {
-                return date
-            }
-            throw DecodingError.dataCorrupted(.init(
-                codingPath: decoder.codingPath,
-                debugDescription: "Unrecognized date: \(raw)"
-            ))
-        }
+        decoder.dateDecodingStrategy = .custom(BackendDate.decode)
         return decoder
     }()
 
-    /// All posts for a trip, newest first.
-    func fetch(tripID: UUID, accessToken: String) async throws -> [FeedPost] {
-        let data = try await send(
-            "GET",
-            "/rest/v1/trip_feed_posts?trip_id=eq.\(tripID.uuidString)&select=*&order=created_at.desc",
-            accessToken: accessToken
-        )
-        return try decoder.decode([Row].self, from: data).map(\.post)
+    nonisolated struct Cursor: Equatable, Sendable {
+        let createdAt: String // Preserve PostgreSQL microseconds exactly across pages.
+        let id: UUID
+    }
+
+    struct Page {
+        let posts: [FeedPost]
+        let next: Cursor?
+    }
+
+    private struct PageRow: Decodable {
+        let row: Row
+        let timestamp: String
+        init(from decoder: Decoder) throws {
+            row = try Row(from: decoder)
+            let c = try decoder.container(keyedBy: Row.CodingKeys.self)
+            timestamp = try c.decode(String.self, forKey: .createdAt)
+        }
+    }
+
+    func fetchPage(tripID: UUID, accessToken: String, before: Cursor? = nil,
+                   locationsOnly: Bool = false, limit: Int = 40) async throws -> Page {
+        let size = min(max(limit, 1), 100)
+        var query = URLComponents()
+        query.path = "/rest/v1/trip_feed_posts"
+        let columns = "id,trip_id,author_id,author_name,body,photo_paths,location_name,location_latitude,location_longitude,location_address,created_at"
+        query.queryItems = [
+            URLQueryItem(name: "trip_id", value: "eq.\(tripID.uuidString)"),
+            URLQueryItem(name: "select", value: locationsOnly ? columns : columns + ",comments,reactions"),
+            URLQueryItem(name: "order", value: "created_at.desc,id.desc"),
+            URLQueryItem(name: "limit", value: String(size))
+        ]
+        if let before {
+            query.queryItems?.append(URLQueryItem(name: "or", value:
+                "(created_at.lt.\(before.createdAt),and(created_at.eq.\(before.createdAt),id.lt.\(before.id.uuidString)))"))
+        }
+        if locationsOnly { query.queryItems?.append(URLQueryItem(name: "and", value: "(or(location_name.not.is.null,location_latitude.not.is.null))")) }
+        // A positive timezone offset must survive PostgREST's form-query decoding.
+        let path = query.string!.replacingOccurrences(of: "+", with: "%2B")
+        let data = try await send("GET", path, accessToken: accessToken)
+        let rows = try decoder.decode([PageRow].self, from: data)
+        let cursor = rows.count == size ? rows.last.map { Cursor(createdAt: $0.timestamp, id: $0.row.id) } : nil
+        return Page(posts: rows.map { $0.row.post }, next: cursor)
+    }
+
+    /// Complete paged reads for map projections and integration callers. Feed UI uses
+    /// fetchPage directly, so scrolling does not eagerly download its entire history.
+    func fetch(tripID: UUID, accessToken: String, locationsOnly: Bool = false) async throws -> [FeedPost] {
+        var posts: [FeedPost] = []
+        var cursor: Cursor?
+        repeat {
+            try Task.checkCancellation()
+            let page = try await fetchPage(tripID: tripID, accessToken: accessToken,
+                                           before: cursor, locationsOnly: locationsOnly)
+            posts.append(contentsOf: page.posts)
+            cursor = page.next
+        } while cursor != nil
+        return posts
     }
 
     func insert(_ post: FeedPost, tripID: UUID, accessToken: String) async throws {
@@ -362,16 +416,52 @@ extension TripStore {
     }
 
     func loadFeed(for tripID: Trip.ID) async throws {
+        try await loadFeedPage(for: tripID, append: false)
+    }
+
+    func loadMoreFeed(for tripID: Trip.ID) async throws {
+        guard feedNextCursors[tripID] != nil, feedRequests[tripID] == nil else { return }
+        try await loadFeedPage(for: tripID, append: true)
+    }
+
+    private func loadFeedPage(for tripID: Trip.ID, append: Bool) async throws {
+        let epoch = feedEpoch
+        let requestID = UUID()
+        feedRequests[tripID] = requestID
+        defer { if feedRequests[tripID] == requestID { feedRequests[tripID] = nil } }
+        let cursor = append ? feedNextCursors[tripID] : nil
         guard let accessToken = try await authorizedAccessToken() else {
             throw AuthError(message: "Sign in to view the trip feed.")
         }
+        let (page, blocked) = try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
+            async let page = FeedRepository.shared.fetchPage(tripID: tripID, accessToken: token, before: cursor)
+            async let blocked = ModerationService.shared.blockedUserIDs(accessToken: token)
+            return try await (page, blocked)
+        }
+        try Task.checkCancellation()
+        guard epoch == feedEpoch, feedRequests[tripID] == requestID else { return }
+        blockedUserIDs = blocked
+        let visible = page.posts.compactMap { filteredPost($0, blocked: blocked) }
+        var posts = append ? (feedPostsByTrip[tripID] ?? []).compactMap { filteredPost($0, blocked: blocked) } : []
+        let existingIDs = Set(posts.map(\.id))
+        posts.append(contentsOf: visible.filter { !existingIDs.contains($0.id) })
+        feedPostsByTrip[tripID] = posts
+        feedNextCursors[tripID] = page.next
+    }
+
+    /// Independent projection keeps map pins complete even when only the first feed
+    /// page is visible. Comments and reactions are not transferred for map reads.
+    func feedPlaces(for tripID: Trip.ID) async throws -> [FeedPost] {
+        let epoch = feedEpoch
+        guard let accessToken = try await authorizedAccessToken() else { return [] }
         let (posts, blocked) = try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
-            async let posts = FeedRepository.shared.fetch(tripID: tripID, accessToken: token)
+            async let posts = FeedRepository.shared.fetch(tripID: tripID, accessToken: token, locationsOnly: true)
             async let blocked = ModerationService.shared.blockedUserIDs(accessToken: token)
             return try await (posts, blocked)
         }
-        blockedUserIDs = blocked
-        feedPostsByTrip[tripID] = posts.compactMap { filteredPost($0, blocked: blocked) }
+        try Task.checkCancellation()
+        guard epoch == feedEpoch else { return [] }
+        return posts.compactMap { filteredPost($0, blocked: blocked) }
     }
 
     private func filteredPost(_ post: FeedPost, blocked: Set<UUID>) -> FeedPost? {
@@ -558,6 +648,7 @@ struct TripFeedView: View {
 
     @State private var loadError: String?
     @State private var isReloading = false
+    @State private var olderPostsError: String?
 
     private var posts: [FeedPost] { store.feedPosts(for: tripID) }
 
@@ -614,6 +705,24 @@ struct TripFeedView: View {
             }
         }
 
+        if let olderPostsError {
+            Text(verbatim: olderPostsError).font(.app(.caption)).foregroundStyle(.secondary)
+        }
+        if store.feedNextCursors[tripID] != nil {
+            Button {
+                Task {
+                    do { try await store.loadMoreFeed(for: tripID); olderPostsError = nil }
+                    catch { olderPostsError = "Couldn't load older posts. Try again." }
+                }
+            } label: {
+                if store.feedRequests[tripID] != nil { ProgressView() }
+                else { Text("Load older posts") }
+            }
+            .disabled(store.feedRequests[tripID] != nil)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+        }
+
         // `task` (not onAppear+Task) so leaving the tab cancels an in-flight load.
         Color.clear.frame(height: 0)
             .task { if !store.hasLoadedFeed(for: tripID) { await reload() } }
@@ -625,6 +734,7 @@ struct TripFeedView: View {
         do {
             try await store.loadFeed(for: tripID)
             loadError = nil
+            olderPostsError = nil
         } catch {
             loadError = (error as? AuthError)?.message ?? "Couldn't load the trip feed."
         }

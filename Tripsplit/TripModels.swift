@@ -4,7 +4,7 @@ import SwiftUI
 
 /// Optional real-world location attached to an expense. Kept as one Codable value so
 /// older expense blobs continue decoding and Phase 2 map pins have everything they need.
-struct ExpenseLocation: Codable, Equatable {
+nonisolated struct ExpenseLocation: Codable, Equatable {
     var name: String
     var address: String?
     var latitude: Double
@@ -13,7 +13,7 @@ struct ExpenseLocation: Codable, Equatable {
 
 /// A single expense within a trip. The payer fronts the whole `amount`; everyone in
 /// `participantIDs` shares it equally, mirroring TripSplit's equal-split debts.
-struct Expense: Identifiable, Codable {
+nonisolated struct Expense: Identifiable, Codable, Equatable {
     var id = UUID()
     var title: String
     var amount: Double
@@ -102,7 +102,7 @@ struct Expense: Identifiable, Codable {
 /// A single line item read off a receipt (name + price) with its own split
 /// configuration, so different items on one receipt can be split different ways
 /// (e.g. a shared appetizer split equally, a cocktail assigned to one person).
-struct ReceiptItem: Identifiable, Codable, Hashable {
+nonisolated struct ReceiptItem: Identifiable, Codable, Hashable {
     var id = UUID()
     var name: String
     var price: Double
@@ -154,7 +154,7 @@ struct ReceiptItem: Identifiable, Codable, Hashable {
 }
 
 /// A comment on an expense, visible to all trip members.
-struct ExpenseComment: Identifiable, Codable {
+nonisolated struct ExpenseComment: Identifiable, Codable, Equatable {
     var id = UUID()
     var authorID: Person.ID
     var authorName: String
@@ -190,7 +190,7 @@ struct ExpenseComment: Identifiable, Codable {
 /// A shared trip. The creator owns the row, and any invited Supabase user in
 /// `trip_members` may read/update the same cloud copy. `members` are the bill-splitting
 /// participants shown in the app; authenticated participants use their Supabase user id.
-struct Trip: Identifiable, Codable {
+nonisolated struct Trip: Identifiable, Codable, Equatable {
     var id = UUID()
     var name: String
     var currencyCode: String
@@ -375,7 +375,8 @@ extension Trip {
     /// Deleted expenses are still counted here so removing an expense doesn't refund
     /// budget headroom — the spend stays committed against the budget.
     func spent(for userID: Person.ID) -> Double {
-        (expenses + deletedExpenses).reduce(0) { $0 + share(for: userID, in: $1) }
+        let activeSpend = expenses.reduce(0.0) { $0 + share(for: userID, in: $1) }
+        return deletedExpenses.reduce(activeSpend) { $0 + share(for: userID, in: $1) }
     }
 
     /// What the user owes others (their share of expenses paid by someone else).
@@ -407,9 +408,29 @@ extension Trip {
     /// Net balance per member: positive means the group owes them, negative means
     /// they owe the group. Mirrors `SplitEngine`'s net definition for one expense.
     func netBalances() -> [Person.ID: Double] {
+        var paid: [Person.ID: Double] = [:]
+        var spent: [Person.ID: Double] = [:]
+        // Accumulate each expense once instead of scanning both expense arrays for
+        // every member. Keep paid and spent separate to preserve existing rounding.
+        func accumulateShares(_ expense: Expense) {
+            if !expense.shares.isEmpty {
+                for (id, amount) in expense.shares {
+                    spent[id, default: 0] += SplitEngine.roundToTwo(amount)
+                }
+            } else if !expense.participantIDs.isEmpty {
+                let share = SplitEngine.roundToTwo(expense.amount / Double(expense.participantIDs.count))
+                for id in expense.participantIDs { spent[id, default: 0] += share }
+            }
+        }
+        for expense in expenses {
+            paid[expense.payerID, default: 0] += expense.amount
+            accumulateShares(expense)
+        }
+        // Preserve the existing deleted-expense accounting behavior.
+        for expense in deletedExpenses { accumulateShares(expense) }
         var net: [Person.ID: Double] = [:]
         for member in members {
-            net[member.id] = SplitEngine.roundToTwo(paid(by: member.id) - spent(for: member.id))
+            net[member.id] = SplitEngine.roundToTwo((paid[member.id] ?? 0) - (spent[member.id] ?? 0))
         }
         return net
     }

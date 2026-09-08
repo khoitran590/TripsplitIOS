@@ -22,6 +22,7 @@ make backend-up
 make backend-reset
 make backend-test
 make functions-check
+make functions-unit-test
 make functions-test
 ```
 
@@ -110,10 +111,11 @@ Backend validation:
 make backend-reset
 make backend-test
 make functions-check
+make functions-unit-test
 make functions-test
 ```
 
-The database suite currently runs 38 pgTAP security and authorization checks. The function suite checks missing and malformed JWTs, missing-provider behavior, authenticated mock responses, invitation ownership, and account deletion without paid calls.
+The database suite currently runs 70 pgTAP checks, including authorization, delta synchronization, and paged trip reads. The function suite checks missing and malformed JWTs, missing-provider behavior, authenticated mock responses, invitation ownership, and account deletion without paid calls.
 
 Run ordinary native tests from Xcode, or use an available Simulator ID:
 
@@ -163,3 +165,35 @@ HTTP 401 means the request lacks a valid signed-in user JWT. HTTP 503 is expecte
 ### Local state is disposable or inconsistent
 
 `make backend-reset` removes local database contents and reapplies migrations. If the containers themselves need a clean rebuild, stop local Supabase without backup and start it again; this destroys only the local stack, so export anything you need first.
+
+## Performance and synchronization
+
+Trip refreshes use `fetch_trip_summaries_v1` in 100-row pages and retrieve changed or
+missing complete documents through `fetch_trip_details_v1` in batches of 25. Warm
+refreshes reuse server snapshots only when their exact revision matches. Cold loads
+still populate complete financial records so home balances and offline editing stay
+accurate. Submitted edits are kept separate from these authoritative read snapshots.
+
+`sync_trip_delta_v1` accepts changed metadata, changed child records, and explicit
+removal IDs. Unseen concurrent records are preserved. Unchanged saves skip the
+network. Older deployments retain the normalized and legacy RPC fallbacks; apply all
+ordered migrations before deploying the matching app for the new endpoints to work.
+
+The feed loads 40 posts at a time with a timestamp/UUID cursor and a **Load older
+posts** button. Map locations use a separate paged projection without comments or
+reactions, so map coverage does not depend on how far the feed has been scrolled.
+
+Receipt and itinerary functions log one `request_timing` JSON event per request,
+with durations for authentication, consent, quota, each provider attempt, and quota
+completion. Responses also include `Server-Timing`. Metrics exclude request bodies,
+user identifiers, tokens, URLs, and provider error text. Provider timeout budgets
+are unchanged pending real-provider latency measurements.
+
+For smoke tests using only the checked-in provider-free configuration:
+
+```bash
+make functions-test FUNCTIONS_ENV=supabase/functions/.env.example
+```
+
+The reserved HTTPS invitation URL in that template is a mock placeholder, not a
+production invitation destination.

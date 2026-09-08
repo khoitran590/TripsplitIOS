@@ -44,6 +44,9 @@ jobs:
       - name: Type-check Edge Functions
         run: make functions-check
 
+      - name: Test Edge Function timing
+        run: make functions-unit-test
+
       - name: Start local Supabase
         run: make backend-up
 

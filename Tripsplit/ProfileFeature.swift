@@ -8,7 +8,7 @@ import MapKit
 /// A durable MapKit place snapshot. MapKit search results themselves are not Codable,
 /// so bookmarks retain the small set of fields needed to render a useful offline map
 /// layer and reconstruct an `MKMapItem` for directions.
-struct SavedMapPlace: Codable, Equatable, Identifiable {
+nonisolated struct SavedMapPlace: Codable, Equatable, Identifiable {
     var key: String
     var name: String
     var latitude: Double
@@ -56,7 +56,7 @@ struct SavedMapPlace: Codable, Equatable, Identifiable {
 /// What a shared profile reveals to other people. Every section defaults to visible,
 /// which is how profiles behaved before the toggles existed — and `profile_by_token`
 /// applies the same default server-side for rows that predate the column.
-struct ProfileVisibility: Codable, Equatable {
+nonisolated struct ProfileVisibility: Codable, Equatable {
     var bio = true
     var birthday = true
     var places = true
@@ -77,7 +77,7 @@ struct ProfileVisibility: Codable, Equatable {
 /// table so it follows the account across devices and reinstalls. The display name
 /// and avatar path are mirrored onto `TripStore.currentUser` (the `Person` that
 /// lives inside every trip blob); this struct is the cloud-backed source of truth.
-struct UserProfile: Codable, Equatable {
+nonisolated struct UserProfile: Codable, Equatable {
     var displayName: String = ""
     var dateOfBirth: Date?
     var bio: String = ""

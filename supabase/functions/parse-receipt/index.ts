@@ -1,3 +1,4 @@
+import { withTiming } from "../_shared/request-timing.ts";
 // parse-receipt — server-side proxy for the receipt-parsing LLM call.
 //
 // Why this exists: the app must NOT ship provider API keys. The client sends the receipt
@@ -45,7 +46,7 @@ function jsonResponse(body: unknown, status = 200, headers: Record<string, strin
   return new Response(JSON.stringify(body), { status, headers: { ...JSON_HEADERS, ...headers } });
 }
 
-Deno.serve(async (req) => {
+Deno.serve(withTiming("parse-receipt", async (req, timing) => {
   if (req.method !== "POST") {
     return jsonResponse({ error: "Method not allowed" }, 405);
   }
@@ -53,15 +54,15 @@ Deno.serve(async (req) => {
   // 1. Require a valid, signed-in user (not just any project JWT such as the anon key).
   const token = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
   if (!token) return jsonResponse({ error: "Unauthorized" }, 401);
-  const user = await getUser(token);
+  const user = await timing.measure("auth", () => getUser(token));
   if (!user) return jsonResponse({ error: "Unauthorized" }, 401);
   // A legacy Google-only grant can continue using Gemini during app rollout, but can
   // never authorize sending the image to Anthropic. New clients collect the current
   // version before Claude becomes eligible.
-  const hasCurrentConsent = await hasAIConsent(token, CONSENT_PURPOSE, CONSENT_VERSION);
+  const hasCurrentConsent = await timing.measure("consent", () => hasAIConsent(token, CONSENT_PURPOSE, CONSENT_VERSION));
   const hasLegacyGoogleConsent = hasCurrentConsent
     ? false
-    : await hasAIConsent(token, CONSENT_PURPOSE, LEGACY_GOOGLE_CONSENT_VERSION);
+    : await timing.measure("consent", () => hasAIConsent(token, CONSENT_PURPOSE, LEGACY_GOOGLE_CONSENT_VERSION));
   if (!hasCurrentConsent && !hasLegacyGoogleConsent) {
     return jsonResponse({ error: "Current AI consent is required." }, 403);
   }
@@ -94,7 +95,7 @@ Deno.serve(async (req) => {
   // even when the provider returns an error or unusable output.
   let usage: UsageReservation;
   try {
-    usage = await reserveUsage(user.id);
+    usage = await timing.measure("quota", () => reserveUsage(user.id));
   } catch {
     logUsage("rate_check_failure", 500);
     return jsonResponse({ error: "Rate limit check failed" }, 500);
@@ -103,9 +104,10 @@ Deno.serve(async (req) => {
     logUsage("rate_limited", 429, usage);
     return rateLimitResponse(usage);
   }
+  const reservationId = usage.reservationId;
 
   if (mocksEnabled) {
-    await completeUsage(usage.reservationId, true);
+    await timing.measure("completion", () => completeUsage(reservationId, true));
     logUsage("local_mock_success", 200, usage, "gemini");
     return jsonResponse(normalizeReceipt({
       merchant: "TripSplit Local Cafe",
@@ -122,7 +124,7 @@ Deno.serve(async (req) => {
   // Apple Vision remains entirely client-side and runs only if this function fails.
   const prompt = buildPrompt(text || null, Boolean(image));
   let provider: "claude" | "gemini" | undefined;
-  let receipt = hasCurrentConsent && ANTHROPIC_API_KEY ? await callClaude(prompt, image) : null;
+  let receipt = hasCurrentConsent && ANTHROPIC_API_KEY ? await timing.measure("claude", () => callClaude(prompt, image)) : null;
   if (isUsableReceipt(receipt)) {
     provider = "claude";
   } else if (hasCurrentConsent && ANTHROPIC_API_KEY && GEMINI_API_KEY) {
@@ -136,18 +138,18 @@ Deno.serve(async (req) => {
         { inline_data: { mime_type: image.mimeType, data: image.data } },
       ]
       : [{ text: prompt }];
-    receipt = await callGemini(parts);
+    receipt = await timing.measure("gemini", () => callGemini(parts));
 
     // Gemini's known failure mode is a single pseudo-item equal to the total. Re-ask once
     // with corrective feedback and keep the retry only when it finds more real items.
     if (receipt && isCollapsed(receipt)) {
-      const retry = await callGemini([
+      const retry = await timing.measure("gemini", () => callGemini([
         ...parts,
         {
           text:
             "IMPORTANT CORRECTION: your previous answer collapsed this receipt into a single item whose price equals the grand total. That is wrong. Look again at the item section of the receipt and list each individual line item with its own printed name and per-unit price. Do not include subtotal, tax, tip, or total rows as items.",
         },
-      ]);
+      ]));
       if (retry && (retry.items as unknown[]).length > (receipt.items as unknown[]).length) {
         receipt = retry;
       }
@@ -159,14 +161,14 @@ Deno.serve(async (req) => {
   }
 
   if (!receipt || !provider) {
-    await completeUsage(usage.reservationId, true);
+    await timing.measure("completion", () => completeUsage(reservationId, true));
     logUsage("post_call_failure", 502);
     return jsonResponse({ error: "Parsing service error" }, 502);
   }
-  await completeUsage(usage.reservationId, true);
+  await timing.measure("completion", () => completeUsage(reservationId, true));
   logUsage("success", 200, usage, provider);
   return jsonResponse(receipt, 200);
-});
+}));
 
 function isUsableReceipt(receipt: Record<string, unknown> | null): receipt is Record<string, unknown> {
   return hasReceiptItems(receipt) && !isCollapsed(receipt);

@@ -169,6 +169,21 @@ final class LocalSupabaseIntegrationTests: XCTestCase {
         let interactedPost = try XCTUnwrap(interactedFeed.first)
         XCTAssertEqual(interactedPost.comments.first?.text, "Synced comment")
         XCTAssertEqual(interactedPost.reactions["👍"], [memberID])
+        let newerPost = FeedPost(authorID: ownerID, authorName: owner.name, text: "Newer page")
+        try await feed.insert(newerPost, tripID: trip.id, accessToken: ownerSession.accessToken)
+        let firstPage = try await feed.fetchPage(tripID: trip.id, accessToken: ownerSession.accessToken, limit: 1)
+        XCTAssertEqual(firstPage.posts.first?.id, newerPost.id)
+        let secondPage = try await feed.fetchPage(tripID: trip.id, accessToken: ownerSession.accessToken,
+                                                   before: firstPage.next, limit: 1)
+        XCTAssertEqual(secondPage.posts.first?.id, post.id)
+        let endPage = try await feed.fetchPage(tripID: trip.id, accessToken: ownerSession.accessToken,
+                                                before: secondPage.next, limit: 1)
+        XCTAssertTrue(endPage.posts.isEmpty)
+        XCTAssertNil(endPage.next)
+        let locations = try await feed.fetch(tripID: trip.id, accessToken: ownerSession.accessToken, locationsOnly: true)
+        XCTAssertEqual(locations.map(\.id), [post.id])
+        XCTAssertTrue(locations.first?.comments.isEmpty == true)
+        try await feed.delete(postID: newerPost.id, accessToken: ownerSession.accessToken)
         try await feed.updateBody(
             postID: post.id,
             text: "Edited local feed post",

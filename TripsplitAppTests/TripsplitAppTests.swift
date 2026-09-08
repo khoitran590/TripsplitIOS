@@ -252,6 +252,61 @@ final class TripsplitAppTests: XCTestCase {
         XCTAssertEqual(trip.remainingOwed(to: alice.id), 16)
     }
 
+    func testSettlementIdentitySurvivesRecalculationAndAmountChanges() {
+        let first = SplitEngine.settleUp(net: [alice.id: 10, bob.id: -10], people: [alice, bob])
+        let updated = SplitEngine.settleUp(net: [alice.id: 20, bob.id: -20], people: [alice, bob])
+        XCTAssertEqual(first.map(\.id), updated.map(\.id))
+        XCTAssertNotEqual(first[0].id, Settlement(from: alice, to: bob, amount: 10).id)
+    }
+
+    func testAggregatedNetBalancesMatchPerMemberAccounting() {
+        let people = [alice, bob, chris]
+        let outsider = UUID()
+        var expenses: [Expense] = []
+        for index in 0..<120 {
+            let amount = Double(index) / 7 + 0.01
+            expenses.append(Expense(
+                title: "Expense \(index)", amount: amount,
+                payerID: people[index % people.count].id,
+                participantIDs: index % 4 == 0 ? [] : [alice.id, bob.id, chris.id, outsider],
+                date: Date(timeIntervalSince1970: Double(index)),
+                shares: index % 3 == 0 ? [bob.id: amount / 3, chris.id: amount / 7, outsider: 2] : [:]
+            ))
+        }
+        let trip = Trip(name: "Mixed accounting", currencyCode: "USD", creatorID: alice.id,
+                        members: people, budgets: [:], expenses: Array(expenses.prefix(100)),
+                        deletedExpenses: Array(expenses.suffix(20)))
+        let expected = Dictionary(uniqueKeysWithValues: people.map { person in
+            (person.id, SplitEngine.roundToTwo(trip.paid(by: person.id) - trip.spent(for: person.id)))
+        })
+        XCTAssertEqual(trip.netBalances(), expected)
+        XCTAssertNil(trip.netBalances()[outsider])
+        let originalSpend = (trip.expenses + trip.deletedExpenses).reduce(0.0) {
+            $0 + trip.share(for: bob.id, in: $1)
+        }
+        XCTAssertEqual(trip.spent(for: bob.id), originalSpend)
+    }
+
+    func testRepositoryDecodesValidTripsAroundMalformedRows() async throws {
+        let trip = Trip(name: "Valid", currencyCode: "USD", creatorID: alice.id,
+                        members: [alice], budgets: [:], expenses: [
+                            Expense(title: "Dated", amount: 10, payerID: alice.id,
+                                    participantIDs: [alice.id], date: Date(timeIntervalSince1970: 1_000))
+                        ])
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let document = try JSONSerialization.jsonObject(with: encoder.encode(trip))
+        let payload = try JSONSerialization.data(withJSONObject: [
+            ["data": document], ["data": ["name": "Broken"]], ["data": NSNull()],
+            ["unexpected": true], ["data": document]
+        ])
+        let decoded = try await TripsRepository.shared.decodeTrips(from: payload)
+        XCTAssertEqual(decoded.map(\.id), [trip.id, trip.id])
+        XCTAssertEqual(decoded.first?.expenses.first?.date, trip.expenses.first?.date)
+        let empty = try await TripsRepository.shared.decodeTrips(from: Data("[]".utf8))
+        XCTAssertTrue(empty.isEmpty)
+    }
+
     func testTripDecodesWhenNewerKeysAreMissing() throws {
         let trip = Trip(name: "Legacy", currencyCode: "USD", creatorID: alice.id,
                         members: [alice], budgets: [alice.id: 100])

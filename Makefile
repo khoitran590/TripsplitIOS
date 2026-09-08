@@ -11,7 +11,7 @@ FUNCTION_ENTRIES = \
 	supabase/functions/parse-receipt/index.ts \
 	supabase/functions/suggest-itinerary/index.ts
 
-.PHONY: help backend-up backend-status backend-reset backend-test functions-check functions-serve functions-test backend-down
+.PHONY: help backend-up backend-status backend-reset backend-test functions-check functions-unit-test functions-serve functions-test backend-down
 
 help:
 	@echo "TripSplit local backend commands:"
@@ -20,6 +20,7 @@ help:
 	@echo "  make backend-reset    Rebuild the local database from migrations"
 	@echo "  make backend-test     Run PostgreSQL security tests"
 	@echo "  make functions-check  Type-check every Edge Function with Deno"
+	@echo "  make functions-unit-test  Test request timing without providers"
 	@echo "  make functions-serve  Serve Edge Functions with the ignored local env file"
 	@echo "  make functions-test   Run authenticated, non-paid Edge Function smoke tests"
 	@echo "  make backend-down     Stop local Supabase"
@@ -44,13 +45,16 @@ functions-check:
 	@command -v "$(DENO)" >/dev/null 2>&1 || { echo "error: Deno is unavailable. Install it or set DENO=/path/to/deno." >&2; exit 1; }
 	$(DENO) check $(FUNCTION_ENTRIES)
 
+functions-unit-test:
+	$(DENO) test supabase/functions/_shared/request-timing_test.ts
+
 functions-serve:
 	@$(CHECK_BACKEND)
 	@test -f "$(FUNCTIONS_ENV)" || { echo "error: missing $(FUNCTIONS_ENV)" >&2; exit 1; }
 	$(SUPABASE) functions serve --env-file "$(FUNCTIONS_ENV)"
 
 functions-test:
-	@SUPABASE_BIN="$(SUPABASE)" ./scripts/test-edge-functions.sh
+	@SUPABASE_BIN="$(SUPABASE)" FUNCTIONS_ENV="$(FUNCTIONS_ENV)" ./scripts/test-edge-functions.sh
 
 backend-down:
 	@$(CHECK_BACKEND)

@@ -383,47 +383,32 @@ struct HomeScreen: View {
         .ruledSection(weight: .hairline)
     }
 
-    /// Every expense across the user's trips, newest first, as transaction rows.
-    /// This drives the "Recent Transactions" card so it reflects real activity.
-    private var allTransactions: [Transaction] {
-        store.myTrips
-            .flatMap { trip in
-                trip.expenses.map { expense in
-                    let payer = trip.members.first { $0.id == expense.payerID }
+    /// Collapsed groups need only totals, count, and their latest date. Only expanded
+    /// groups construct and sort transaction rows; formatting happens in the row view.
+    private var transactionGroups: [TripTransactionGroup] {
+        store.myTrips.compactMap { trip -> TripTransactionGroup? in
+            guard let latest = trip.expenses.lazy.map(\.date).max() else { return nil }
+            var transactions: [Transaction] = []
+            if expandedTripIDs.contains(trip.id) {
+                let members = Dictionary(trip.members.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+                transactions = trip.expenses.map { expense in
+                    let payer = members[expense.payerID]
                     let payerLabel = payer.map { $0.id == store.currentUser.id ? "You" : $0.name } ?? "—"
                     return Transaction(
-                        tripID: trip.id,
-                        expenseID: expense.id,
-                        name: expense.title,
-                        category: "Paid by \(payerLabel)",
-                        date: expense.date.formatted(date: .abbreviated, time: .omitted),
-                        amount: expense.amount,
-                        currencyCode: trip.currencyCode,
-                        color: payer?.color ?? Theme.accent,
+                        tripID: trip.id, expenseID: expense.id, name: expense.title,
+                        category: "Paid by \(payerLabel)", amount: expense.amount,
+                        currencyCode: trip.currencyCode, color: payer?.color ?? Theme.accent,
                         sortDate: expense.date,
                         canDelete: store.isCreator(of: trip) || expense.payerID == store.currentUser.id
                     )
-                }
+                }.sorted { $0.sortDate > $1.sortDate }
             }
-            .sorted { $0.sortDate > $1.sortDate }
-    }
-
-    /// Transactions rolled up per trip, ordered by each trip's most recent expense.
-    /// Summarizing per trip keeps the home feed short; tapping a trip reveals its rows.
-    private var transactionGroups: [TripTransactionGroup] {
-        let byTrip = Dictionary(grouping: allTransactions, by: \.tripID)
-        return store.myTrips.compactMap { trip -> TripTransactionGroup? in
-            guard let transactions = byTrip[trip.id], !transactions.isEmpty else { return nil }
             return TripTransactionGroup(
-                id: trip.id,
-                name: trip.name,
-                currencyCode: trip.currencyCode,
-                total: transactions.reduce(0) { $0 + $1.amount },
-                latestDate: transactions[0].sortDate,
-                transactions: transactions
+                id: trip.id, name: trip.name, currencyCode: trip.currencyCode,
+                total: trip.expenses.reduce(0) { $0 + $1.amount }, latestDate: latest,
+                expenseCount: trip.expenses.count, transactions: transactions
             )
-        }
-        .sorted { $0.latestDate > $1.latestDate }
+        }.sorted { $0.latestDate > $1.latestDate }
     }
 
     private var recentTransactions: some View {
@@ -565,7 +550,7 @@ struct HomeScreen: View {
             }
 
             if isExpanded {
-                VStack(spacing: 0) {
+                LazyVStack(spacing: 0) {
                     ForEach(group.transactions) { transaction in
                         rowDivider
                         transactionRow(transaction)
@@ -608,7 +593,7 @@ struct HomeScreen: View {
                         Text(verbatim: group.name)
                             .font(.app(.subheadline, .semibold))
                             .lineLimit(1)
-                        Text("\(group.transactions.count) expense\(group.transactions.count == 1 ? "" : "s") • \(group.latestDate.formatted(date: .abbreviated, time: .omitted))")
+                        Text("\(group.expenseCount) expense\(group.expenseCount == 1 ? "" : "s") • \(group.latestDate.formatted(date: .abbreviated, time: .omitted))")
                             .font(.app(.caption))
                             .foregroundStyle(.secondary)
                     }
@@ -1975,6 +1960,7 @@ struct TripTransactionGroup: Identifiable {
     let total: Double
     /// Date of the trip's most recent expense; orders the groups newest-first.
     let latestDate: Date
+    let expenseCount: Int
     /// The trip's transactions, newest first.
     let transactions: [Transaction]
 }
@@ -1988,7 +1974,7 @@ struct Transaction: Identifiable {
     let expenseID: Expense.ID
     let name: String
     let category: String
-    let date: String
+    var date: String { sortDate.formatted(date: .abbreviated, time: .omitted) }
     let amount: Double
     let currencyCode: String
     let color: Color

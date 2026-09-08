@@ -880,7 +880,7 @@ struct SettleView: View {
 
 extension Color {
     /// Creates a color from a 24-bit RGB hex value, e.g. `0x6366F1`.
-    init(hex: UInt32) {
+    nonisolated init(hex: UInt32) {
         self.init(
             red: Double((hex >> 16) & 0xFF) / 255,
             green: Double((hex >> 8) & 0xFF) / 255,

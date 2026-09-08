@@ -1811,13 +1811,11 @@ struct MapScreen: View {
         }
         isLoadingFeedPlaces = true
         defer { isLoadingFeedPlaces = false }
-        if !store.hasLoadedFeed(for: tripID) {
-            try? await store.loadFeed(for: tripID)
-        }
+        guard let posts = try? await store.feedPlaces(for: tripID) else { return }
         let destinationRegion = await itinerarySearchRegion(for: trip)
         var resolved: [FeedMapPin] = []
         var legacyLookupCount = 0
-        for post in store.feedPosts(for: tripID) {
+        for post in posts {
             guard !Task.isCancelled, selectedTripID == tripID, showsFeedPlaces else { return }
             if let location = post.location {
                 resolved.append(FeedMapPin(
@@ -2093,11 +2091,9 @@ struct MapScreen: View {
     private func itinerarySearchRegion(for trip: Trip) async -> MKCoordinateRegion? {
         guard let location = trip.location?.trimmingCharacters(in: .whitespacesAndNewlines),
               !location.isEmpty else { return nil }
-        let request = MKLocalSearch.Request()
-        request.naturalLanguageQuery = location
-        guard let item = try? await MKLocalSearch(request: request).start().mapItems.first else { return nil }
+        guard let coordinate = await DestinationResolver.shared.coordinate(for: location) else { return nil }
         return MKCoordinateRegion(
-            center: item.location.coordinate,
+            center: coordinate,
             latitudinalMeters: 180_000,
             longitudinalMeters: 180_000
         )
@@ -2117,14 +2113,12 @@ struct MapScreen: View {
         var resolved: [TripDestinationPin] = []
         for (trip, location) in inputs {
             guard !Task.isCancelled else { return }
-            let request = MKLocalSearch.Request()
-            request.naturalLanguageQuery = location
-            if let item = try? await MKLocalSearch(request: request).start().mapItems.first {
+            if let coordinate = await DestinationResolver.shared.coordinate(for: location) {
                 resolved.append(TripDestinationPin(
                     tripID: trip.id,
                     tripName: trip.name,
                     location: location,
-                    coordinate: item.location.coordinate
+                    coordinate: coordinate
                 ))
             }
         }

@@ -1,3 +1,4 @@
+import { withTiming } from "../_shared/request-timing.ts";
 // ocr-receipt — server-side proxy for Google Cloud Vision OCR.
 //
 // Why this exists: the app must NOT ship the Google Cloud Vision API key. The client
@@ -39,7 +40,7 @@ function jsonResponse(body: unknown, status = 200, headers: Record<string, strin
   return new Response(JSON.stringify(body), { status, headers: { ...JSON_HEADERS, ...headers } });
 }
 
-Deno.serve(async (req) => {
+Deno.serve(withTiming("ocr-receipt", async (req, timing) => {
   if (req.method !== "POST") {
     return jsonResponse({ error: "Method not allowed" }, 405);
   }
@@ -47,9 +48,9 @@ Deno.serve(async (req) => {
   // 1. Require a valid, signed-in user (not just any project JWT such as the anon key).
   const token = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
   if (!token) return jsonResponse({ error: "Unauthorized" }, 401);
-  const user = await getUser(token);
+  const user = await timing.measure("auth", () => getUser(token));
   if (!user) return jsonResponse({ error: "Unauthorized" }, 401);
-  if (!(await hasAIConsent(token, CONSENT_PURPOSE))) {
+  if (!(await timing.measure("consent", () => hasAIConsent(token, CONSENT_PURPOSE)))) {
     return jsonResponse({ error: "Current AI consent is required." }, 403);
   }
 
@@ -74,7 +75,7 @@ Deno.serve(async (req) => {
   // even if the provider returns an error or unusable output.
   let usage: UsageReservation;
   try {
-    usage = await reserveUsage(user.id);
+    usage = await timing.measure("quota", () => reserveUsage(user.id));
   } catch {
     logUsage("rate_check_failure", 500);
     return jsonResponse({ error: "Rate limit check failed" }, 500);
@@ -83,9 +84,10 @@ Deno.serve(async (req) => {
     logUsage("rate_limited", 429, usage);
     return rateLimitResponse(usage);
   }
+  const reservationId = usage.reservationId;
 
   if (mocksEnabled) {
-    await completeUsage(usage.reservationId, true);
+    await timing.measure("completion", () => completeUsage(reservationId, true));
     logUsage("local_mock_success", 200, usage);
     return jsonResponse({
       text: "Coffee 4.50\nTotal 4.50",
@@ -97,7 +99,7 @@ Deno.serve(async (req) => {
   // text model, which reads receipt print better than plain TEXT_DETECTION.
   let visionResponse: Response;
   try {
-    visionResponse = await fetch(
+    visionResponse = await timing.measure("vision", () => fetch(
       `https://vision.googleapis.com/v1/images:annotate?key=${GOOGLE_VISION_API_KEY}`,
       {
         method: "POST",
@@ -109,16 +111,16 @@ Deno.serve(async (req) => {
           }],
         }),
       },
-    );
+    ));
   } catch {
-    await completeUsage(usage.reservationId, true);
+    await timing.measure("completion", () => completeUsage(reservationId, true));
     logUsage("post_call_failure", 502);
     return jsonResponse({ error: "OCR service error" }, 502);
   }
   if (!visionResponse.ok) {
     // Log status only — never the upstream body (avoid leaking key-adjacent detail).
     console.error("Cloud Vision call failed:", visionResponse.status);
-    await completeUsage(usage.reservationId, true);
+    await timing.measure("completion", () => completeUsage(reservationId, true));
     logUsage("post_call_failure", 502);
     return jsonResponse({ error: "OCR service error" }, 502);
   }
@@ -127,7 +129,7 @@ Deno.serve(async (req) => {
   const annotation = visionJson?.responses?.[0];
   if (!annotation || annotation.error) {
     console.error("Cloud Vision annotation error:", annotation?.error?.code ?? "empty");
-    await completeUsage(usage.reservationId, true);
+    await timing.measure("completion", () => completeUsage(reservationId, true));
     logUsage("post_call_failure", 502);
     return jsonResponse({ error: "OCR service error" }, 502);
   }
@@ -137,10 +139,10 @@ Deno.serve(async (req) => {
     : "";
   const lines = groupWordsIntoRows(annotation.textAnnotations).slice(0, MAX_LINES);
 
-  await completeUsage(usage.reservationId, true);
+  await timing.measure("completion", () => completeUsage(reservationId, true));
   logUsage("success", 200, usage);
   return jsonResponse({ text: fullText.slice(0, 20_000), lines }, 200);
-});
+}));
 
 async function hasAIConsent(token: string, purpose: string): Promise<boolean> {
   const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/has_ai_consent`, {

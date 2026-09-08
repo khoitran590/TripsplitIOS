@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Split Engine
 
 /// The result of computing a split: each person's share, net balance, and validity.
-struct SplitResult {
+nonisolated struct SplitResult {
     /// Each person's share of the bill.
     var owed: [Person.ID: Double] = [:]
     /// Net balance per person: what they paid minus what they owe.
@@ -14,15 +14,17 @@ struct SplitResult {
 }
 
 /// Suggested transfer to settle up: `from` pays `to` the given `amount`.
-struct Settlement: Identifiable {
-    let id = UUID()
+nonisolated struct Settlement: Identifiable {
+    // Transfers are unique by directed pair within a trip. Preserve row identity
+    // when balances are recomputed so SwiftUI can retain state and reuse views.
+    var id: String { "\(from.id.uuidString)->\(to.id.uuidString)" }
     let from: Person
     let to: Person
     let amount: Double
 }
 
 /// How a settlement payment was made, mirroring TripSplit's settlement payment methods.
-enum PaymentMethod: String, CaseIterable, Identifiable, Codable {
+nonisolated enum PaymentMethod: String, CaseIterable, Identifiable, Codable {
     case cash = "Cash"
     case venmo = "Venmo"
     case paypal = "PayPal"
@@ -42,12 +44,12 @@ enum PaymentMethod: String, CaseIterable, Identifiable, Codable {
 
 /// The lifecycle of a settlement request, mirroring TripSplit's `status` field:
 /// the debtor records a `pending` payment and the creditor confirms or declines it.
-enum SettlementStatus: String, Codable {
+nonisolated enum SettlementStatus: String, Codable {
     case pending, confirmed, rejected
 }
 
 /// A recorded settlement payment toward a debt between two people.
-struct SettlementRecord: Identifiable, Codable {
+nonisolated struct SettlementRecord: Identifiable, Codable, Equatable {
     let id: UUID
     var amount: Double
     var method: PaymentMethod
@@ -83,7 +85,7 @@ struct SettlementRecord: Identifiable, Codable {
 /// Pure split calculation, faithful to TripSplit's `calculateSplitPreview` +
 /// `splitService` rounding, with exact-cent remainder distribution added so the
 /// per-person shares always reconcile to the bill total.
-enum SplitEngine {
+nonisolated enum SplitEngine {
 
     /// Rounds to two decimals using the same epsilon trick as `mathHelpers.roundToTwo`.
     static func roundToTwo(_ value: Double) -> Double {
