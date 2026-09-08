@@ -159,13 +159,17 @@ final class PerformanceRegressionTests: XCTestCase {
         var calls = 0
         let resolver = DestinationResolver { _ in
             calls += 1
-            return calls == 1 ? nil : CLLocationCoordinate2D(latitude: 1, longitude: 2)
+            return calls == 1 ? nil : ResolvedDestination(
+                coordinate: CLLocationCoordinate2D(latitude: 1, longitude: 2),
+                regionName: "France"
+            )
         }
         let missing = await resolver.coordinate(for: "Paris")
         XCTAssertNil(missing)
         let found = await resolver.coordinate(for: "Paris")
         XCTAssertEqual(found?.latitude, 1)
-        _ = await resolver.coordinate(for: "  PARIS  ")
+        let cached = await resolver.resolve("  PARIS  ")
+        XCTAssertEqual(cached?.regionName, "France")
         XCTAssertEqual(calls, 2)
     }
 }

@@ -185,7 +185,8 @@ Deno.serve(withTiming("suggest-itinerary", async (req, timing) => {
     });
     await timing.measure("completion", () => completeUsage(reservationId, true));
     logUsage("local_mock_success", 200, usage, "gemini");
-    return jsonResponse(plan, 200);
+    // Same scope pass as the real path, so the mock returns the identical wire shape.
+    return jsonResponse(plan ? enforceDestinationScope(plan, location).plan : plan, 200);
   }
 
   const prompt = buildPrompt({ location, days, currency, totalBudget, startDate, existingPlan });
@@ -290,9 +291,25 @@ Deno.serve(withTiming("suggest-itinerary", async (req, timing) => {
     }
     return jsonResponse({ error: "Suggestion service error" }, 502);
   }
+  // 7. Last line of defense on geography: drop anything the model placed outside the
+  // destination before it can reach the traveler's plan.
+  const scoped = enforceDestinationScope(plan, location);
+  if (scoped.dropped > 0) {
+    console.log(JSON.stringify({
+      function: "suggest-itinerary",
+      outcome: "out_of_scope_stops_dropped",
+      dropped: scoped.dropped,
+      provider,
+    }));
+  }
+  if (!scoped.plan) {
+    await timing.measure("completion", () => completeUsage(reservationId, true));
+    logUsage("out_of_scope_plan", 502, usage, provider);
+    return jsonResponse({ error: "The AI planner drafted stops outside your destination. Try again." }, 502);
+  }
   await timing.measure("completion", () => completeUsage(reservationId, true));
   logUsage("success", 200, usage, provider);
-  return jsonResponse(plan, 200);
+  return jsonResponse(scoped.plan, 200);
 }));
 
 async function getUser(token: string): Promise<{ id: string } | null> {
@@ -428,7 +445,7 @@ function buildPrompt(input: {
   return `You are an expert professional travel planner with deep first-hand knowledge of ${input.location}: its neighborhoods, opening hours, local food scene, transit, and realistic prices. A client hired you to plan their trip. Plan it the way you would for a paying client — realistic, well-paced, and genuinely good, not a generic tourist checklist.
 
 TRIP BRIEF
-Destination: ${input.location}
+Destination: ${input.location} — every stop must be here
 Number of days: ${input.days}
 ${budgetLine}
 ${dateLine}
@@ -441,17 +458,26 @@ Work the plan out first; only write the JSON once you know it holds together.
 - Order every day's stops as a route someone actually walks or rides: each stop next to the one before it, no crossing the city twice, and travel time between stops that fits the clock.
 - Check the day against reality before committing: opening days and hours, the per-day budget, and how tired the client will be by evening. If something doesn't work, change the order or the picks, not the timings.
 
+GEOGRAPHIC SCOPE — the hardest rule in this brief
+- Every single stop must be a real place located in or around ${input.location}, within ${SCOPE_RADIUS_MILES} miles (${SCOPE_RADIUS_KM} km) of the center of ${input.location}. No exceptions, not even for a famous place the client "should" see.
+- Place names and cuisines repeat across the world. Before you include a stop, confirm the specific venue you mean is the one in ${input.location} — never a same-named or similar restaurant, museum, or landmark in another city or country.
+- A cuisine is not a location: searching for the best restaurant of some cuisine will surface top-rated spots on other continents. Only include one if it is physically in ${input.location}.
+- If you cannot confirm a place is inside that radius, leave it out and pick something you can confirm.
+
 RESEARCH — you have a web search tool; use it
+- Put "${input.location}" (or a neighborhood of it) in every search query you run, so results are local; discard any result that turns out to be elsewhere.
 - Before choosing stops, search for the currently best-reviewed restaurants, attractions, and things to do in ${input.location}, including well-loved local spots that aren't in every guidebook.
 - Verify every place you include still exists and is open — skip anything permanently or temporarily closed, and prefer what you find in search results over memory.
 - Check current opening days/hours, entry fees, and typical meal prices, and use those real numbers for "time" feasibility and "cost".
 
 OUTPUT RULES
 - Reply with the JSON object and nothing else — no prose before or after, no explanation of your reasoning.
-- Shape: {"days": [{"title": string, "stops": [{"kind": string, "name": string, "time": string, "notes": string, "cost": number}]}]}
+- Shape: {"destinationArea": string, "days": [{"title": string, "stops": [{"kind": string, "name": string, "area": string, "time": string, "notes": string, "cost": number}]}]}
+- "destinationArea" is your reading of the destination as "<city>, <country>" (e.g. "Hanoi, Vietnam") — it anchors the scope check below.
 - Output exactly ${input.days} days, in order.
 - Give each day a short theme title, 2–4 words (e.g. "Old town & markets").
 - 4 to 6 stops per day. Every stop must be a real, verifiable place — never invent names. Use the place's common name only, no street address.
+- "area" is where that stop physically is, written as "<neighborhood or town>, <city>, <country>" (e.g. "Hoan Kiem, Hanoi, Vietnam"). It must name ${input.location} or a place within ${SCOPE_RADIUS_MILES} miles of it; a stop whose area is elsewhere is dropped from the plan before the client sees it.
 - "kind" must be exactly one of: "location" (a sight, viewpoint, neighborhood, or landmark to go see), "activity" (a museum, show, tour, class, hike, or experience to do), "restaurant" (anywhere to eat or drink).
 - "time" is 24-hour "HH:mm", strictly increasing within each day.
 - "notes" is ONE short sentence (under 15 words): the single best reason to go, or the one tip that matters most (book ahead, go at sunset, cash only). No filler like "a must-see".
@@ -472,6 +498,7 @@ ${budgetDisciplineLine}
 const PLAN_JSON_SCHEMA = {
   type: "object",
   properties: {
+    destinationArea: { type: "string" },
     days: {
       type: "array",
       items: {
@@ -485,11 +512,12 @@ const PLAN_JSON_SCHEMA = {
               properties: {
                 kind: { type: "string", enum: ["location", "activity", "restaurant"] },
                 name: { type: "string" },
+                area: { type: "string" },
                 time: { type: "string" },
                 notes: { type: "string" },
                 cost: { type: "number" },
               },
-              required: ["kind", "name", "time", "notes", "cost"],
+              required: ["kind", "name", "area", "time", "notes", "cost"],
               additionalProperties: false,
             },
           },
@@ -499,7 +527,7 @@ const PLAN_JSON_SCHEMA = {
       },
     },
   },
-  required: ["days"],
+  required: ["destinationArea", "days"],
   additionalProperties: false,
 };
 
@@ -624,6 +652,7 @@ async function callGemini(
             responseSchema: {
               type: "OBJECT",
               properties: {
+                destinationArea: { type: "STRING" },
                 days: {
                   type: "ARRAY",
                   items: {
@@ -637,11 +666,12 @@ async function callGemini(
                           properties: {
                             kind: { type: "STRING" },
                             name: { type: "STRING" },
+                            area: { type: "STRING" },
                             time: { type: "STRING" },
                             notes: { type: "STRING" },
                             cost: { type: "NUMBER" },
                           },
-                          required: ["kind", "name", "time"],
+                          required: ["kind", "name", "area", "time"],
                         },
                       },
                     },
@@ -649,7 +679,7 @@ async function callGemini(
                   },
                 },
               },
-              required: ["days"],
+              required: ["destinationArea", "days"],
             },
           },
         }),
@@ -700,6 +730,81 @@ function toNumber(value: unknown): number {
   return 0;
 }
 
+// --- Destination scope -------------------------------------------------------------
+// Plans have shipped stops on the wrong continent (a "Vietnamese restaurant" in Europe
+// inside a Hanoi trip): web search happily returns the best-reviewed match for a cuisine
+// or a place name that also exists somewhere else. The prompt asks the model to report
+// each stop's `area`; this is the check that actually keeps out-of-scope stops out.
+const SCOPE_RADIUS_MILES = 150;
+const SCOPE_RADIUS_KM = Math.round(SCOPE_RADIUS_MILES * 1.60934); // 241
+
+// Words that carry no geography, so they must never be what makes an area "match".
+const PLACE_STOPWORDS = new Set([
+  "the", "and", "city", "town", "area", "region", "province", "district", "county",
+  "state", "prefecture", "trip", "vacation", "holiday", "downtown", "central", "near",
+]);
+
+// Lowercase, strip diacritics (Hà Nội -> ha noi), and reduce punctuation to spaces so
+// "Hoàn Kiếm, Hà Nội" and "hoan kiem, hanoi" compare on equal terms.
+function normalizePlace(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+// The destination's own geographic words, plus their spaceless forms so "ha noi" and
+// "hanoi" match each other.
+function destinationTokens(location: string): string[] {
+  const normalized = normalizePlace(location);
+  const words = normalized.split(" ").filter((word) => word.length >= 3 && !PLACE_STOPWORDS.has(word));
+  const tokens = new Set<string>(words);
+  if (words.length > 1) {
+    tokens.add(words.join(""));
+    tokens.add(words.join(" "));
+  }
+  return [...tokens];
+}
+
+// Drops stops the model itself places outside the destination. A stop is kept when its
+// reported area shares any geographic word with the destination (so a day trip to
+// "Ha Long Bay, Quang Ninh, Vietnam" survives a "Hanoi, Vietnam" trip) and when the
+// model reported no area at all (an unconstrained retry shouldn't lose the whole plan).
+function enforceDestinationScope(
+  plan: Record<string, unknown>,
+  location: string,
+): { plan: Record<string, unknown> | null; dropped: number } {
+  const declaredArea = typeof plan.destinationArea === "string" ? plan.destinationArea : "";
+  // The trip's location is often just a city ("Hanoi"), which would reject an in-radius
+  // day trip in the same country. The model's own reading of the destination supplies
+  // the missing country/province words.
+  const tokens = [...new Set([...destinationTokens(location), ...destinationTokens(declaredArea)])];
+  const daysIn = Array.isArray(plan.days) ? plan.days as Record<string, unknown>[] : [];
+  let dropped = 0;
+
+  const days = daysIn.map((day) => {
+    const stopsIn = Array.isArray(day.stops) ? day.stops as Record<string, unknown>[] : [];
+    const stops = stopsIn.filter((stop) => {
+      const area = typeof stop.area === "string" ? stop.area.trim() : "";
+      if (area.length === 0 || tokens.length === 0) return true;
+      const haystack = normalizePlace(area);
+      const spaceless = haystack.replace(/ /g, "");
+      const inScope = tokens.some((token) =>
+        haystack.includes(token) || spaceless.includes(token.replace(/ /g, ""))
+      );
+      if (!inScope) dropped++;
+      return inScope;
+    // `area` has done its job; the client's wire shape stays unchanged.
+    }).map(({ area: _area, ...stop }) => stop);
+    return { ...day, stops };
+  }).filter((day) => (day.stops as unknown[]).length > 0);
+
+  if (days.length === 0) return { plan: null, dropped };
+  return { plan: { days }, dropped };
+}
+
 const KINDS = new Set(["location", "activity", "restaurant"]);
 
 // Coerce the model's output into the exact shape the client decodes, clamping sizes so
@@ -719,6 +824,9 @@ function normalizePlan(input: unknown): Record<string, unknown> | null {
       return {
         kind,
         name: typeof stop.name === "string" ? stop.name.slice(0, 120) : "",
+        // Where the place physically is, as the model reports it. Kept only long enough
+        // for `enforceDestinationScope` to check it; stripped before the response.
+        area: typeof stop.area === "string" ? stop.area.slice(0, 160) : "",
         time,
         notes: typeof stop.notes === "string" ? stop.notes.slice(0, 240) : "",
         cost: Math.min(Math.max(toNumber(stop.cost), 0), 100_000),
@@ -730,5 +838,8 @@ function normalizePlan(input: unknown): Record<string, unknown> | null {
     };
   }).filter((day) => day.stops.length > 0);
   if (days.length === 0) return null;
-  return { days };
+  // The model's own "<city>, <country>" reading of the destination. Used only to widen
+  // the scope check to the destination's country; stripped before the response.
+  const destinationArea = typeof obj.destinationArea === "string" ? obj.destinationArea.slice(0, 160) : "";
+  return { destinationArea, days };
 }

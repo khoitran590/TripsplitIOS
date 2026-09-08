@@ -1,6 +1,7 @@
 import XCTest
 import SwiftUI
 import UIKit
+import MapKit
 @testable import Tripsplit
 
 @MainActor
@@ -395,6 +396,98 @@ final class TripsplitAppTests: XCTestCase {
         XCTAssertNil(decoded.coordinate)
         XCTAssertNil(decoded.address)
         XCTAssertEqual(decoded.name, "Museum")
+    }
+
+    func testLegacyItineraryStopDefaultsToNotUserPlaced() throws {
+        let stop = ItineraryStop(name: "Museum", latitude: 1, longitude: 2, address: "1 Road")
+        let encoded = try JSONEncoder().encode(stop)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        json.removeValue(forKey: "isUserPlaced")
+
+        let decoded = try JSONDecoder().decode(
+            ItineraryStop.self,
+            from: JSONSerialization.data(withJSONObject: json)
+        )
+        // Stops stored before the flag existed are the ones the Map tab resolved by
+        // name, so they must stay revalidatable rather than read as traveler-chosen.
+        XCTAssertFalse(decoded.isUserPlaced)
+        XCTAssertEqual(decoded.coordinate?.latitude, 1)
+    }
+
+    func testItineraryPinScopeRejectsSameNameVenueOnAnotherContinent() {
+        let hanoi = ResolvedDestination(
+            coordinate: CLLocationCoordinate2D(latitude: 21.0278, longitude: 105.8342),
+            regionName: "Vietnam"
+        )
+        // The reported bug: a Vietnamese restaurant in Europe pinned into a Hanoi plan.
+        XCTAssertFalse(ItineraryPinScope.isInScope(
+            candidate: CLLocationCoordinate2D(latitude: 48.8566, longitude: 2.3522),
+            candidateRegion: "France",
+            destination: hanoi
+        ))
+        // A whole address is accepted in place of a bare region name.
+        XCTAssertFalse(ItineraryPinScope.isInScope(
+            candidate: CLLocationCoordinate2D(latitude: 48.8566, longitude: 2.3522),
+            candidateRegion: "12 Rue de Rivoli, Paris, France",
+            destination: hanoi
+        ))
+        XCTAssertTrue(ItineraryPinScope.isInScope(
+            candidate: CLLocationCoordinate2D(latitude: 21.0368, longitude: 105.8342),
+            candidateRegion: "Vietnam",
+            destination: hanoi
+        ))
+        // Ha Long Bay is a normal day trip from Hanoi: inside the 150-mile scope.
+        XCTAssertTrue(ItineraryPinScope.isInScope(
+            candidate: CLLocationCoordinate2D(latitude: 20.9101, longitude: 107.1839),
+            candidateRegion: nil,
+            destination: hanoi
+        ))
+    }
+
+    func testItineraryPinScopeKeepsDistantStopsInsideTheDestinationCountry() {
+        let tokyo = ResolvedDestination(
+            coordinate: CLLocationCoordinate2D(latitude: 35.6895, longitude: 139.6917),
+            regionName: "Japan"
+        )
+        let kyoto = CLLocationCoordinate2D(latitude: 35.0116, longitude: 135.7681)
+        // ~365 km — past the radius, so only the shared country keeps it eligible.
+        XCTAssertTrue(ItineraryPinScope.isInScope(
+            candidate: kyoto,
+            candidateRegion: "Kyoto, Japan",
+            destination: tokyo
+        ))
+        XCTAssertFalse(ItineraryPinScope.isInScope(
+            candidate: kyoto,
+            candidateRegion: nil,
+            destination: tokyo
+        ))
+        // Same country is not a blank cheque: Ishigaki is ~1,950 km out.
+        XCTAssertFalse(ItineraryPinScope.isInScope(
+            candidate: CLLocationCoordinate2D(latitude: 24.3448, longitude: 124.1572),
+            candidateRegion: "Japan",
+            destination: tokyo
+        ))
+    }
+
+    func testItineraryPinProximityScoreFavoursCloserCandidates() {
+        let center = CLLocationCoordinate2D(latitude: 21.0278, longitude: 105.8342)
+        let inTown = ItineraryPinScope.proximityScore(
+            candidate: CLLocationCoordinate2D(latitude: 21.0368, longitude: 105.8342),
+            destination: center
+        )
+        let dayTrip = ItineraryPinScope.proximityScore(
+            candidate: CLLocationCoordinate2D(latitude: 20.9101, longitude: 107.1839),
+            destination: center
+        )
+        let farAway = ItineraryPinScope.proximityScore(
+            candidate: CLLocationCoordinate2D(latitude: 48.8566, longitude: 2.3522),
+            destination: center
+        )
+        XCTAssertGreaterThan(inTown, dayTrip)
+        XCTAssertGreaterThan(dayTrip, farAway)
+        // Beyond the scope the gate has already rejected the candidate; distance must
+        // not hand out a negative score that could reorder in-scope ones.
+        XCTAssertEqual(farAway, 0)
     }
 
     func testExpenseAndItineraryCoordinatesRoundTrip() throws {

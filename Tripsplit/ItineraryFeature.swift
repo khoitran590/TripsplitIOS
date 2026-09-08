@@ -54,6 +54,11 @@ nonisolated struct ItineraryStop: Identifiable, Codable, Equatable {
     var latitude: Double? = nil
     var longitude: Double? = nil
     var address: String? = nil
+    /// True when the coordinate came from the traveler tapping a real place (the stop
+    /// editor's autocomplete, or "add to itinerary" on the map) rather than from the
+    /// Map tab resolving the stop's name. Map keeps its hands off those pins: they are
+    /// deliberate, even when they sit far outside the trip's destination.
+    var isUserPlaced: Bool = false
 
     init(
         id: UUID = UUID(),
@@ -64,7 +69,8 @@ nonisolated struct ItineraryStop: Identifiable, Codable, Equatable {
         cost: Double = 0,
         latitude: Double? = nil,
         longitude: Double? = nil,
-        address: String? = nil
+        address: String? = nil,
+        isUserPlaced: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -75,9 +81,12 @@ nonisolated struct ItineraryStop: Identifiable, Codable, Equatable {
         self.latitude = latitude
         self.longitude = longitude
         self.address = address
+        self.isUserPlaced = isUserPlaced
     }
 
-    private enum CodingKeys: String, CodingKey { case id, name, kind, time, notes, cost, latitude, longitude, address }
+    private enum CodingKeys: String, CodingKey {
+        case id, name, kind, time, notes, cost, latitude, longitude, address, isUserPlaced
+    }
 
     // Every field decodes with a default so trips stored before a field existed keep loading.
     init(from decoder: Decoder) throws {
@@ -91,6 +100,7 @@ nonisolated struct ItineraryStop: Identifiable, Codable, Equatable {
         latitude = try c.decodeIfPresent(Double.self, forKey: .latitude)
         longitude = try c.decodeIfPresent(Double.self, forKey: .longitude)
         address = try c.decodeIfPresent(String.self, forKey: .address)
+        isUserPlaced = try c.decodeIfPresent(Bool.self, forKey: .isUserPlaced) ?? false
     }
 
     var coordinate: CLLocationCoordinate2D? {
@@ -2085,6 +2095,10 @@ struct ItineraryStopEditorView: View {
     @State private var latitude: Double?
     @State private var longitude: Double?
     @State private var resolvedAddress: String?
+    /// Whether the coordinate about to be saved was chosen by the traveler. Seeded from
+    /// the stop being edited so re-saving it without touching the name keeps its
+    /// provenance, and set when a suggestion is tapped here.
+    @State private var isUserPlaced = false
 
     @StateObject private var placeCompleter = StopPlaceCompleter()
     @FocusState private var nameFocused: Bool
@@ -2248,6 +2262,7 @@ struct ItineraryStopEditorView: View {
                 latitude = stop.latitude
                 longitude = stop.longitude
                 resolvedAddress = stop.address
+                isUserPlaced = stop.isUserPlaced
             }
             .task {
                 placeCompleter.setKind(kind)
@@ -2265,6 +2280,7 @@ struct ItineraryStopEditorView: View {
                 latitude = nil
                 longitude = nil
                 resolvedAddress = nil
+                isUserPlaced = false
                 placeCompleter.update(query: name)
             }
         }
@@ -2285,6 +2301,7 @@ struct ItineraryStopEditorView: View {
         latitude = item.location.coordinate.latitude
         longitude = item.location.coordinate.longitude
         resolvedAddress = item.address?.fullAddress
+        isUserPlaced = true
     }
 
     /// Geocodes the trip's destination once so suggestions rank places there rather
@@ -2310,7 +2327,8 @@ struct ItineraryStopEditorView: View {
             cost: SplitEngine.roundToTwo(max(Double(costText) ?? 0, 0)),
             latitude: latitude,
             longitude: longitude,
-            address: resolvedAddress
+            address: resolvedAddress,
+            isUserPlaced: isUserPlaced && latitude != nil
         )
         onSave(saved)
         dismiss()

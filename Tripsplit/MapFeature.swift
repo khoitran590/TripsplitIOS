@@ -272,6 +272,71 @@ final class ExploreMapModel {
     }
 }
 
+/// Decides whether a MapKit candidate is close enough to a trip's destination to be
+/// that trip's planner pin.
+///
+/// Distance used to be a soft score, so an exact name match anywhere on earth could
+/// outrank the right venue with a slightly different name — that is how a Hanoi plan
+/// ended up with a pin on a Vietnamese restaurant in Europe. Geography is a gate now:
+/// a stop the planner drafted is somewhere near the destination or it gets no pin,
+/// because a confidently wrong pin misleads in a way a missing one does not.
+nonisolated enum ItineraryPinScope {
+    /// The same 150-mile scope the AI planner is briefed with, so what the map accepts
+    /// and what the planner is allowed to suggest agree.
+    static let radius: CLLocationDistance = 240_000
+    /// A trip carries one destination string ("Tokyo") even when a day runs to Kyoto,
+    /// 370 km away. Beyond `radius`, a candidate stays eligible only while it is in the
+    /// destination's own country — which is exactly what the wrong-continent matches
+    /// are not.
+    static let sameRegionRadius: CLLocationDistance = 1_500_000
+
+    static func distance(
+        from origin: CLLocationCoordinate2D,
+        to destination: CLLocationCoordinate2D
+    ) -> CLLocationDistance {
+        CLLocation(latitude: origin.latitude, longitude: origin.longitude).distance(
+            from: CLLocation(latitude: destination.latitude, longitude: destination.longitude)
+        )
+    }
+
+    /// `candidateRegion` may be a bare region name ("Vietnam") or a whole address that
+    /// ends in one; both are matched by containment against the destination's region.
+    static func isInScope(
+        candidate: CLLocationCoordinate2D,
+        candidateRegion: String?,
+        destination: ResolvedDestination
+    ) -> Bool {
+        let metres = distance(from: candidate, to: destination.coordinate)
+        if metres <= radius { return true }
+        guard metres <= sameRegionRadius else { return false }
+        return sharesRegion(candidateRegion, with: destination.regionName)
+    }
+
+    /// How strongly a candidate's position argues for it, once it is in scope. Kept
+    /// graded — a stop in the city beats one two hours out — but it can no longer
+    /// rescue a candidate the gate rejected.
+    static func proximityScore(
+        candidate: CLLocationCoordinate2D,
+        destination: CLLocationCoordinate2D
+    ) -> Double {
+        switch distance(from: candidate, to: destination) {
+        case 0..<5_000: 28
+        case 5_000..<25_000: 20
+        case 25_000..<90_000: 10
+        case 90_000..<radius: 4
+        default: 0
+        }
+    }
+
+    private static func sharesRegion(_ candidateRegion: String?, with destinationRegion: String?) -> Bool {
+        guard let destinationRegion, let candidateRegion else { return false }
+        let destination = destinationRegion.normalizedForSearch
+        let candidate = candidateRegion.normalizedForSearch
+        guard !destination.isEmpty, !candidate.isEmpty else { return false }
+        return candidate.contains(destination) || destination.contains(candidate)
+    }
+}
+
 private extension String {
     var normalizedForSearch: String {
         folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
@@ -1812,7 +1877,7 @@ struct MapScreen: View {
         isLoadingFeedPlaces = true
         defer { isLoadingFeedPlaces = false }
         guard let posts = try? await store.feedPlaces(for: tripID) else { return }
-        let destinationRegion = await itinerarySearchRegion(for: trip)
+        let destination = await itineraryDestination(for: trip)
         var resolved: [FeedMapPin] = []
         var legacyLookupCount = 0
         for post in posts {
@@ -1825,7 +1890,7 @@ struct MapScreen: View {
                 ))
             } else if legacyLookupCount < 5, let name = post.locationName {
                 legacyLookupCount += 1
-                if let item = await bestItineraryMapItem(for: name, trip: trip, destinationRegion: destinationRegion) {
+                if let item = await bestItineraryMapItem(for: name, trip: trip, destination: destination) {
                     resolved.append(FeedMapPin(trip: trip, post: post, coordinate: item.location.coordinate))
                 }
             }
@@ -1905,7 +1970,7 @@ struct MapScreen: View {
         isResolvingItineraryLocations = true
         defer { isResolvingItineraryLocations = false }
 
-        let destinationRegion = await itinerarySearchRegion(for: trip)
+        let destination = await itineraryDestination(for: trip)
         var validationCacheChanged = false
         var automaticLookupCount = 0
         guard itinerary.days.indices.contains(dayIndex) else { return }
@@ -1915,10 +1980,14 @@ struct MapScreen: View {
             let name = stop.name.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !name.isEmpty else { continue }
 
+            // A place the traveler picked themselves is theirs: never re-search it and
+            // never move it, however far from the destination it sits.
+            if stop.isUserPlaced, stop.coordinate != nil { continue }
+
             let validationKey = itineraryValidationKey(for: stop, trip: trip)
             if stop.coordinate != nil, validatedKeys.contains(validationKey) { continue }
-            // Ten ambiguous stops can use at most thirty fallback searches. Leave
-            // headroom for destination, feed, and user-initiated searches inside
+            // Ten ambiguous stops can use at most twenty searches (two variants each).
+            // Leave headroom for destination, feed, and user-initiated searches inside
             // MapKit's 50-request burst window. Additional stops are picked up the
             // next time this day is opened; ordinary days resolve in one pass.
             guard automaticLookupCount < 10 else { continue }
@@ -1926,8 +1995,25 @@ struct MapScreen: View {
             guard let item = await bestItineraryMapItem(
                 for: name,
                 trip: trip,
-                destinationRegion: destinationRegion
-            ) else { continue }
+                destination: destination
+            ) else {
+                // Nothing credible near the destination. Any coordinate already stored
+                // for this stop came from the older, ungated resolver, so drop it when
+                // it is out of scope: the day is better with a missing pin than with
+                // one pointing at another country.
+                if let existing = stop.coordinate, let destination,
+                   !ItineraryPinScope.isInScope(
+                       candidate: existing,
+                       candidateRegion: stop.address,
+                       destination: destination
+                   ) {
+                    itinerary.days[dayIndex].stops[stopIndex].latitude = nil
+                    itinerary.days[dayIndex].stops[stopIndex].longitude = nil
+                    itinerary.days[dayIndex].stops[stopIndex].address = nil
+                    changed = true
+                }
+                continue
+            }
 
             if validatedKeys.insert(validationKey).inserted { validationCacheChanged = true }
             let newCoordinate = item.location.coordinate
@@ -1968,25 +2054,32 @@ struct MapScreen: View {
         return min(max(span + 1, 1), 30)
     }
 
-    /// Searches both globally and with the trip bias, then ranks every candidate by
-    /// venue-name fidelity, destination/address context, and distance. Collapsed-name
-    /// comparison makes small spacing mistakes ("skybuilding") match "Sky Building".
+    /// Searches with the trip bias, discards everything outside the destination's
+    /// scope, then ranks what is left by venue-name fidelity, address context, and
+    /// distance. Collapsed-name comparison makes small spacing mistakes
+    /// ("skybuilding") match "Sky Building".
     private func bestItineraryMapItem(
         for stopName: String,
         trip: Trip,
-        destinationRegion: MKCoordinateRegion?
+        destination: ResolvedDestination?
     ) async -> MKMapItem? {
         let location = trip.location?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let cacheKey = "\(stopName.normalizedForSearch)|\(location.normalizedForSearch)"
         if let cached = itinerarySearchCache[cacheKey] { return cached }
 
+        let searchRegion = destination.map(itinerarySearchRegion(around:))
         // The destination-qualified query is normally both the most accurate and the
         // only request needed. Fall back to broader variants only when it does not
-        // produce a strong exact-name result.
+        // produce a strong exact-name result. The unqualified global search runs only
+        // when there is no destination to judge results against — with one, it just
+        // spends MapKit's burst budget on candidates the scope gate will drop.
         var searches: [(query: String, biased: Bool)] = []
         if !location.isEmpty { searches.append(("\(stopName), \(location)", true)) }
-        if destinationRegion != nil { searches.append((stopName, true)) }
-        searches.append((stopName, false))
+        if searchRegion != nil {
+            searches.append((stopName, true))
+        } else {
+            searches.append((stopName, false))
+        }
 
         var seenSearches: Set<String> = []
         searches = searches.filter {
@@ -1999,18 +2092,25 @@ struct MapScreen: View {
             guard !Task.isCancelled else { return nil }
             let request = MKLocalSearch.Request()
             request.naturalLanguageQuery = search.query
-            if search.biased, let destinationRegion { request.region = destinationRegion }
+            if search.biased, let searchRegion { request.region = searchRegion }
             request.resultTypes = [.pointOfInterest, .address]
             let items = (try? await MKLocalSearch(request: request).start())?.mapItems ?? []
             for item in items.prefix(15) {
                 let coordinate = item.location.coordinate
                 let key = "\((item.name ?? "").normalizedForSearch)|\(String(format: "%.5f,%.5f", coordinate.latitude, coordinate.longitude))"
                 guard seen.insert(key).inserted else { continue }
+                // Geography is a gate, not a tiebreaker: a same-named venue outside the
+                // trip's part of the world never becomes this stop's pin.
+                if let destination, !ItineraryPinScope.isInScope(
+                    candidate: coordinate,
+                    candidateRegion: item.addressRepresentations?.regionName ?? item.address?.fullAddress,
+                    destination: destination
+                ) { continue }
                 let nameScore = itineraryNameScore(item.name ?? "", expected: stopName)
                 let score = nameScore + itineraryContextScore(
                     item,
                     tripLocation: location,
-                    destinationRegion: destinationRegion
+                    destination: destination
                 )
                 candidates.append((score, nameScore, item))
             }
@@ -2034,9 +2134,12 @@ struct MapScreen: View {
         Set((try? JSONDecoder().decode([String].self, from: validatedItineraryStopsData)) ?? [])
     }
 
+    /// The version prefix retires every key written by the ungated resolver, so stops
+    /// it "validated" onto the wrong continent are checked once more against the scope
+    /// gate instead of being trusted forever.
     private func itineraryValidationKey(for stop: ItineraryStop, trip: Trip) -> String {
         let location = (trip.location ?? "").normalizedForSearch
-        return "\(trip.id.uuidString)|\(stop.id.uuidString)|\(stop.name.normalizedForSearch)|\(location)"
+        return "v2|\(trip.id.uuidString)|\(stop.id.uuidString)|\(stop.name.normalizedForSearch)|\(location)"
     }
 
     private func itineraryNameScore(_ candidateName: String, expected: String) -> Double {
@@ -2060,10 +2163,12 @@ struct MapScreen: View {
         return (Double(overlap) / Double(expectedTokens.count)) * 65
     }
 
+    /// Only ranks candidates the scope gate already accepted, so distance here is a
+    /// preference (the venue in town over the one two hours out), never a veto.
     private func itineraryContextScore(
         _ item: MKMapItem,
         tripLocation: String,
-        destinationRegion: MKCoordinateRegion?
+        destination: ResolvedDestination?
     ) -> Double {
         var score = 0.0
         let address = (item.address?.fullAddress ?? "").normalizedForSearch
@@ -2073,27 +2178,29 @@ struct MapScreen: View {
             score += Double(addressTokens.intersection(locationTokens).count) * 7
         }
 
-        if let center = destinationRegion?.center {
-            let distance = CLLocation(latitude: center.latitude, longitude: center.longitude).distance(
-                from: item.location
+        if let destination {
+            score += ItineraryPinScope.proximityScore(
+                candidate: item.location.coordinate,
+                destination: destination.coordinate
             )
-            switch distance {
-            case 0..<5_000: score += 28
-            case 5_000..<25_000: score += 20
-            case 25_000..<90_000: score += 7
-            case 90_000..<250_000: break
-            default: score -= 25
-            }
         }
         return score
     }
 
-    private func itinerarySearchRegion(for trip: Trip) async -> MKCoordinateRegion? {
+    /// The trip's destination as a map location plus the country MapKit puts it in —
+    /// the anchor every planner pin is judged against.
+    private func itineraryDestination(for trip: Trip) async -> ResolvedDestination? {
         guard let location = trip.location?.trimmingCharacters(in: .whitespacesAndNewlines),
               !location.isEmpty else { return nil }
-        guard let coordinate = await DestinationResolver.shared.coordinate(for: location) else { return nil }
-        return MKCoordinateRegion(
-            center: coordinate,
+        return await DestinationResolver.shared.resolve(location)
+    }
+
+    /// The search bias around a destination. Narrower than `ItineraryPinScope.radius`
+    /// on purpose: this only tilts MapKit's ranking toward the trip, while the scope
+    /// gate decides what may actually be kept.
+    private func itinerarySearchRegion(around destination: ResolvedDestination) -> MKCoordinateRegion {
+        MKCoordinateRegion(
+            center: destination.coordinate,
             latitudinalMeters: 180_000,
             longitudinalMeters: 180_000
         )
@@ -2514,7 +2621,9 @@ struct AddPlaceToItinerarySheet: View {
             kind: kind,
             latitude: place.coordinate.latitude,
             longitude: place.coordinate.longitude,
-            address: place.addressText
+            address: place.addressText,
+            // The traveler tapped this exact pin on the map; nothing should second-guess it.
+            isUserPlaced: true
         ))
         store.updateItinerary(itinerary, in: trip.id)
         dismiss()
