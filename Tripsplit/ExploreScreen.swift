@@ -42,6 +42,8 @@ struct RecScreen: View {
     @State private var selectedStyle: ExploreStyle?
     @State private var maxBudget: Double = Self.budgetCap
     @State private var sortOrder: ExploreSort = .popular
+    /// The region the card directory is showing; nil falls back to the first.
+    @State private var browseContinent: String?
     /// Slider bounds, derived from the curated set rather than hard-coded. The floor
     /// used to be $500 against a cheapest guide of $1.2k, so dragging into the bottom
     /// third of the track always produced "No trips match".
@@ -599,7 +601,14 @@ struct RecScreen: View {
         } else {
             VStack(alignment: .leading, spacing: 12) {
                 if showsHeading {
-                    sectionTitle("Discover", subtitle: "Browse curated guides, or search from the top.")
+                    // The heading carries the filter button, so the field only has to
+                    // exist while the user is actually searching.
+                    HStack(alignment: .center) {
+                        sectionHeader("Discover")
+                            .accessibilityAddTraits(.isHeader)
+                        Spacer(minLength: 8)
+                        filterButton
+                    }
                 }
                 if showsField {
                     searchBar
@@ -697,11 +706,11 @@ struct RecScreen: View {
             // Compact rather than a full-width bar: it keeps the app's primary action
             // visible without costing a row of its own.
             Button { requireAccount(.createItinerary(prefill: nil)) } label: {
-                Label("Create a trip", systemImage: "plus")
-                    .font(.app(.subheadline, .semibold))
+                Label("New trip", systemImage: "plus")
+                    .font(.app(.subheadline, .bold))
                     .foregroundStyle(Theme.onAccent)
-                    .padding(.horizontal, 14)
-                    .frame(minHeight: 40)
+                    .padding(.horizontal, 16)
+                    .frame(minHeight: 42)
                     .contentShape(.capsule)
             }
             .buttonStyle(.plain)
@@ -713,6 +722,7 @@ struct RecScreen: View {
                 ),
                 in: .capsule
             )
+            .shadow(color: Theme.elevatedShadow, radius: 8, y: 4)
             .accessibilityLabel("Create your own trip")
             .accessibilityHint("Opens the trip builder")
         }
@@ -769,19 +779,73 @@ struct RecScreen: View {
 
     /// Guides the user saved for later — unchanged in behaviour, now under their own
     /// heading rather than sharing the old "Continue" block with planned trips.
+    @ViewBuilder
     private var savedGuidesSection: some View {
-        VStack(alignment: .leading, spacing: Theme.isRuled ? 10 : 14) {
-            sectionTitle("Saved guides", subtitle: "Revisit a destination you saved.")
-            VStack(spacing: Theme.isRuled ? 0 : 14) {
-                ForEach(saved) { destination in
-                    // A hairline bounds a ruled row where a card bounds the others.
-                    if Theme.isRuled, destination.id != saved.first?.id { RuledDivider() }
-                    NavigationLink(value: destination.id) {
-                        DestinationRow(destination: destination)
+        if Theme.isRuled {
+            VStack(alignment: .leading, spacing: 10) {
+                sectionTitle("Saved guides", subtitle: "Revisit a destination you saved.")
+                VStack(spacing: 0) {
+                    ForEach(saved) { destination in
+                        // A hairline bounds a ruled row where a card bounds the others.
+                        if destination.id != saved.first?.id { RuledDivider() }
+                        NavigationLink(value: destination.id) {
+                            DestinationRow(destination: destination)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
             }
+        } else {
+            // Card themes: a rail of square thumbnails with a heart badge — the photo
+            // is the guide, the name is the caption, and the badge is the unsave.
+            VStack(alignment: .leading, spacing: 12) {
+                sectionTitle("Saved", subtitle: "Revisit a destination you saved.", trailing: "\(saved.count)")
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: 12) {
+                        ForEach(saved) { destination in
+                            savedTile(destination)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 6)
+                }
+                .padding(.horizontal, -16)
+            }
+        }
+    }
+
+    private func savedTile(_ destination: Destination) -> some View {
+        VStack(spacing: 6) {
+            NavigationLink(value: destination.id) {
+                DestinationPhoto(destination: destination, symbolSize: 26)
+                    .frame(width: 74, height: 74)
+                    .clipShape(.rect(cornerRadius: 22))
+                    .accessibilityLabel(Text(verbatim: destination.city))
+                    .accessibilityHint("Opens the curated guide")
+            }
+            .buttonStyle(.plain)
+            // Outside the link, as everywhere else on this screen, so VoiceOver can
+            // reach it.
+            .overlay(alignment: .bottomTrailing) {
+                Button { requireAccount(.save(destinationID: destination.id)) } label: {
+                    Image(systemName: "heart.fill")
+                        .font(.app(size: 11, weight: .bold))
+                        .foregroundStyle(.red)
+                        .frame(width: 24, height: 24)
+                        .background(Theme.surface, in: .circle)
+                        .overlay(Circle().strokeBorder(Theme.separator, lineWidth: 0.5))
+                        .frame(width: 44, height: 44)
+                        .contentShape(.circle)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Remove from saved")
+                .offset(x: 14, y: 14)
+            }
+
+            Text(verbatim: destination.city)
+                .font(.app(.caption, .semibold))
+                .lineLimit(1)
+                .frame(width: 78)
         }
     }
 
@@ -894,7 +958,11 @@ struct RecScreen: View {
         VStack(alignment: .leading, spacing: Theme.isRuled ? 10 : 14) {
             // Search reports its result count; filtering used to leave the user to
             // count tiles themselves.
-            sectionTitle("Matching trips", subtitle: matchCountSubtitle(destinations.count))
+            sectionTitle(
+                "Matching trips",
+                subtitle: matchCountSubtitle(destinations.count),
+                trailing: "\(destinations.count)"
+            )
 
             if destinations.isEmpty {
                 // Name the actual problem: with several facets on, "broaden your
@@ -919,24 +987,86 @@ struct RecScreen: View {
         }
     }
 
+    @ViewBuilder
     private func destinationDirectory(
         _ sections: [(continent: String, destinations: [Destination])]
     ) -> some View {
-        VStack(alignment: .leading, spacing: Theme.isRuled ? 0 : 22) {
+        if Theme.isRuled {
+            ruledDestinationDirectory(sections)
+        } else {
+            cardDestinationDirectory(sections)
+        }
+    }
+
+    /// The card directory: one heading with the total, a row of region chips, and the
+    /// chosen region's tiles. Five stacked region headings read as five sections; one
+    /// chip row says the same thing in one line.
+    private func cardDestinationDirectory(
+        _ sections: [(continent: String, destinations: [Destination])]
+    ) -> some View {
+        let total = sections.reduce(0) { $0 + $1.destinations.count }
+        let current = sections.first { $0.continent == browseContinent } ?? sections.first
+        return VStack(alignment: .leading, spacing: 12) {
+            sectionTitle(
+                "Browse",
+                subtitle: "Every curated guide, grouped by region.",
+                trailing: total == 1 ? String(localized: "1 guide") : String(localized: "\(total) guides")
+            )
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(sections, id: \.continent) { section in
+                        let isOn = section.continent == current?.continent
+                        Button {
+                            withAnimation(.snappy(duration: 0.2)) { browseContinent = section.continent }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Text(LocalizedStringKey(section.continent))
+                                Text(verbatim: "\(section.destinations.count)")
+                                    .foregroundStyle(isOn ? Theme.surface.opacity(0.7) : .secondary)
+                                    .monospacedDigit()
+                            }
+                            .font(.app(.subheadline, .semibold))
+                            .foregroundStyle(isOn ? Theme.surface : .primary)
+                            .padding(.horizontal, 14)
+                            .frame(height: 34)
+                            .background(isOn ? Color.primary : Theme.fieldBackground, in: .capsule)
+                            .frame(minHeight: 44)
+                            .contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(isOn ? [.isSelected] : [])
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+            .padding(.horizontal, -16)
+
+            if let current {
+                cardDestinationGrid(current.destinations)
+                    .id(current.continent)
+            }
+        }
+    }
+
+    private func ruledDestinationDirectory(
+        _ sections: [(continent: String, destinations: [Destination])]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
             sectionTitle("Browse by destination", subtitle: "Every curated guide, grouped by region.")
             ForEach(sections, id: \.continent) { section in
                 // Every region after the first opens with its own rule. The first sits
                 // straight under the heading block, which already separates it.
-                if Theme.isRuled, section.continent != sections.first?.continent {
+                if section.continent != sections.first?.continent {
                     RuledDivider(weight: .section)
                 }
-                VStack(alignment: .leading, spacing: Theme.isRuled ? 8 : 12) {
+                VStack(alignment: .leading, spacing: 8) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         // A rung below `sectionHeader`: these are regions *inside*
                         // "Browse by destination", and at the same title2/bold they
                         // read as top-level sections in their own right.
                         Text(LocalizedStringKey(section.continent))
-                            .font(.app(.title3, Theme.isRuled ? .semibold : .bold))
+                            .font(.app(.title3, .semibold))
                         Text("\(section.destinations.count)")
                             .font(.app(.subheadline, .bold))
                             .foregroundStyle(.secondary)
@@ -944,9 +1074,9 @@ struct RecScreen: View {
                         Spacer()
                     }
                     .accessibilityElement(children: .combine)
-                    .padding(.top, Theme.isRuled ? 16 : 0)
+                    .padding(.top, 16)
 
-                    destinationGrid(section.destinations)
+                    destinationIndex(section.destinations)
                 }
             }
         }
@@ -1009,7 +1139,7 @@ struct RecScreen: View {
                         isSaved: savedSet.contains(destination.id),
                         action: { requireAccount(.save(destinationID: destination.id)) }
                     )
-                    .padding(16)
+                    .padding(4)
                 }
             }
         }
@@ -1308,6 +1438,18 @@ struct RecScreen: View {
             activeFilterCount > 0 ? .regular.tint(Theme.accent).interactive() : .regular.interactive(),
             in: .circle
         )
+        // The count sits on the disc instead of in a label next to it.
+        .overlay(alignment: .topTrailing) {
+            if activeFilterCount > 0 {
+                Text(verbatim: "\(activeFilterCount)")
+                    .font(.app(size: 10, weight: .bold))
+                    .foregroundStyle(Theme.onAccent)
+                    .frame(width: 18, height: 18)
+                    .background(Theme.accent, in: .circle)
+                    .overlay(Circle().strokeBorder(Theme.surfaceSubtle, lineWidth: 2))
+                    .offset(x: 2, y: -2)
+            }
+        }
         .accessibilityLabel(activeFilterCount > 0 ? "Filters · \(activeFilterCount)" : "Filters")
     }
 
@@ -1455,15 +1597,39 @@ struct RecScreen: View {
         }
     }
 
-    private func sectionTitle(_ title: LocalizedStringKey, subtitle: LocalizedStringKey) -> some View {
-        VStack(alignment: .leading, spacing: Theme.isRuled ? 6 : 3) {
-            sectionHeader(title)
-            Text(subtitle)
-                .font(.app(.subheadline))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+    /// Ruled themes print the subtitle under the title. Card themes drop it — one figure
+    /// on the trailing edge (`trailing`: a count or a short word) says what the sentence
+    /// used to, and the sentence is kept for VoiceOver only.
+    @ViewBuilder
+    private func sectionTitle(
+        _ title: LocalizedStringKey,
+        subtitle: LocalizedStringKey,
+        trailing: String? = nil
+    ) -> some View {
+        if Theme.isRuled {
+            VStack(alignment: .leading, spacing: 6) {
+                sectionHeader(title)
+                Text(subtitle)
+                    .font(.app(.subheadline))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .accessibilityElement(children: .combine)
+        } else {
+            HStack(alignment: .firstTextBaseline) {
+                sectionHeader(title)
+                Spacer(minLength: 8)
+                if let trailing {
+                    Text(verbatim: trailing)
+                        .font(.app(.subheadline, .semibold))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(title) + Text(verbatim: ". ") + Text(subtitle))
+            .accessibilityAddTraits(.isHeader)
         }
-        .accessibilityElement(children: .combine)
     }
 
 }
@@ -1982,8 +2148,7 @@ struct DestinationPhoto: View {
 struct NextTripHeroCard: View {
     let trip: Trip
 
-    @ScaledMetric(relativeTo: .body) private var coverWidth: CGFloat = 150
-    @ScaledMetric(relativeTo: .body) private var cardHeight: CGFloat = 208
+    @ScaledMetric(relativeTo: .body) private var cardHeight: CGFloat = 210
 
     private var dayCount: Int { trip.itinerary?.days.count ?? 0 }
 
@@ -2000,113 +2165,120 @@ struct NextTripHeroCard: View {
 
     // MARK: Card
 
+    /// The card version: the cover *is* the card. Countdown pill and avatar stack on the
+    /// photo, the name and two fact chips on the scrim, and an arrow disc. The old
+    /// text panel + three-stat strip said the same things in three more lines.
     private var cardBody: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 0) {
-                textPanel
-                TripCoverView(trip: trip)
-                    .frame(width: coverWidth)
-            }
-            .frame(height: cardHeight)
-            .background(Theme.surface.opacity(0.96))
-            .clipShape(.rect(cornerRadius: Theme.cardRadius))
-            .overlay {
-                RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
-                    .strokeBorder(Theme.separator.opacity(0.85), lineWidth: 1)
-            }
-            .shadow(color: Theme.elevatedShadow, radius: 10, y: 4)
+        ZStack(alignment: .bottomLeading) {
+            TripCoverView(trip: trip)
+            LinearGradient(
+                stops: [
+                    .init(color: .black.opacity(0.05), location: 0),
+                    .init(color: .clear, location: 0.35),
+                    .init(color: .black.opacity(0.72), location: 1)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
 
-            statStrip
+            VStack(alignment: .leading, spacing: 10) {
+                Text(verbatim: trip.name)
+                    .font(.app(.title2, .bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.7)
+
+                HStack(alignment: .center, spacing: 6) {
+                    if let range = trip.dateRangeText {
+                        coverChip(Text(verbatim: range), icon: "calendar")
+                    }
+                    if dayCount > 0 {
+                        coverChip(Text(verbatim: "\(plannedDays) / \(dayCount)"), icon: "map")
+                            .accessibilityLabel("\(plannedDays) of \(dayCount) days planned")
+                    }
+                    Spacer(minLength: 8)
+                    Image(systemName: "arrow.right")
+                        .font(.app(.subheadline, .bold))
+                        .foregroundStyle(.black)
+                        .frame(width: 34, height: 34)
+                        .background(.white.opacity(0.94), in: .circle)
+                }
+            }
+            .padding(16)
         }
+        .frame(height: cardHeight)
+        .overlay(alignment: .topLeading) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(trip.isOngoing ? Theme.positive : Theme.accent)
+                    .frame(width: 7, height: 7)
+                Text(countdown)
+            }
+            .font(.app(.caption, .bold))
+            .foregroundStyle(.black)
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .background(.white.opacity(0.94), in: .capsule)
+            .padding(14)
+        }
+        .overlay(alignment: .topTrailing) {
+            memberStack.padding(14)
+        }
+        .clipShape(.rect(cornerRadius: Theme.cardRadius))
+        .shadow(color: Theme.elevatedShadow, radius: 10, y: 4)
+        .accessibilityElement(children: .combine)
     }
 
-    private var textPanel: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(eyebrow)
-                .font(.app(.caption2, .bold))
-                .tracking(1.4)
-                .foregroundStyle(Theme.accent)
-
-            Text(verbatim: trip.name)
-                .font(.app(.title, .bold))
-                .foregroundStyle(.primary)
-                .lineLimit(2)
-                .minimumScaleFactor(0.65)
-                .padding(.top, 6)
-
-            if let range = trip.dateRangeText {
-                Text(verbatim: range)
-                    .font(.app(.subheadline, .medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .padding(.top, 4)
-            }
-
-            Spacer(minLength: 12)
-
-            HStack(spacing: 7) {
-                Text("View itinerary")
-                Image(systemName: "arrow.right")
-            }
-            .font(.app(.subheadline, .semibold))
-            .foregroundStyle(Theme.onAccent)
-            .padding(.horizontal, 16)
-            .frame(height: 40)
-            .background(Theme.accent, in: .capsule)
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+    /// Days with at least one stop — the "planned" half of the day chip.
+    private var plannedDays: Int {
+        trip.itinerary?.days.filter { !$0.stops.isEmpty }.count ?? 0
     }
 
-    /// The three-fact strip under the card, shown only for a genuinely upcoming trip so
-    /// "days to go" is always meaningful. Values are figures (verbatim); the labels are
-    /// the only localized keys.
-    @ViewBuilder
-    private var statStrip: some View {
-        if let days = trip.daysUntilStart, days >= 1 {
-            HStack(spacing: 0) {
-                statColumn("\(days)", days == 1 ? "day to go" : "days to go")
-                statDivider
-                statColumn("\(dayCount)", dayCount == 1 ? "day planned" : "days planned")
-                statDivider
-                budgetColumn
-            }
-            .padding(.vertical, 12)
-            .padding(.horizontal, 8)
-            .readableSurface(cornerRadius: 16)
+    /// The pill's wording, keyed to where the trip sits in time.
+    private var countdown: LocalizedStringKey {
+        if trip.isOngoing { return "Happening now" }
+        if let days = trip.daysUntilStart {
+            if days == 0 { return "Today" }
+            if days == 1 { return "Tomorrow" }
+            if days > 1 { return "In \(days) days" }
         }
+        return "Your trip"
     }
 
-    @ViewBuilder
-    private var budgetColumn: some View {
-        if let itinerary = trip.itinerary, itinerary.totalBudget > 0 {
-            statColumn(money(itinerary.totalBudget, trip.currencyCode), "budget")
-        } else {
-            let count = trip.members.count
-            statColumn("\(count)", count == 1 ? "traveler" : "travelers")
-        }
-    }
-
-    private func statColumn(_ value: String, _ label: LocalizedStringKey) -> some View {
-        VStack(spacing: 3) {
-            Text(verbatim: value)
-                .font(.app(.headline, .bold))
-                .foregroundStyle(.primary)
+    private func coverChip(_ label: Text, icon: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(.app(.caption2, .semibold))
+            label
+                .font(.app(.caption, .semibold))
                 .lineLimit(1)
-                .minimumScaleFactor(0.6)
-            Text(label)
-                .font(.app(.caption2))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+                .minimumScaleFactor(0.8)
         }
-        .frame(maxWidth: .infinity)
+        .foregroundStyle(.white)
+        .padding(.horizontal, 9)
+        .frame(height: 26)
+        .background(.white.opacity(0.22), in: .capsule)
     }
 
-    private var statDivider: some View {
-        Rectangle()
-            .fill(Theme.separator.opacity(0.6))
-            .frame(width: 1, height: 26)
+    private var memberStack: some View {
+        let shown = Array(trip.members.prefix(3))
+        let extra = trip.members.count - shown.count
+        return HStack(spacing: -8) {
+            ForEach(shown) { person in
+                AvatarView(person: person, size: 26)
+                    .overlay(Circle().strokeBorder(.black.opacity(0.35), lineWidth: 2))
+            }
+            if extra > 0 {
+                Text(verbatim: "+\(extra)")
+                    .font(.app(.caption2, .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 26, height: 26)
+                    .background(.white.opacity(0.3), in: .circle)
+                    .overlay(Circle().strokeBorder(.black.opacity(0.35), lineWidth: 2))
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(trip.members.count) members")
     }
 
     // MARK: Ruled
@@ -2165,8 +2337,8 @@ struct NextTripHeroCard: View {
 struct UpcomingTripCard: View {
     let trip: Trip
 
-    @ScaledMetric(relativeTo: .body) private var cardWidth: CGFloat = 230
-    @ScaledMetric(relativeTo: .body) private var cardHeight: CGFloat = 196
+    @ScaledMetric(relativeTo: .body) private var cardWidth: CGFloat = 176
+    @ScaledMetric(relativeTo: .body) private var cardHeight: CGFloat = 124
 
     /// The badge over (or above) the photo — "In N days" while it's ahead, the plan
     /// length once it isn't.
@@ -2195,29 +2367,30 @@ struct UpcomingTripCard: View {
             )
             VStack(alignment: .leading, spacing: 2) {
                 Text(verbatim: trip.name)
-                    .font(.app(.headline, .bold))
+                    .font(.app(.subheadline, .bold))
                     .foregroundStyle(.white)
                     .lineLimit(1)
                 if let range = trip.dateRangeText {
                     Text(verbatim: range)
-                        .font(.app(.caption, .medium))
-                        .foregroundStyle(.white.opacity(0.9))
+                        .font(.app(.caption2, .medium))
+                        .foregroundStyle(.white.opacity(0.85))
                         .lineLimit(1)
                 }
             }
-            .padding(14)
+            .padding(12)
         }
         .frame(width: cardWidth, height: cardHeight)
         .overlay(alignment: .topLeading) {
             Text(badgeText)
                 .font(.app(.caption2, .bold))
                 .foregroundStyle(.black)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(.white.opacity(0.92), in: .capsule)
-                .padding(12)
+                .padding(.horizontal, 8)
+                .frame(height: 22)
+                .background(.white.opacity(0.94), in: .capsule)
+                .padding(10)
         }
-        .clipShape(.rect(cornerRadius: Theme.cardRadius))
+        .clipShape(.rect(cornerRadius: 18))
+        .accessibilityElement(children: .combine)
     }
 
     private var ruledEntry: some View {
@@ -2259,7 +2432,7 @@ struct AdventureCard: View {
 
     /// Grows with Dynamic Type so the city/country/budget stack and the CTA still fit
     /// at large sizes, but clamped — an unbounded carousel card would run off screen.
-    @ScaledMetric(relativeTo: .body) private var cardHeight: CGFloat = 380
+    @ScaledMetric(relativeTo: .body) private var cardHeight: CGFloat = 300
     /// The plate is shorter than the card because the caption below it needs room that
     /// the card reversed out of the image.
     @ScaledMetric(relativeTo: .body) private var plateHeight: CGFloat = 248
@@ -2356,15 +2529,17 @@ struct AdventureCard: View {
         .frame(maxWidth: .infinity)
         .frame(height: min(cardHeight, 520))
         .overlay(alignment: .topLeading) {
-            if let tag = destination.tags.first {
-                Text(LocalizedStringKey(tag))
-                    .font(.app(.caption, .semibold))
-                    .foregroundStyle(.black)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(.white.opacity(0.92), in: .rect(cornerRadius: 8))
-                    .padding(12)
+            HStack(spacing: 5) {
+                Image(systemName: "star.fill")
+                    .font(.app(.caption2, .bold))
+                Text("Editor's pick")
+                    .font(.app(.caption, .bold))
             }
+            .foregroundStyle(.black)
+            .padding(.horizontal, 9)
+            .frame(height: 26)
+            .background(.white.opacity(0.94), in: .capsule)
+            .padding(12)
         }
         .overlay(alignment: .topTrailing) {
             HeartButton(isSaved: isSaved, action: onToggleSave)
@@ -2382,26 +2557,52 @@ struct AdventureCard: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
                 Text(LocalizedStringKey(destination.country))
-                    .font(.app(.headline))
+                    .font(.app(.subheadline, .medium))
                     .foregroundStyle(.white.opacity(0.9))
                     .lineLimit(1)
-                Text("\(destination.dailyBudget) · \(destination.stops) stops")
-                    .font(.app(.subheadline, .medium))
-                    .foregroundStyle(.white.opacity(0.85))
-                    .padding(.top, 2)
-                if showsCTA {
-                    Label("Open guide", systemImage: "arrow.right")
-                        .font(.app(.subheadline, .semibold))
+
+                // Length, stops and price as three glyph chips — the same facts the
+                // text line carried, but scannable.
+                HStack(spacing: 6) {
+                    coverChip(Text("\(destination.days) days"), icon: "calendar")
+                    coverChip(Text(verbatim: "\(destination.stops)"), icon: "mappin.and.ellipse")
+                        .accessibilityLabel("\(destination.stops) stops")
+                    coverChip(Text(verbatim: destination.price), icon: nil)
+                    Spacer(minLength: 6)
+                    if showsCTA {
+                        HStack(spacing: 6) {
+                            Text("Open")
+                            Image(systemName: "arrow.right")
+                        }
+                        .font(.app(.subheadline, .bold))
                         .foregroundStyle(.black)
                         .padding(.horizontal, 14)
-                        .frame(minHeight: 38)
+                        .frame(height: 36)
                         .background(.white.opacity(0.94), in: .capsule)
-                        .padding(.top, 10)
+                    }
                 }
+                .padding(.top, 12)
             }
             .padding(16)
         }
         .clipShape(.rect(cornerRadius: Theme.cardRadius))
+        .shadow(color: Theme.elevatedShadow, radius: 10, y: 4)
+    }
+
+    private func coverChip(_ label: Text, icon: String?) -> some View {
+        HStack(spacing: 5) {
+            if let icon {
+                Image(systemName: icon)
+                    .font(.app(.caption2, .semibold))
+            }
+            label
+                .font(.app(.caption, .semibold))
+                .lineLimit(1)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 9)
+        .frame(height: 26)
+        .background(.white.opacity(0.22), in: .capsule)
     }
 }
 
@@ -2417,21 +2618,15 @@ struct CountryTripCard: View {
     let isSaved: Bool
     let onToggleSave: () -> Void
 
-    @ScaledMetric(relativeTo: .body) private var cardWidth: CGFloat = 250
-    @ScaledMetric(relativeTo: .body) private var cardHeight: CGFloat = 274
+    @ScaledMetric(relativeTo: .body) private var cardWidth: CGFloat = 200
+    @ScaledMetric(relativeTo: .body) private var cardHeight: CGFloat = 226
     /// Narrower than the card: with no surface to fill, the entry is only as wide as its
     /// photograph needs to be, and more of the rail is visible at once.
     @ScaledMetric(relativeTo: .body) private var entryWidth: CGFloat = 158
 
-    /// Two stops by name, plus a count of everything else in the guide. Names are what
-    /// distinguish a real itinerary from a stock photo with a price on it.
-    private var stopPreview: String? {
-        let names = destination.places.prefix(2).map(\.name)
-        guard !names.isEmpty else { return nil }
-        let remainder = destination.stops - names.count
-        return remainder > 0
-            ? names.joined(separator: " · ") + " · +\(remainder)"
-            : names.joined(separator: " · ")
+    /// The travel style the card shows as its third fact, with its glyph.
+    private var style: ExploreStyle? {
+        ExploreStyle.allCases.first { $0.matches(destination) }
     }
 
     @ViewBuilder
@@ -2478,20 +2673,31 @@ struct CountryTripCard: View {
         .frame(width: min(entryWidth, 200), alignment: .leading)
     }
 
+    /// Photo with the price pinned to it and the heart in the corner; underneath, the
+    /// place and three glyph-led facts (length, stops, style) instead of a sentence.
     private var cardBody: some View {
         VStack(alignment: .leading, spacing: 0) {
             DestinationPhoto(destination: destination, symbolSize: 64)
-                .frame(height: 148)
+                .frame(height: 130)
                 .clipShape(.rect(
                     topLeadingRadius: Theme.cardRadius,
                     topTrailingRadius: Theme.cardRadius
                 ))
                 .overlay(alignment: .topTrailing) {
                     HeartButton(isSaved: isSaved, action: onToggleSave)
-                        .padding(8)
+                        .padding(4)
+                }
+                .overlay(alignment: .bottomLeading) {
+                    Text(verbatim: destination.price)
+                        .font(.app(.caption, .bold))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 9)
+                        .frame(height: 24)
+                        .background(.white.opacity(0.94), in: .capsule)
+                        .padding(10)
                 }
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 8) {
                 VStack(alignment: .leading, spacing: 1) {
                     // City is a proper noun; the country goes through the catalog, the
                     // way the grid tiles already do it.
@@ -2506,26 +2712,35 @@ struct CountryTripCard: View {
                         .lineLimit(1)
                 }
 
-                Text("\(destination.days) days · \(destination.price) · \(destination.stops) stops")
-                    .font(.app(.caption, .medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-
-                if let stopPreview {
-                    Text(verbatim: stopPreview)
-                        .font(.app(.caption2))
-                        .foregroundStyle(Theme.accent)
-                        .lineLimit(1)
+                HStack(spacing: 10) {
+                    fact(Text(verbatim: "\(destination.days)"), icon: "calendar")
+                        .accessibilityLabel("\(destination.days) days")
+                    fact(Text(verbatim: "\(destination.stops)"), icon: "mappin.and.ellipse")
+                        .accessibilityLabel("\(destination.stops) stops")
+                    if let style {
+                        fact(Text(style.title), icon: style.systemImage)
+                    }
                 }
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
 
             Spacer(minLength: 0)
         }
-        .frame(width: min(cardWidth, 320), height: min(cardHeight, 360), alignment: .top)
+        .frame(width: min(cardWidth, 320), height: min(cardHeight, 320), alignment: .top)
         .readableSurface(cornerRadius: Theme.cardRadius, elevated: true)
+    }
+
+    private func fact(_ label: Text, icon: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.app(.caption2, .semibold))
+            label
+                .font(.app(.caption, .semibold))
+        }
+        .foregroundStyle(.secondary)
     }
 }
 
@@ -2540,33 +2755,39 @@ struct CountryTripCard: View {
 struct MatchingTripCard: View {
     let destination: Destination
 
+    /// The whole tile is the photograph; the place and the figures print on its scrim.
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        ZStack(alignment: .bottomLeading) {
             DestinationPhoto(destination: destination, symbolSize: 44)
-                .frame(height: 140)
-                .clipShape(.rect(cornerRadius: 16))
-                .padding(.bottom, 2)
-
-            Text(verbatim: destination.city)
-                .font(.app(.headline))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-            Text(LocalizedStringKey(destination.country))
-                .font(.app(.caption))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            // Same meta line as the rail cards, so a guide reads the same wherever it
-            // appears — the stop count was missing only here.
-            Text("\(destination.days) days · \(destination.price) · \(destination.stops) stops")
-                .font(.app(.caption, .medium))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
+            LinearGradient(
+                colors: [.clear, .black.opacity(0.72)],
+                startPoint: .init(x: 0.5, y: 0.45),
+                endPoint: .bottom
+            )
+            VStack(alignment: .leading, spacing: 1) {
+                Text(verbatim: destination.city)
+                    .font(.app(.headline, .bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                Text(LocalizedStringKey(destination.country))
+                    .font(.app(.caption2))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .lineLimit(1)
+                // Same facts as the rail cards, so a guide reads the same wherever it
+                // appears.
+                Text("\(destination.days)d · \(destination.stops) stops · \(destination.price)")
+                    .font(.app(.caption2, .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .padding(.top, 5)
+            }
+            .padding(12)
         }
-        .padding(8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .readableSurface(cornerRadius: Theme.cardRadius, elevated: true)
+        .frame(maxWidth: .infinity)
+        .frame(height: 176)
+        .clipShape(.rect(cornerRadius: Theme.cardRadius))
         .accessibilityElement(children: .combine)
         .accessibilityHint("Opens the curated guide")
     }
