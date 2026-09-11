@@ -22,6 +22,65 @@ private actor GatedImages {
 
 @MainActor
 final class PerformanceRegressionTests: XCTestCase {
+    func testResolvedPinAppearsBeforeWholeItineraryIsSaved() {
+        let stop = ItineraryStop(name: "Louvre")
+        var resolved = stop
+        resolved.latitude = 48.8606
+        resolved.longitude = 2.3376
+        let displayed = ItineraryPinPreview.displayedStop(stop, previews: [stop.id: resolved])
+        XCTAssertNotNil(displayed.coordinate)
+        XCTAssertNil(stop.coordinate)
+        var edited = stop
+        edited.name = "Eiffel Tower"
+        XCTAssertNil(ItineraryPinPreview.displayedStop(edited, previews: [stop.id: resolved]).coordinate)
+        edited = stop
+        edited.isUserPlaced = true
+        edited.latitude = 1
+        edited.longitude = 2
+        XCTAssertEqual(ItineraryPinPreview.displayedStop(edited, previews: [stop.id: resolved]).latitude, 1)
+        XCTAssertEqual(ItineraryPinPreview.displayedStop(edited, previews: [:]).latitude, 1)
+    }
+
+    func testLiveCityGeocoding() async throws {
+        #if LIVE_MAP_INTEGRATION
+        for (city, latitude, longitude) in [("Paris, France", 48.8566, 2.3522), ("Hanoi, Vietnam", 21.0285, 105.8542)] {
+            let result = await DestinationResolver.shared.resolve(city)
+            let coordinate = try XCTUnwrap(result?.coordinate, "No destination pin for \(city)")
+            XCTAssertEqual(coordinate.latitude, latitude, accuracy: 0.5)
+            XCTAssertEqual(coordinate.longitude, longitude, accuracy: 0.5)
+        }
+        #else
+        throw XCTSkip("Enable LIVE_MAP_INTEGRATION to exercise Apple geocoding over the network.")
+        #endif
+    }
+
+    func testDestinationSearchExcludesSimilarlyNamedBusinesses() {
+        let request = DestinationResolver.searchRequest(for: "Paris, France")
+        XCTAssertEqual(request.naturalLanguageQuery, "Paris, France")
+        XCTAssertEqual(request.resultTypes, .address)
+    }
+
+    func testMapLookupQueueProcessesEveryStopBeyondOldLimit() async {
+        let pacer = MapLookupPacer(interval: .milliseconds(2))
+        let tasks = (0..<16).map { _ in Task { await pacer.waitForTurn() } }
+        var completed = 0
+        for task in tasks {
+            if await task.value { completed += 1 }
+        }
+        XCTAssertEqual(completed, 16)
+    }
+
+    func testCancelledMapLookupDoesNotRunItsSearch() async {
+        let pacer = MapLookupPacer(interval: .seconds(30))
+        let first = await pacer.waitForTurn()
+        XCTAssertTrue(first)
+        let pending = Task { await pacer.waitForTurn() }
+        await Task.yield()
+        pending.cancel()
+        let allowed = await pending.value
+        XCTAssertFalse(allowed)
+    }
+
     private func trip(expenseCount: Int = 3) -> Trip {
         let person = Person(name: "Test", color: .blue)
         return Trip(name: "Test trip", currencyCode: "USD", creatorID: person.id, members: [person], budgets: [:],

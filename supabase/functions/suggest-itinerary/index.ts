@@ -30,9 +30,7 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 // the configured secret can be used without copying its value into source or chat.
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? Deno.env.get("Claude Key");
 const CLAUDE_MODEL = Deno.env.get("CLAUDE_SUGGEST_MODEL") ?? "claude-sonnet-5";
-// Adaptive thinking is on for this model; effort is the depth/latency dial. Sonnet is
-// fast enough to research and reason at `high` and still answer inside the client's 150s
-// timeout, so plan quality doesn't have to be traded away here.
+// Preserve the configured reasoning depth; search turns and deadlines bound latency.
 const CLAUDE_EFFORT = Deno.env.get("CLAUDE_SUGGEST_EFFORT") ?? "high";
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
 // Preferred model for planning; falls back to the receipt model if the id is unknown
@@ -56,17 +54,17 @@ const CONSENT_VERSION = "2026-08-06";
 const LEGACY_GOOGLE_CONSENT_VERSION = "2026-08-02";
 
 const CLAUDE_MAX_TOKENS = 32_000; // Covers thinking + a 30-day plan.
-const CLAUDE_SEARCH_MAX_USES = 6; // Bounds search cost and latency.
-// Supabase's hosted request idle limit and the app's resource timeout are both 150s.
+const CLAUDE_SEARCH_MAX_USES = 2; // Bounds search cost and latency.
+// Answer within the app's 80-second timeout, including accounting and response work.
 // Keep a hard deadline below that platform limit, then give every provider attempt a
 // slice of the same budget. This prevents a slow Claude call followed by an unbounded
 // Gemini fallback from letting Supabase terminate the worker with a 546/504 response.
-const REQUEST_BUDGET_MS = 120_000;
+const REQUEST_BUDGET_MS = 65_000;
 const RESPONSE_RESERVE_MS = 8_000;
-const GEMINI_FALLBACK_RESERVE_MS = 55_000;
-const GEMINI_SEARCH_BUDGET_MS = 30_000;
-const GEMINI_PLAIN_BUDGET_MS = 40_000;
-const GEMINI_MODEL_FALLBACK_BUDGET_MS = 25_000;
+const GEMINI_FALLBACK_RESERVE_MS = 30_000;
+const GEMINI_SEARCH_BUDGET_MS = 20_000;
+const GEMINI_PLAIN_BUDGET_MS = 25_000;
+const GEMINI_MODEL_FALLBACK_BUDGET_MS = 20_000;
 const MIN_PROVIDER_ATTEMPT_MS = 3_000;
 
 // Claude is the quality-first provider, but it cannot own most of the request window.
@@ -74,11 +72,11 @@ const MIN_PROVIDER_ATTEMPT_MS = 3_000;
 // wall-clock failure. A mistyped override must not become NaN either.
 const CLAUDE_BUDGET_MS = (() => {
   const configured = Number(Deno.env.get("CLAUDE_SUGGEST_BUDGET_MS"));
-  const requested = Number.isFinite(configured) && configured > 0 ? configured : 40_000;
-  return Math.min(Math.max(requested, 10_000), 50_000);
+  const requested = Number.isFinite(configured) && configured > 0 ? configured : 25_000;
+  return Math.min(Math.max(requested, 10_000), 30_000);
 })();
 // Server tools can pause a turn mid-search; each resume costs one round trip.
-const CLAUDE_MAX_TURNS = 4;
+const CLAUDE_MAX_TURNS = 2;
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
@@ -116,17 +114,20 @@ Deno.serve(withTiming("suggest-itinerary", async (req, timing) => {
   // 1. Require a valid, signed-in user (not just any project JWT such as the anon key).
   const token = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
   if (!token) return jsonResponse({ error: "Unauthorized" }, 401);
-  const user = await timing.measure("auth", () => getUser(token));
-  if (!user) return jsonResponse({ error: "Unauthorized" }, 401);
-  // A legacy Google-only grant can continue using Gemini during app rollout, but can
-  // never authorize sending the trip context to Anthropic. New clients collect the
-  // current version before Claude becomes eligible.
-  const hasCurrentConsent = await timing.measure("consent", () => hasAIConsent(token, CONSENT_PURPOSE, CONSENT_VERSION));
-  const hasLegacyGoogleConsent = hasCurrentConsent
-    ? false
-    : await timing.measure("consent", () => hasAIConsent(token, CONSENT_PURPOSE, LEGACY_GOOGLE_CONSENT_VERSION));
-  if (!hasCurrentConsent && !hasLegacyGoogleConsent) {
-    return jsonResponse({ error: "Current AI consent is required." }, 403);
+  let user: { id: string } | null;
+  let hasCurrentConsent: boolean;
+  try {
+    user = await timing.measure("auth", () => getUser(token));
+    if (!user) return jsonResponse({ error: "Unauthorized" }, 401);
+    hasCurrentConsent = await timing.measure("consent", () => hasAIConsent(token, CONSENT_PURPOSE, CONSENT_VERSION));
+    const hasLegacyGoogleConsent = hasCurrentConsent
+      ? false
+      : await timing.measure("consent", () => hasAIConsent(token, CONSENT_PURPOSE, LEGACY_GOOGLE_CONSENT_VERSION));
+    if (!hasCurrentConsent && !hasLegacyGoogleConsent) {
+      return jsonResponse({ error: "Current AI consent is required." }, 403);
+    }
+  } catch {
+    return jsonResponse({ error: "The planner could not connect. Please try again." }, 503);
   }
 
   // 2. Validate input.
@@ -314,6 +315,7 @@ Deno.serve(withTiming("suggest-itinerary", async (req, timing) => {
 
 async function getUser(token: string): Promise<{ id: string } | null> {
   const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    signal: AbortSignal.timeout(5_000),
     headers: { Authorization: `Bearer ${token}`, apikey: SUPABASE_ANON_KEY },
   });
   if (!res.ok) return null;
@@ -323,6 +325,7 @@ async function getUser(token: string): Promise<{ id: string } | null> {
 
 async function hasAIConsent(token: string, purpose: string, version: string): Promise<boolean> {
   const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/has_ai_consent`, {
+    signal: AbortSignal.timeout(5_000),
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -350,6 +353,7 @@ type UsageReservation = {
 
 async function reserveUsage(userId: string): Promise<UsageReservation> {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/reserve_ai_usage`, {
+    signal: AbortSignal.timeout(5_000),
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -372,6 +376,7 @@ async function reserveUsage(userId: string): Promise<UsageReservation> {
 async function completeUsage(reservationId: string, succeeded: boolean): Promise<void> {
   try {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/complete_ai_usage`, {
+      signal: AbortSignal.timeout(5_000),
       method: "POST",
       headers: {
         "Content-Type": "application/json",

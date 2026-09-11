@@ -136,6 +136,7 @@ final class ExploreMapModel {
             // addresses. Restricting this prevents a similarly named road/address
             // from winning over the actual attraction or restaurant.
             request.resultTypes = .pointOfInterest
+            guard await MapLookupPacer.shared.waitForTurn() else { return nil }
             let items = (try? await MKLocalSearch(request: request).start())?.mapItems ?? []
             scoredResults += items.map {
                 (score: matchScore($0, for: focus, queryIndex: queryIndex, isRestaurant: isRestaurant), item: $0)
@@ -612,6 +613,17 @@ struct ExpenseMapPin: Identifiable {
     }
 }
 
+nonisolated enum ItineraryPinPreview {
+    static func displayedStop(_ stop: ItineraryStop, previews: [ItineraryStop.ID: ItineraryStop]) -> ItineraryStop {
+        guard !stop.isUserPlaced, let preview = previews[stop.id], preview.name == stop.name else { return stop }
+        var displayed = stop
+        displayed.latitude = preview.latitude
+        displayed.longitude = preview.longitude
+        displayed.address = preview.address
+        return displayed
+    }
+}
+
 struct ItineraryDayMapStop: Identifiable {
     let stop: ItineraryStop
     let number: Int
@@ -744,7 +756,9 @@ struct MapScreen: View {
     @State private var itineraryPlace: MapPlace?
     /// `nil` represents All trips.
     @State private var selectedTripID: Trip.ID?
+    @State private var mapRefreshRevision = 0
     @State private var tripDestinations: [TripDestinationPin] = []
+    @State private var resolvedStopPreviews: [ItineraryStop.ID: ItineraryStop] = [:]
     @State private var showsSpending = false
     @State private var spendingPayerID: Person.ID?
     @State private var selectedItineraryDay = 0
@@ -850,8 +864,9 @@ struct MapScreen: View {
             stops.sort { (order[$0.id] ?? .max) < (order[$1.id] ?? .max) }
         }
         return stops.enumerated().compactMap { index, stop in
-            guard let coordinate = stop.coordinate else { return nil }
-            return ItineraryDayMapStop(stop: stop, number: index + 1, coordinate: coordinate)
+            let displayed = ItineraryPinPreview.displayedStop(stop, previews: resolvedStopPreviews)
+            guard let coordinate = displayed.coordinate else { return nil }
+            return ItineraryDayMapStop(stop: displayed, number: index + 1, coordinate: coordinate)
         }
     }
 
@@ -860,19 +875,19 @@ struct MapScreen: View {
               let trip = store.myTrips.first(where: { $0.id == selectedTripID }),
               let itinerary = trip.itinerary else { return "none" }
         let stops = itinerary.days.flatMap(\.stops).map { stop in
-            "\(stop.id.uuidString):\(stop.name)"
+            "\(stop.id.uuidString):\(stop.name):\(stop.latitude.map(String.init(describing:)) ?? "nil"):\(stop.longitude.map(String.init(describing:)) ?? "nil"):\(stop.isUserPlaced)"
         }
-        return "\(selectedTripID.uuidString)|\(trip.startDate?.timeIntervalSince1970 ?? 0)|\(trip.endDate?.timeIntervalSince1970 ?? 0)|\(itinerary.days.count)|\(stops.joined(separator: "|"))"
+        return "\(selectedTripID.uuidString)|\(trip.location ?? "")|\(trip.startDate?.timeIntervalSince1970 ?? 0)|\(trip.endDate?.timeIntervalSince1970 ?? 0)|\(itinerary.days.count)|\(stops.joined(separator: "|"))"
     }
 
     /// Includes visibility so leaving Map cancels geocoding/search work, while coming
     /// back re-runs it with the latest trip state.
     private var tripRefreshKey: String {
-        "\(isActive)|\(store.myTrips.map { $0.id.uuidString }.joined(separator: ","))"
+        "\(isActive)|\(mapRefreshRevision)|\(selectedTripID?.uuidString ?? "all")|\(store.myTrips.map { "\($0.id.uuidString):\($0.name):\($0.location ?? "")" }.joined(separator: "|"))"
     }
 
     private var activeItineraryResolutionKey: String {
-        isActive ? "\(itineraryResolutionKey)|day:\(selectedItineraryDay)" : "inactive"
+        isActive ? "\(mapRefreshRevision)|\(itineraryResolutionKey)|day:\(selectedItineraryDay)" : "inactive"
     }
 
     /// A string that changes whenever the focus coordinate does, so `onChange` can
@@ -952,10 +967,17 @@ struct MapScreen: View {
         .task(id: tripRefreshKey) {
             guard isActive else { return }
             initializeTripSelectionIfNeeded()
+            fitTripCamera()
             await refreshTripDestinations()
+        }
+        .task(id: "\(tripRefreshKey)|feed:\(showsFeedPlaces)") {
+            guard isActive else { return }
+            await refreshFeedPins()
         }
         .task(id: activeItineraryResolutionKey) {
             guard isActive else { return }
+            resolvedStopPreviews = [:]
+            fitTripCamera()
             await resolveMissingItineraryCoordinates()
         }
         .task(id: isActive) {
@@ -1053,7 +1075,8 @@ struct MapScreen: View {
                 .animation(.spring(response: 0.35, dampingFraction: 0.85), value: mapModel.focus != nil)
         }
         .overlay {
-            if selectedTripID == nil, places.isEmpty, mapModel.focus == nil, activeCategory == nil {
+            if selectedTripID == nil, places.isEmpty, tripDestinations.isEmpty, sharedTripPlaces.isEmpty,
+               mapModel.focus == nil, activeCategory == nil {
                 coldStartCard
             }
         }
@@ -1296,13 +1319,13 @@ struct MapScreen: View {
                         Button {
                             showsTripPlaces.toggle()
                             selectedPlaceID = nil
+                            if showsTripPlaces { fitTripCamera() }
                         } label: {
                             Label("Shared trip places", systemImage: showsTripPlaces ? "checkmark" : "person.2")
                         }
                         Button {
                             showsFeedPlaces.toggle()
                             selectedPlaceID = nil
-                            Task { await refreshFeedPins() }
                         } label: {
                             Label("Trip feed places", systemImage: showsFeedPlaces ? "checkmark" : "photo")
                         }
@@ -1349,7 +1372,7 @@ struct MapScreen: View {
         HStack(spacing: 8) {
             Button {
                 showsItineraryPath.toggle()
-                if showsItineraryPath { fitCamera(to: itineraryMapStops.map(\.coordinate)) }
+                if showsItineraryPath { fitTripCamera() }
             } label: {
                 Label("Route", systemImage: showsItineraryPath ? "point.topleft.down.to.point.bottomright.curvepath.fill" : "point.topleft.down.to.point.bottomright.curvepath")
                     .font(.app(.caption, .semibold))
@@ -1369,7 +1392,7 @@ struct MapScreen: View {
                             selectedPlaceID = nil
                             Task { @MainActor in
                                 await Task.yield()
-                                fitCamera(to: itineraryMapStops.map(\.coordinate))
+                                fitTripCamera()
                             }
                         }
                     }
@@ -1879,7 +1902,6 @@ struct MapScreen: View {
         guard let posts = try? await store.feedPlaces(for: tripID) else { return }
         let destination = await itineraryDestination(for: trip)
         var resolved: [FeedMapPin] = []
-        var legacyLookupCount = 0
         for post in posts {
             guard !Task.isCancelled, selectedTripID == tripID, showsFeedPlaces else { return }
             if let location = post.location {
@@ -1888,8 +1910,7 @@ struct MapScreen: View {
                     post: post,
                     coordinate: CLLocationCoordinate2D(latitude: location.latitude, longitude: location.longitude)
                 ))
-            } else if legacyLookupCount < 5, let name = post.locationName {
-                legacyLookupCount += 1
+            } else if let name = post.locationName {
                 if let item = await bestItineraryMapItem(for: name, trip: trip, destination: destination) {
                     resolved.append(FeedMapPin(trip: trip, post: post, coordinate: item.location.coordinate))
                 }
@@ -1897,18 +1918,26 @@ struct MapScreen: View {
         }
         guard !Task.isCancelled, selectedTripID == tripID, showsFeedPlaces else { return }
         feedPins = resolved
-        fitCamera(to: resolved.map(\.coordinate))
+        fitTripCamera()
     }
 
     private func selectTrip(_ tripID: Trip.ID?) {
+        guard tripID != selectedTripID else {
+            mapRefreshRevision += 1
+            mapModel.clearFocus()
+            fitTripCamera()
+            return
+        }
+        resolvedStopPreviews = [:]
+        mapModel.clearFocus()
+        curatedCompanionPlaces = []
         selectedTripID = tripID
         selectedItineraryDay = 0
         spendingPayerID = nil
         selectedPlaceID = nil
         optimizedStopIDs = []
         feedPins = []
-        Task { await refreshTripDestinations() }
-        if showsFeedPlaces { Task { await refreshFeedPins() } }
+        tripDestinations = []
     }
 
     /// Treat the first itinerary-bearing trip as the initial "current trip" so the
@@ -1963,7 +1992,7 @@ struct MapScreen: View {
                 store.updateItinerary(itinerary, in: tripID)
                 await Task.yield()
             }
-            if showsItineraryPath { fitCamera(to: itineraryMapStops.map(\.coordinate)) }
+            if showsItineraryPath { fitTripCamera() }
             return
         }
 
@@ -1972,7 +2001,6 @@ struct MapScreen: View {
 
         let destination = await itineraryDestination(for: trip)
         var validationCacheChanged = false
-        var automaticLookupCount = 0
         guard itinerary.days.indices.contains(dayIndex) else { return }
         for stopIndex in itinerary.days[dayIndex].stops.indices {
             guard !Task.isCancelled, selectedTripID == tripID else { return }
@@ -1986,35 +2014,17 @@ struct MapScreen: View {
 
             let validationKey = itineraryValidationKey(for: stop, trip: trip)
             if stop.coordinate != nil, validatedKeys.contains(validationKey) { continue }
-            // Ten ambiguous stops can use at most twenty searches (two variants each).
-            // Leave headroom for destination, feed, and user-initiated searches inside
-            // MapKit's 50-request burst window. Additional stops are picked up the
-            // next time this day is opened; ordinary days resolve in one pass.
-            guard automaticLookupCount < 10 else { continue }
-            automaticLookupCount += 1
             guard let item = await bestItineraryMapItem(
                 for: name,
                 trip: trip,
                 destination: destination
             ) else {
-                // Nothing credible near the destination. Any coordinate already stored
-                // for this stop came from the older, ungated resolver, so drop it when
-                // it is out of scope: the day is better with a missing pin than with
-                // one pointing at another country.
-                if let existing = stop.coordinate, let destination,
-                   !ItineraryPinScope.isInScope(
-                       candidate: existing,
-                       candidateRegion: stop.address,
-                       destination: destination
-                   ) {
-                    itinerary.days[dayIndex].stops[stopIndex].latitude = nil
-                    itinerary.days[dayIndex].stops[stopIndex].longitude = nil
-                    itinerary.days[dayIndex].stops[stopIndex].address = nil
-                    changed = true
-                }
+                // A network failure or ambiguous result is not evidence that a
+                // previously saved coordinate is wrong. Keep it until a replacement resolves.
                 continue
             }
 
+            guard !Task.isCancelled, selectedTripID == tripID else { return }
             if validatedKeys.insert(validationKey).inserted { validationCacheChanged = true }
             let newCoordinate = item.location.coordinate
             let oldCoordinate = stop.coordinate
@@ -2028,17 +2038,22 @@ struct MapScreen: View {
             itinerary.days[dayIndex].stops[stopIndex].latitude = newCoordinate.latitude
             itinerary.days[dayIndex].stops[stopIndex].longitude = newCoordinate.longitude
             itinerary.days[dayIndex].stops[stopIndex].address = newAddress
+            resolvedStopPreviews[stop.id] = itinerary.days[dayIndex].stops[stopIndex]
+            fitTripCamera()
             changed = true
         }
 
+        guard !Task.isCancelled, selectedTripID == tripID,
+              store.trip(tripID)?.itinerary == trip.itinerary,
+              store.trip(tripID)?.location == trip.location else { return }
         if validationCacheChanged {
             validatedItineraryStopsData = (try? JSONEncoder().encode(Array(validatedKeys))) ?? Data()
         }
 
-        guard changed, !Task.isCancelled, selectedTripID == tripID else { return }
+        guard changed else { return }
         store.updateItinerary(itinerary, in: tripID)
         await Task.yield()
-        fitCamera(to: itineraryMapStops.map(\.coordinate))
+        fitTripCamera()
     }
 
     private func itineraryDayCount(for trip: Trip) -> Int {
@@ -2064,6 +2079,8 @@ struct MapScreen: View {
         destination: ResolvedDestination?
     ) async -> MKMapItem? {
         let location = trip.location?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // A failed destination lookup must not turn a scoped trip search into a global match.
+        guard location.isEmpty || destination != nil else { return nil }
         let cacheKey = "\(stopName.normalizedForSearch)|\(location.normalizedForSearch)"
         if let cached = itinerarySearchCache[cacheKey] { return cached }
 
@@ -2094,6 +2111,7 @@ struct MapScreen: View {
             request.naturalLanguageQuery = search.query
             if search.biased, let searchRegion { request.region = searchRegion }
             request.resultTypes = [.pointOfInterest, .address]
+            guard await MapLookupPacer.shared.waitForTurn() else { return nil }
             let items = (try? await MKLocalSearch(request: request).start())?.mapItems ?? []
             for item in items.prefix(15) {
                 let coordinate = item.location.coordinate
@@ -2221,17 +2239,31 @@ struct MapScreen: View {
         for (trip, location) in inputs {
             guard !Task.isCancelled else { return }
             if let coordinate = await DestinationResolver.shared.coordinate(for: location) {
+                guard !Task.isCancelled, requestedTripID == selectedTripID else { return }
                 resolved.append(TripDestinationPin(
                     tripID: trip.id,
                     tripName: trip.name,
                     location: location,
                     coordinate: coordinate
                 ))
+                tripDestinations = resolved
+                fitTripCamera()
             }
         }
         guard !Task.isCancelled, requestedTripID == selectedTripID else { return }
         tripDestinations = resolved
-        fitCamera(to: resolved.map(\.coordinate))
+        fitTripCamera()
+    }
+
+    /// Every async layer uses the same bounds, so the last lookup to finish cannot
+    /// hide pins from another enabled trip layer. An explicit Explore focus wins.
+    private func fitTripCamera() {
+        guard mapModel.focus == nil else { return }
+        fitCamera(to: tripDestinations.map(\.coordinate)
+            + sharedTripPlaces.map(\.coordinate)
+            + itineraryMapStops.map(\.coordinate)
+            + feedPins.map(\.coordinate)
+            + expensePins.map(\.coordinate))
     }
 
     private func fitCamera(to coordinates: [CLLocationCoordinate2D]) {

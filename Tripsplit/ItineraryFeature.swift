@@ -312,8 +312,8 @@ enum ItineraryAI {
     /// answering — the shared session's shorter ordinary-request limits time out long
     /// drafts. The Edge Function budgets its own providers to answer inside this window.
     nonisolated static let session = BackendSecurity.makeSecureSession(
-        requestTimeout: 150,
-        resourceTimeout: 150
+        requestTimeout: 80,
+        resourceTimeout: 80
     )
 
     static func suggest(trip: Trip, itinerary: Itinerary, accessToken: String) async throws -> ItinerarySuggestion {
@@ -856,6 +856,9 @@ struct ItineraryDetailView: View {
 
     // AI planner state.
     @State private var isGeneratingPlan = false
+    @State private var generationTask: Task<Void, Never>?
+    @State private var generationID = UUID()
+    @State private var generationStartedAt = Date()
     @State private var aiMessage: String?
     @State private var aiCooldownUntil: Date?
     @State private var aiCooldownNow = Date()
@@ -1612,6 +1615,22 @@ struct ItineraryDetailView: View {
                 .disabled(isGeneratingPlan || isAICoolingDown)
             }
 
+            if isGeneratingPlan {
+                TimelineView(.periodic(from: generationStartedAt, by: 1)) { context in
+                    let seconds = max(0, Int(context.date.timeIntervalSince(generationStartedAt)))
+                    Text(seconds < 25 ? "Drafting your plan… \(seconds)s" : "Still waiting for the planner… \(seconds)s")
+                        .font(.app(.caption))
+                        .foregroundStyle(.secondary)
+                }
+                Button("Cancel planning") {
+                    generationID = UUID()
+                    generationTask?.cancel()
+                    generationTask = nil
+                    isGeneratingPlan = false
+                }
+                .buttonStyle(.plain)
+            }
+
             if let aiMessage {
                 Text(verbatim: aiMessage)
                     .font(.app(.caption))
@@ -1738,19 +1757,33 @@ struct ItineraryDetailView: View {
         guard !isGeneratingPlan, !isAICoolingDown else { return }
         aiMessage = nil
         isGeneratingPlan = true
-        Task {
+        generationStartedAt = Date()
+        let requestID = UUID()
+        generationID = requestID
+        generationTask = Task {
+            defer {
+                if generationID == requestID {
+                    isGeneratingPlan = false
+                    generationTask = nil
+                }
+            }
             do {
                 guard let token = try await store.authorizedAccessToken() else {
                     throw AuthError(message: "Sign in to get AI suggestions.")
                 }
                 let suggestion = try await ItineraryAI.suggest(trip: trip, itinerary: itinerary, accessToken: token)
+                try Task.checkCancellation()
+                guard generationID == requestID else { return }
                 if var current = store.trip(tripID)?.itinerary {
                     current.suggestion = suggestion
                     store.updateItinerary(current, in: tripID)
                     expandedSuggestionDays = suggestion.days.first.map { [$0.id] } ?? []
                     showAllSuggestionDays = false
                 }
+            } catch is CancellationError {
+                return
             } catch ItineraryAIError.rateLimited(let retryAfterSeconds) {
+                guard generationID == requestID, !Task.isCancelled else { return }
                 let wait = max(retryAfterSeconds ?? 120, 1)
                 aiCooldownNow = Date()
                 aiCooldownUntil = aiCooldownNow.addingTimeInterval(TimeInterval(wait))
@@ -1762,9 +1795,13 @@ struct ItineraryDetailView: View {
                 }
                 aiMessage = String(localized: "AI planning is cooling down. Try again in \(waitText).")
             } catch {
-                aiMessage = (error as? AuthError)?.message ?? error.localizedDescription
+                guard generationID == requestID, !Task.isCancelled else { return }
+                if (error as? URLError)?.code == .timedOut {
+                    aiMessage = "The planner took too long to respond. Your existing plan is unchanged. Please try again."
+                } else {
+                    aiMessage = (error as? AuthError)?.message ?? error.localizedDescription
+                }
             }
-            isGeneratingPlan = false
         }
     }
 

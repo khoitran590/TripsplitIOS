@@ -1,6 +1,30 @@
 import Foundation
 import MapKit
 
+/// Share the automatic lookup budget across feed, planner, and destination searches.
+/// Queue every location instead of silently dropping entries after a fixed count.
+@MainActor
+final class MapLookupPacer {
+    static let shared = MapLookupPacer()
+    private let clock = ContinuousClock()
+    private var nextStart: ContinuousClock.Instant?
+    private let interval: Duration
+
+    init(interval: Duration = .seconds(2)) { self.interval = interval }
+
+    func waitForTurn() async -> Bool {
+        guard !Task.isCancelled else { return false }
+        let start = max(nextStart ?? clock.now, clock.now)
+        nextStart = start.advanced(by: interval)
+        do {
+            try await clock.sleep(until: start)
+            return !Task.isCancelled
+        } catch {
+            return false
+        }
+    }
+}
+
 /// A trip destination resolved to a point on the map, plus the country/region MapKit
 /// reports for it. The region name is what keeps planner pins honest: a venue whose
 /// name matches better but sits in another country can be rejected outright
@@ -33,14 +57,30 @@ final class DestinationResolver {
         self.lifetime = lifetime
         self.capacity = max(1, capacity)
         self.lookup = lookup ?? { query in
-            let request = MKLocalSearch.Request()
-            request.naturalLanguageQuery = query
-            guard let item = try? await MKLocalSearch(request: request).start().mapItems.first else { return nil }
+            // Geocode cities/regions directly; local search alone can omit them.
+            guard await MapLookupPacer.shared.waitForTurn() else { return nil }
+            var item: MKMapItem?
+            if let geocoder = MKGeocodingRequest(addressString: query) {
+                item = try? await geocoder.mapItems.first
+            }
+            if item == nil {
+                guard await MapLookupPacer.shared.waitForTurn() else { return nil }
+                item = try? await MKLocalSearch(request: Self.searchRequest(for: query)).start().mapItems.first
+            }
+            guard let item else { return nil }
             return ResolvedDestination(
                 coordinate: item.location.coordinate,
                 regionName: item.addressRepresentations?.regionName
             )
         }
+    }
+
+    static func searchRequest(for query: String) -> MKLocalSearch.Request {
+        let request = MKLocalSearch.Request()
+        request.naturalLanguageQuery = query
+        // A city name must resolve to geography, not a similarly named business.
+        request.resultTypes = .address
+        return request
     }
 
     func coordinate(for destination: String) async -> CLLocationCoordinate2D? {
