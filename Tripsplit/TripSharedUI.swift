@@ -309,13 +309,17 @@ struct TripCoverView: View {
         [0x3B82F6, 0x6366F1, 0x8B5CF6],
     ]
 
-    private var palette: [Color] {
+    private var palette: [Color] { Self.palette(for: trip.id) }
+
+    /// The gradient a trip's cover falls back to. Shared with the home budget bar and
+    /// legend so a trip's segment there matches its card here.
+    static func palette(for tripID: Trip.ID) -> [Color] {
         // Seed from raw UUID bytes, not `hashValue`: String hashing is seeded per launch,
         // so hashValue-based selection re-rolled every cover's gradient on each run (and
         // hashed the string on every render). Byte math is stable and effectively free.
-        let bytes = trip.id.uuid
-        let index = Int(bytes.0 ^ bytes.7 ^ bytes.15) % Self.palettes.count
-        return Self.palettes[index].map { Color(hex: $0) }
+        let bytes = tripID.uuid
+        let index = Int(bytes.0 ^ bytes.7 ^ bytes.15) % palettes.count
+        return palettes[index].map { Color(hex: $0) }
     }
 
     private var gradient: some View {

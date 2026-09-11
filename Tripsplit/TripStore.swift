@@ -605,6 +605,8 @@ final class TripStore {
         let currencyCode: String
         let budget: Double
         let spent: Double
+        /// `spent` in the home currency; nil while that rate is unavailable.
+        var convertedSpent: Double? = nil
     }
 
     struct HomeTotals {
@@ -627,6 +629,9 @@ final class TripStore {
             let nativeBudget = trip.budget(for: me)
             let nativeSpent = trip.spent(for: me)
             totals.totalTripCount += 1
+            let convertedBudget = cachedConversion(nativeBudget, from: code, to: displayCurrency)
+            let convertedSpent = cachedConversion(nativeSpent, from: code, to: displayCurrency)
+
             if nativeBudget > 0 {
                 totals.budgetedTripCount += 1
                 totals.budgetTrips.append(
@@ -635,13 +640,13 @@ final class TripStore {
                         name: trip.name,
                         currencyCode: code,
                         budget: nativeBudget,
-                        spent: nativeSpent
+                        spent: nativeSpent,
+                        convertedSpent: convertedSpent
                     )
                 )
             }
 
-            if let budget = cachedConversion(nativeBudget, from: code, to: displayCurrency),
-               let spent = cachedConversion(nativeSpent, from: code, to: displayCurrency) {
+            if let budget = convertedBudget, let spent = convertedSpent {
                 totals.budget += budget
                 totals.spent += spent
             } else {

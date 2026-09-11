@@ -17,8 +17,9 @@ struct TripDetailView: View {
     @State private var scrollToSettle = false
     @State private var activeSettlement: Settlement?
     @State private var settlementToConfirm: Settlement?
-    @State private var expandedCreditors: Set<Person.ID> = []
     @State private var showSettleInfo = false
+    /// Whether the organizer's invite fields are unfolded under the member avatars.
+    @State private var showInviteFields = false
     @State private var manualMemberName = ""
     @State private var inviteEmail = ""
     @State private var inviteMessage: String?
@@ -86,12 +87,17 @@ struct TripDetailView: View {
                                 // Ruled themes take their rhythm from each section's
                                 // own rule, so the stack stops adding gaps between them.
                                 VStack(spacing: Theme.isRuled ? 0 : 18) {
+                                    if !Theme.isRuled {
+                                        // Straddles the sheet's rounded edge, like the
+                                        // action tiles on the Trips tab.
+                                        actionTiles(trip)
+                                            .padding(.top, -32)
+                                    }
                                     detailTabPicker
                                     switch detailTab {
                                     case .overview:
-                                        tripDetailsCard(trip)
-                                        itineraryCard(trip)
                                         budgetOverviewCard(trip)
+                                        itineraryCard(trip)
                                         if trip.members.count >= 2 && !trip.expenses.isEmpty {
                                             OneTimeTipBanner(
                                                 key: "tipSettleUpDismissed",
@@ -99,8 +105,7 @@ struct TripDetailView: View {
                                                 message: "TripSplit works out who owes whom below — tap a payment to record it once it's settled."
                                             )
                                         }
-                                        yourDebtsCard(trip)
-                                        settleCard(trip).id("settle")
+                                        balancesCard(trip).id("settle")
                                         membersCard(trip)
                                         expensesCard(trip)
                                         if !trip.deletedExpenses.isEmpty {
@@ -111,7 +116,7 @@ struct TripDetailView: View {
                                     }
                                 }
                                 .padding(.horizontal, Theme.contentInset)
-                                .padding(.top, Theme.isRuled ? 4 : 34)
+                                .padding(.top, Theme.isRuled ? 4 : 60)
                                 .padding(.bottom, 40)
                                 .background {
                                     // The ruled hero is typographic, not a photo, so
@@ -333,114 +338,163 @@ struct TripDetailView: View {
         .buttonStyle(.plain)
     }
 
+    /// The photo hero: location and date as chips, the title, and the members as an
+    /// avatar stack — the facts the old "Trip Details" card repeated in words.
     private func photoHeroHeader(_ trip: Trip) -> some View {
         ZStack(alignment: .bottomLeading) {
             TripCoverView(trip: trip)
-                .frame(height: 440)
+                .frame(height: 320)
                 .frame(maxWidth: .infinity)
                 .clipped()
                 .overlay {
                     LinearGradient(
-                        colors: [.black.opacity(0.35), .clear, .clear, .black.opacity(0.7)],
+                        colors: [.black.opacity(0.3), .clear, .clear, .black.opacity(0.7)],
                         startPoint: .top, endPoint: .bottom
                     )
                 }
 
-            VStack(alignment: .leading, spacing: 12) {
-                Text("NOW EXPLORING")
-                    .font(.app(.caption, .bold)).tracking(2)
-                    .foregroundStyle(.white.opacity(0.85))
-                Text(trip.name)
-                    .font(.app(size: 36, weight: .bold))
-                    .foregroundStyle(.white)
-                    .lineLimit(2)
-                if let location = trip.location, !location.isEmpty {
-                    Text(location)
-                        .font(.app(.title3))
-                        .foregroundStyle(.white.opacity(0.9))
-                } else if let range = trip.dateRangeText {
-                    Text(range)
-                        .font(.app(.title3))
-                        .foregroundStyle(.white.opacity(0.9))
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    if let location = trip.location, !location.isEmpty {
+                        heroChip(location, icon: "mappin.circle.fill")
+                    }
+                    if let range = trip.dateRangeText {
+                        heroChip(range, icon: "calendar")
+                    }
                 }
-                travelersRow(trip)
-                heroActions(trip)
-            }
-            .padding(20)
-            .padding(.bottom, 40)
-        }
-        .overlay(alignment: .topTrailing) {
-            Button { dismiss() } label: {
-                Image(systemName: "xmark")
-                    .font(.app(.subheadline, .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 36, height: 36)
-                    .background(.black.opacity(0.35), in: .circle)
-                    .frame(width: 44, height: 44)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .padding(.top, 60)
-            .padding(.trailing, 20)
-        }
-    }
-
-    private func travelersRow(_ trip: Trip) -> some View {
-        HStack(spacing: 10) {
-            HStack(spacing: -8) {
-                ForEach(trip.members.prefix(3)) { member in
-                    Text(member.initials)
-                        .font(.app(.caption2, .bold))
+                HStack(alignment: .bottom, spacing: 12) {
+                    Text(trip.name)
+                        .font(.app(size: 32, weight: .bold))
                         .foregroundStyle(.white)
-                        .frame(width: 30, height: 30)
-                        .background(member.color, in: .circle)
-                        .overlay(Circle().strokeBorder(.white.opacity(0.7), lineWidth: 1.5))
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.8)
+                    Spacer(minLength: 0)
+                    memberStack(trip)
                 }
             }
-            Text("\(trip.members.count) traveler\(trip.members.count == 1 ? "" : "s")")
-                .font(.app(.subheadline, .medium))
-                .foregroundStyle(.white)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 44)
+        }
+        .overlay(alignment: .top) {
+            HStack {
+                heroCornerButton("xmark", label: "Close") { dismiss() }
+                Spacer()
+                ShareLink(item: TripExport.text(trip)) {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.app(.subheadline, .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 36, height: 36)
+                        .background(.black.opacity(0.35), in: .circle)
+                        .frame(width: 44, height: 44)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Share trip summary")
+            }
+            .padding(.top, 56)
+            .padding(.horizontal, 20)
         }
     }
 
-    private func heroActions(_ trip: Trip) -> some View {
-        HStack(spacing: 10) {
-            heroButton("Add Expense", icon: "plus") {
+    private func heroChip(_ text: String, icon: String) -> some View {
+        Label(text, systemImage: icon)
+            .font(.app(.caption, .semibold))
+            .foregroundStyle(.white)
+            .lineLimit(1)
+            .padding(.horizontal, 10)
+            .frame(minHeight: 28)
+            .background(.white.opacity(0.22), in: .capsule)
+    }
+
+    private func heroCornerButton(_ icon: String, label: LocalizedStringKey, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.app(.subheadline, .bold))
+                .foregroundStyle(.white)
+                .frame(width: 36, height: 36)
+                .background(.black.opacity(0.35), in: .circle)
+                .frame(width: 44, height: 44)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
+    /// Up to three member avatars, overlapped, with a "+n" disc for the rest. Tapping
+    /// jumps to the Members card, which lists everyone by name.
+    private func memberStack(_ trip: Trip) -> some View {
+        let shown = Array(trip.members.prefix(3))
+        let extra = trip.members.count - shown.count
+        return HStack(spacing: -9) {
+            ForEach(shown) { member in
+                AvatarView(
+                    person: member,
+                    imageData: member.id == store.currentUser.id ? store.profileImageData : nil,
+                    size: 30
+                )
+                .overlay(Circle().strokeBorder(.black.opacity(0.35), lineWidth: 2))
+            }
+            if extra > 0 {
+                Text(verbatim: "+\(extra)")
+                    .font(.app(.caption2, .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 30, height: 30)
+                    .background(.white.opacity(0.3), in: .circle)
+                    .overlay(Circle().strokeBorder(.black.opacity(0.35), lineWidth: 2))
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(trip.members.count) traveler\(trip.members.count == 1 ? "" : "s")")
+    }
+
+    // MARK: Action tiles (card themes)
+
+    /// Expense · Settle · Edit as icon tiles. Ruled themes keep their tracked-caps row.
+    private func actionTiles(_ trip: Trip) -> some View {
+        HStack(spacing: 12) {
+            actionTile("Expense", icon: "plus", tint: [Theme.accent, Theme.accentSecondary]) {
                 requireAuthentication(for: .addExpense)
             }
+            actionTile("Settle", icon: "arrow.left.arrow.right", tint: [Color(hex: 0x16A34A), Color(hex: 0x34C468)]) {
+                scrollToSettle = true
+            }
             if store.isCreator(of: trip) {
-                heroButton("Edit Trip", icon: "calendar") {
+                actionTile("Edit", icon: "pencil", tint: nil) {
                     requireAuthentication(for: .editTrip)
                 }
             }
-            heroButton("Record Payment", icon: "person.2.fill") { scrollToSettle = true }
-            ShareLink(item: TripExport.text(trip)) {
-                Image(systemName: "square.and.arrow.up")
-                    .font(.app(.caption, .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 44, height: 44)
-                    .contentShape(.circle)
-            }
-            .buttonStyle(.plain)
-            .glassEffect(.regular.interactive(), in: .circle)
-            .accessibilityLabel("Share trip summary")
         }
-        .padding(.top, 4)
     }
 
-    private func heroButton(_ title: LocalizedStringKey, icon: String, action: @escaping () -> Void) -> some View {
+    private func actionTile(_ title: LocalizedStringKey, icon: String, tint: [Color]?, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: icon).font(.app(.caption, .semibold))
-                Text(title).font(.app(.caption, .semibold)).lineLimit(1)
+            VStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.app(.body, .bold))
+                    .foregroundStyle(tint == nil ? AnyShapeStyle(Theme.textSecondary) : AnyShapeStyle(.white))
+                    .frame(width: 44, height: 44)
+                    .background {
+                        if let tint {
+                            LinearGradient(colors: tint, startPoint: .topLeading, endPoint: .bottomTrailing)
+                        } else {
+                            Theme.fieldBackground
+                        }
+                    }
+                    .clipShape(.circle)
+                    .accessibilityHidden(true)
+                Text(title)
+                    .font(.app(.footnote, .bold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 14)
-            .frame(minHeight: 44)
-            .contentShape(.capsule)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .contentShape(.rect(cornerRadius: 20))
         }
         .buttonStyle(.plain)
-        .glassEffect(.regular.interactive(), in: .capsule)
+        .background(Theme.surface, in: .rect(cornerRadius: 20))
+        .overlay { RoundedRectangle(cornerRadius: 20).strokeBorder(Theme.separator, lineWidth: 0.5) }
+        .shadow(color: Theme.elevatedShadow, radius: 8, y: 3)
     }
 
     // MARK: Detail tabs
@@ -480,138 +534,101 @@ struct TripDetailView: View {
 
     // MARK: Detail cards
 
-    private func tripDetailsCard(_ trip: Trip) -> some View {
-        TripCard(title: "Trip Details", icon: "calendar") {
-            HStack(spacing: 12) {
-                detailTile(
-                    icon: "calendar",
-                    label: "Date",
-                    value: trip.dateRangeText ?? "Not set"
-                )
-                detailTile(
-                    icon: "mappin.and.ellipse",
-                    label: "Location",
-                    value: trip.location?.isEmpty == false ? trip.location! : "Not set"
-                )
-            }
-        }
-    }
-
-    private func detailTile(icon: String, label: LocalizedStringKey, value: String) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: icon)
-                .font(.app(.subheadline))
-                .foregroundStyle(Theme.accent)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(label).font(.app(.caption)).foregroundStyle(.secondary)
-                Text(value).font(.app(.subheadline, .semibold))
-                    .lineLimit(1).minimumScaleFactor(0.7)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .fieldFill()
-    }
-
+    /// One figure (what's left, or what's spent without a budget), a health glyph, the
+    /// meter, and what you owe / are owed as two arrow chips.
     private func budgetOverviewCard(_ trip: Trip) -> some View {
         let me = store.currentUser.id
         let budget = trip.budget(for: me)
         let spent = trip.spent(for: me)
         let remaining = trip.remainingBudget(for: me)
         let overBudget = budget > 0 && spent > budget
-        // A $0 budget has no separate "over budget" state, so retain the negative
-        // balance to make spending against it visible in the Remaining tile.
-        let displayedRemaining = budget == 0 ? remaining : abs(remaining)
         let usedFraction = budget > 0 ? spent / budget : 0
         let nearBudget = budget > 0 && usedFraction >= 0.8 && !overBudget
         let barColor = overBudget ? Theme.negative : (nearBudget ? Theme.warning : Theme.positive)
-        return VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                if Theme.isRuled {
-                    Text("Budget Overview").inscription().foregroundStyle(Theme.textSecondary)
-                } else {
-                    Label("Budget Overview", systemImage: "wallet.bifold.fill").font(.app(.headline))
-                }
-                Spacer()
-                if store.isCreator(of: trip) {
-                    RuledInlineButton(title: "Edit Budget") {
-                        requireAuthentication(for: .editTrip)
-                    } cardLabel: {
-                        Button {
-                            requireAuthentication(for: .editTrip)
-                        } label: {
-                            Text("Edit Budget")
-                                .font(.app(.caption, .semibold))
-                                .padding(.horizontal, 12).padding(.vertical, 6)
-                                .background(.secondary.opacity(0.14), in: .capsule)
-                                .frame(minHeight: 44)
-                                .contentShape(.rect)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
+        let heroValue = budget > 0 ? money(abs(remaining), trip.currencyCode) : money(spent, trip.currencyCode)
+        let statusText: LocalizedStringKey = overBudget ? "Over budget" : nearBudget ? "Running low" : "On track"
+        let owed = trip.remainingOwed(for: me)
 
-            VStack(alignment: .leading, spacing: Theme.isRuled ? 6 : 2) {
-                if Theme.isRuled {
-                    // Hero numeral first on ruled themes: one thin, large figure, then
-                    // the accent bar, then the label — the mockup's reading order.
-                    Text(money(budget, trip.currencyCode))
-                        .font(.app(size: ruledHeroSize, weight: .medium))
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .bottom, spacing: 12) {
+                VStack(alignment: .leading, spacing: Theme.isRuled ? 6 : 2) {
+                    Text(verbatim: heroValue)
+                        .font(Theme.isRuled
+                            ? .app(size: ruledHeroSize, weight: .medium)
+                            : .app(size: 36, weight: .bold))
+                        .foregroundStyle(overBudget ? barColor : .primary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.72)
-                    Rectangle()
-                        .fill(Theme.accent)
-                        .frame(width: 44, height: 2)
-                    Text("Total Budget").inscription().foregroundStyle(Theme.textSecondary)
-                } else {
-                    Text("Total Budget").font(.app(.caption)).foregroundStyle(.secondary)
-                    Text(money(budget, trip.currencyCode))
-                        .font(.app(size: 30, weight: .bold))
+                    if Theme.isRuled {
+                        Rectangle()
+                            .fill(Theme.accent)
+                            .frame(width: 44, height: 2)
+                    }
+                    HStack(spacing: 5) {
+                        if budget > 0 {
+                            Text(overBudget ? "over" : "left")
+                            Text("of")
+                            Text(verbatim: money(budget, trip.currencyCode))
+                        } else {
+                            Text("spent · no budget set")
+                        }
+                    }
+                    .font(.app(.subheadline))
+                    .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                if budget > 0 {
+                    Image(systemName: overBudget ? "exclamationmark" : nearBudget ? "gauge.with.needle" : "checkmark")
+                        .font(.app(.body, .bold))
+                        .foregroundStyle(barColor)
+                        .frame(width: 44, height: 44)
+                        .background(barColor.opacity(Theme.isRuled ? 0 : 0.12), in: .circle)
+                        .accessibilityLabel(statusText)
                 }
             }
 
             if budget > 0 {
-                let fraction = min(usedFraction, 1)
-                MeterBar(fraction: fraction, colors: [barColor], track: Theme.fieldBackground)
-
-                if nearBudget || overBudget {
-                    HStack(spacing: 8) {
-                        Image(systemName: overBudget ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill")
-                            .font(.app(.subheadline, .semibold))
-                        Text(overBudget
-                            ? "You've gone over budget."
-                            : "Heads up — you've used \(Int((usedFraction * 100).rounded()))% of your budget.")
-                            .font(.app(.footnote, .medium))
-                        Spacer(minLength: 0)
-                    }
-                    .foregroundStyle(barColor)
-                    .calloutBlock(tint: barColor.opacity(0.12), cornerRadius: 12, vertical: 8)
-                }
+                MeterBar(fraction: min(usedFraction, 1), colors: [barColor], track: Theme.fieldBackground, height: 10)
+                    .accessibilityLabel("\(Int((usedFraction * 100).rounded()))% of budget used")
             }
 
-            HStack(spacing: 12) {
-                budgetTile("Spent So Far", money(spent, trip.currencyCode), Theme.accent)
-                budgetTile(
-                    overBudget ? "Over Budget" : "Remaining",
-                    money(displayedRemaining, trip.currencyCode),
-                    barColor
-                )
-            }
-
-            SectionDivider()
-
-            let owed = trip.remainingOwed(for: me)
-            HStack {
-                statColumn("You owe", money(owed.by, trip.currencyCode), Theme.negative)
-                Spacer()
-                statColumn("You're owed", money(owed.to, trip.currencyCode), Theme.positive)
+            HStack(spacing: 10) {
+                owedChip(owed.by, trip.currencyCode, label: "you owe", icon: "arrow.up.right", color: Theme.negative)
+                owedChip(owed.to, trip.currencyCode, label: "owed to you", icon: "arrow.down.left", color: Theme.positive)
             }
         }
         .panelPadding(horizontal: 18, vertical: 18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .homePanel(cornerRadius: Theme.cardRadius)
+    }
+
+    private func owedChip(_ amount: Double, _ code: String, label: LocalizedStringKey, icon: String, color: Color) -> some View {
+        let active = amount > 0
+        return HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.app(.caption, .bold))
+                .foregroundStyle(active ? color : .secondary)
+                .frame(width: 30, height: 30)
+                .background((active ? color : Color.secondary).opacity(Theme.isRuled ? 0 : 0.14), in: .circle)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(verbatim: money(amount, code))
+                    .font(.app(.subheadline, .bold))
+                    .foregroundStyle(active ? color : .secondary)
+                    .lineLimit(1).minimumScaleFactor(0.7)
+                Text(label)
+                    .font(.app(.caption2))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Theme.isRuled ? 0 : 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            if !Theme.isRuled {
+                RoundedRectangle(cornerRadius: 14).fill((active ? color : Color.secondary).opacity(0.08))
+            }
+        }
     }
 
     private func requireAuthentication(for intent: ProtectedIntent) {
@@ -623,29 +640,6 @@ struct TripDetailView: View {
         switch intent {
         case .addExpense: showAddExpense = true
         case .editTrip: showEditTrip = true
-        }
-    }
-
-    private func budgetTile(_ label: LocalizedStringKey, _ value: String, _ color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            // The inner `textCase` wins over the one `inscription()` sets, so card
-            // themes keep the caps they already had and ruled themes gain the tracking.
-            Text(label)
-                .textCase(.uppercase)
-                .inscription()
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.app(.subheadline, .bold)).foregroundStyle(color)
-                .lineLimit(1).minimumScaleFactor(0.7)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 10)
-        // Ruled tiles carry no fill, so they take no padding of their own either.
-        .padding(.horizontal, Theme.isRuled ? 0 : 12)
-        .background {
-            if !Theme.isRuled {
-                RoundedRectangle(cornerRadius: 12).fill(color.opacity(0.10))
-            }
         }
     }
 
@@ -661,195 +655,131 @@ struct TripDetailView: View {
     /// whom to pay. Only account-backed members (the trip owner or invited users) can
     /// be `store.currentUser`, so the card never renders for manually added members —
     /// their `Person.ID` is a random UUID that no signed-in viewer matches.
-    private func yourDebtsCard(_ trip: Trip) -> some View {
+    /// Every open transfer as one row: the other party's avatar, from→to dots, the
+    /// amount coloured by your side of it, and one action — Pay when you owe, Paid
+    /// (confirm) when you're owed. Your own transfers sort first. Confirmed-paid
+    /// transfers drop out of here and reappear under History.
+    private func balancesCard(_ trip: Trip) -> some View {
         let me = store.currentUser.id
-        let myDebts = trip.settlements().filter { $0.from.id == me }
-        return Group {
-            if trip.members.contains(where: { $0.id == me }), !myDebts.isEmpty {
-                TripCard(title: "You Need to Pay Back", icon: "arrow.up.right.circle.fill") {
-                    ForEach(myDebts) { settlement in
-                        Button {
-                            activeSettlement = settlement
-                        } label: {
-                            yourDebtRow(trip, settlement)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
+        let settlements = trip.settlements()
+            .filter { !store.isFullySettled(tripID: tripID, $0) }
+            .sorted { a, b in
+                let aMine = a.from.id == me || a.to.id == me
+                let bMine = b.from.id == me || b.to.id == me
+                if aMine != bMine { return aMine }
+                return (a.from.id == me) && !(b.from.id == me)
             }
-        }
-    }
-
-    private func yourDebtRow(_ trip: Trip, _ settlement: Settlement) -> some View {
-        let settled = store.isFullySettled(tripID: tripID, settlement)
-        return HStack(spacing: 8) {
-            avatar(settlement.to, size: 30)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(verbatim: settlement.to.name)
-                    .font(.app(.subheadline)).fontWeight(.semibold)
-                if settled {
-                    Text("Settled").font(.app(.caption)).foregroundStyle(Color(hex: 0x10B981))
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                if Theme.isRuled {
+                    Text("Balances").inscription().foregroundStyle(Theme.textSecondary)
                 } else {
-                    Text("Tap to record a payment")
-                        .font(.app(.caption))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            Spacer()
-            if settled {
-                Image(systemName: "checkmark.seal.fill").foregroundStyle(Color(hex: 0x10B981))
-            } else {
-                Text(money(store.remaining(tripID: tripID, for: settlement), trip.currencyCode))
-                    .font(.app(.subheadline, .semibold))
-                    .foregroundStyle(Theme.negative)
-            }
-            Image(systemName: "chevron.right")
-                .font(.app(.caption2, .bold)).foregroundStyle(.tertiary)
-        }
-        .padding(.vertical, 4)
-        .contentShape(.rect)
-    }
-
-    private func settleCard(_ trip: Trip) -> some View {
-        // Confirmed-paid transfers drop out of this card and reappear under History.
-        let settlements = trip.settlements().filter { !store.isFullySettled(tripID: tripID, $0) }
-        return TripCard(title: "Record Payments", icon: "arrow.left.arrow.right.circle.fill") {
-            if settlements.isEmpty {
-                Text("All settled up — no transfers needed.")
-                    .font(.app(.subheadline))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 8)
-            } else {
-                HStack(spacing: 6) {
-                    Text("Tap a person to see who owes them.")
-                        .font(.app(.footnote))
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button {
-                        showSettleInfo = true
-                    } label: {
-                        Image(systemName: "info.circle")
-                            .font(.app(.subheadline))
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(Text("How payments are calculated"))
-                }
-                let groups = creditorGroups(settlements)
-                ForEach(groups, id: \.creditor.id) { group in
-                    creditorRow(trip, group)
-                    if expandedCreditors.contains(group.creditor.id) {
-                        ForEach(group.settlements) { settlement in
-                            Button {
-                                activeSettlement = settlement
-                            } label: {
-                                settleRow(trip, settlement)
-                            }
-                            .buttonStyle(.plain)
-                            .padding(.leading, 24)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private func creditorGroups(_ settlements: [Settlement]) -> [(creditor: Person, settlements: [Settlement])] {
-        var order: [Person.ID] = []
-        var byCreditor: [Person.ID: (creditor: Person, settlements: [Settlement])] = [:]
-        for settlement in settlements {
-            if byCreditor[settlement.to.id] == nil {
-                order.append(settlement.to.id)
-                byCreditor[settlement.to.id] = (settlement.to, [])
-            }
-            byCreditor[settlement.to.id]?.settlements.append(settlement)
-        }
-        return order.compactMap { byCreditor[$0] }
-    }
-
-    private func creditorRow(_ trip: Trip, _ group: (creditor: Person, settlements: [Settlement])) -> some View {
-        let me = store.currentUser.id
-        let name = group.creditor.id == me ? "You" : group.creditor.name
-        let totalRemaining = group.settlements.reduce(0) { $0 + store.remaining(tripID: tripID, for: $1) }
-        let isExpanded = expandedCreditors.contains(group.creditor.id)
-        return Button {
-            withAnimation(.snappy) {
-                if isExpanded {
-                    expandedCreditors.remove(group.creditor.id)
-                } else {
-                    expandedCreditors.insert(group.creditor.id)
-                }
-            }
-        } label: {
-            HStack(spacing: 8) {
-                avatar(group.creditor, size: 30)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(LocalizedStringKey(name))
-                        .font(.app(.subheadline)).fontWeight(.semibold)
-                    Text("Owed by \(group.settlements.count) \(group.settlements.count == 1 ? "person" : "people")")
-                        .font(.app(.caption))
-                        .foregroundStyle(.secondary)
+                    Label("Balances", systemImage: "arrow.left.arrow.right.circle.fill").font(.app(.headline))
                 }
                 Spacer()
-                if totalRemaining <= 0 {
-                    Image(systemName: "checkmark.seal.fill").foregroundStyle(Color(hex: 0x10B981))
-                } else {
-                    Text(money(totalRemaining, trip.currencyCode))
-                        .font(.app(.subheadline, .semibold))
-                        .foregroundStyle(Color(hex: 0x10B981))
+                Button {
+                    showSettleInfo = true
+                } label: {
+                    Image(systemName: "info.circle")
+                        .font(.app(.subheadline))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(.rect)
                 }
-                Image(systemName: "chevron.right")
-                    .font(.app(.caption2, .bold)).foregroundStyle(.tertiary)
-                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("How payments are calculated"))
             }
-            // Padding before contentShape so the whole padded row hit-tests,
-            // not just the inner rect.
-            .padding(.vertical, 4)
-            .contentShape(.rect)
+            if settlements.isEmpty {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.seal.fill").foregroundStyle(Theme.positive)
+                    Text("All settled up").font(.app(.subheadline)).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.vertical, 8)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(settlements.enumerated()), id: \.element.id) { index, settlement in
+                        if index > 0 { rowDivider }
+                        balanceRow(trip, settlement)
+                    }
+                }
+            }
         }
-        .buttonStyle(.plain)
+        .panelPadding(horizontal: 18, vertical: 18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .homePanel(cornerRadius: Theme.cardRadius)
     }
 
-    private func settleRow(_ trip: Trip, _ settlement: Settlement) -> some View {
+    @ViewBuilder
+    private var rowDivider: some View {
+        if Theme.isRuled { RuledDivider() } else { Divider() }
+    }
+
+    private func balanceRow(_ trip: Trip, _ settlement: Settlement) -> some View {
         let me = store.currentUser.id
-        let fromLabel = settlement.from.id == me ? "You" : settlement.from.name
-        return HStack(spacing: 8) {
-            avatar(settlement.from, size: 26)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(LocalizedStringKey(fromLabel))
-                    .font(.app(.subheadline)).fontWeight(.semibold)
-                if store.isFullySettled(tripID: tripID, settlement) {
-                    Text("Settled").font(.app(.caption)).foregroundStyle(Color(hex: 0x10B981))
-                }
-            }
-            Spacer()
-            if store.isFullySettled(tripID: tripID, settlement) {
-                Image(systemName: "checkmark.seal.fill").foregroundStyle(Color(hex: 0x10B981))
-            } else {
-                Text(money(store.remaining(tripID: tripID, for: settlement), trip.currencyCode))
+        let iOwe = settlement.from.id == me
+        let owedToMe = settlement.to.id == me
+        let counterpart = iOwe ? settlement.to : settlement.from
+        let amountColor: Color = iOwe ? Theme.negative : owedToMe ? Theme.positive : .primary
+        let remaining = store.remaining(tripID: tripID, for: settlement)
+        return HStack(spacing: 12) {
+            AvatarView(
+                person: counterpart,
+                imageData: counterpart.id == me ? store.profileImageData : nil,
+                size: 40
+            )
+            VStack(alignment: .leading, spacing: 4) {
+                Text(verbatim: counterpart.name)
                     .font(.app(.subheadline, .semibold))
-                    .foregroundStyle(Color(hex: 0x10B981))
-                // Only the creditor can confirm they were actually paid back.
-                if settlement.to.id == me {
-                    Button {
-                        settlementToConfirm = settlement
-                    } label: {
-                        Text("Mark Paid")
-                            .font(.app(.caption, .semibold))
-                            .foregroundStyle(Color(hex: 0x10B981))
-                            .padding(.horizontal, 10).padding(.vertical, 6)
-                            .pillTint(Color(hex: 0x10B981).opacity(0.15), horizontal: 10, vertical: 6)
-                            .contentShape(.capsule)
-                    }
-                    .buttonStyle(.plain)
+                    .lineLimit(1)
+                // Direction as dots: payer → receiver.
+                HStack(spacing: 4) {
+                    Circle().fill(settlement.from.color).frame(width: 12, height: 12)
+                    Image(systemName: "arrow.right")
+                        .font(.app(.caption2, .bold))
+                        .foregroundStyle(amountColor)
+                    Circle().fill(settlement.to.color).frame(width: 12, height: 12)
                 }
+                .accessibilityHidden(true)
             }
-            Image(systemName: "chevron.right")
-                .font(.app(.caption2, .bold)).foregroundStyle(.tertiary)
+            Spacer(minLength: 8)
+            Text(money(remaining, trip.currencyCode))
+                .font(.app(.subheadline, .bold))
+                .foregroundStyle(amountColor)
+                .monospacedDigit()
+            if iOwe {
+                balanceAction("Pay", tint: Theme.accent, foreground: Theme.onAccent) {
+                    activeSettlement = settlement
+                }
+            } else if owedToMe {
+                // Only the creditor can confirm they were actually paid back.
+                balanceAction("Paid", tint: Theme.positive.opacity(0.14), foreground: Theme.positive) {
+                    settlementToConfirm = settlement
+                }
+            } else {
+                Image(systemName: "chevron.right")
+                    .font(.app(.caption2, .bold)).foregroundStyle(.tertiary)
+            }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 10)
         .contentShape(.rect)
+        .onTapGesture { activeSettlement = settlement }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text(verbatim: "\(settlement.from.name) → \(settlement.to.name), \(money(remaining, trip.currencyCode))"))
+    }
+
+    private func balanceAction(_ title: LocalizedStringKey, tint: Color, foreground: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.app(.caption, .bold))
+                .foregroundStyle(foreground)
+                .padding(.horizontal, 12)
+                .frame(minHeight: 32)
+                .background(tint, in: Theme.isRuled ? AnyShape(Rectangle()) : AnyShape(Capsule()))
+                .frame(minHeight: 44)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
     }
 
     private struct SettleMathInfoView: View {
@@ -911,29 +841,34 @@ struct TripDetailView: View {
     }
 
     private func membersCard(_ trip: Trip) -> some View {
-        TripCard(title: "Members (\(trip.members.count))", icon: "person.2.fill") {
+        TripCard(title: "Members", icon: "person.2.fill") {
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 14) {
+                HStack(alignment: .top, spacing: 14) {
                     ForEach(trip.members) { member in
                         VStack(spacing: 6) {
                             AvatarView(
                                 person: member,
                                 imageData: member.id == store.currentUser.id ? store.profileImageData : nil,
-                                size: 40
+                                size: 48
                             )
-                            Text(LocalizedStringKey(member.id == store.currentUser.id ? "You" : member.name))
-                                .font(.app(.caption))
-                                .lineLimit(1)
-                            if member.id == trip.creatorID {
-                                Text("Organizer")
-                                    .font(.app(.caption2, .semibold))
-                                    .foregroundStyle(Theme.accent)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .pillTint(Theme.accent.opacity(0.14), horizontal: 6, vertical: 2)
+                            .overlay(alignment: .bottomTrailing) {
+                                // Organizer as a star badge, not a pill of text.
+                                if member.id == trip.creatorID {
+                                    Image(systemName: "star.fill")
+                                        .font(.system(size: 9, weight: .bold))
+                                        .foregroundStyle(Theme.onAccent)
+                                        .frame(width: 18, height: 18)
+                                        .background(Theme.accent, in: .circle)
+                                        .overlay(Circle().strokeBorder(Theme.surface, lineWidth: 2))
+                                        .offset(x: 2, y: 2)
+                                        .accessibilityLabel("Organizer")
+                                }
                             }
+                            Text(LocalizedStringKey(member.id == store.currentUser.id ? "You" : member.name))
+                                .font(.app(.caption, .semibold))
+                                .lineLimit(1)
                         }
-                        .frame(width: 74)
+                        .frame(width: 60)
                         .contextMenu {
                             if store.isCreator(of: trip), member.id != trip.creatorID {
                                 Button(role: .destructive) { memberToRemove = member } label: {
@@ -942,10 +877,37 @@ struct TripDetailView: View {
                             }
                         }
                     }
+
+                    if store.isCreator(of: trip) {
+                        Button {
+                            withAnimation(.snappy) { showInviteFields.toggle() }
+                        } label: {
+                            VStack(spacing: 6) {
+                                Image(systemName: showInviteFields ? "xmark" : "plus")
+                                    .font(.app(.body, .bold))
+                                    .foregroundStyle(Theme.accent)
+                                    .frame(width: 48, height: 48)
+                                    .background(Theme.fieldBackground, in: .circle)
+                                    .overlay(
+                                        Circle().strokeBorder(
+                                            Theme.textSecondary.opacity(0.6),
+                                            style: StrokeStyle(lineWidth: 1.5, dash: [4, 3])
+                                        )
+                                    )
+                                Text(showInviteFields ? "Done" : "Invite")
+                                    .font(.app(.caption, .semibold))
+                                    .foregroundStyle(Theme.accent)
+                            }
+                            .frame(width: 60)
+                            .contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
             }
+            .scrollClipDisabled()
 
-            if store.isCreator(of: trip) {
+            if store.isCreator(of: trip), showInviteFields || !pendingInvitations.isEmpty {
                 Divider()
                 VStack(spacing: 10) {
                     HStack(spacing: 10) {
@@ -1189,35 +1151,50 @@ struct TripDetailView: View {
     /// are reachable from the Trips side, not just Explore.
     @ViewBuilder
     private func itineraryCard(_ trip: Trip) -> some View {
-        TripCard(title: "Itinerary", icon: "map.fill") {
-            if let itinerary = trip.itinerary {
-                let stopCount = itinerary.days.reduce(0) { $0 + $1.stops.count }
-                NavigationLink {
-                    ItineraryDetailView(tripID: trip.id, showsTripLink: false)
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "calendar.day.timeline.left")
-                            .font(.app(.title3))
-                            .foregroundStyle(Theme.accent)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Day-by-day plan")
-                                .font(.app(.subheadline, .semibold))
-                                .foregroundStyle(.primary)
-                            Text("\(itinerary.days.count) day\(itinerary.days.count == 1 ? "" : "s") · \(stopCount) stop\(stopCount == 1 ? "" : "s") planned")
-                                .font(.app(.caption))
-                                .foregroundStyle(.secondary)
+        if let itinerary = trip.itinerary {
+            // One row: a dot per day (filled when it has stops) and the planned count.
+            let planned = itinerary.days.filter { !$0.stops.isEmpty }.count
+            NavigationLink {
+                ItineraryDetailView(tripID: trip.id, showsTripLink: false)
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "map.fill")
+                        .font(.app(.body, .semibold))
+                        .foregroundStyle(Theme.accent)
+                        .frame(width: 40, height: 40)
+                        .background(Theme.accent.opacity(Theme.isRuled ? 0 : 0.10), in: .circle)
+                    Text("Itinerary")
+                        .font(.app(.subheadline, .bold))
+                        .foregroundStyle(.primary)
+                    Spacer(minLength: 8)
+                    if itinerary.days.count <= 14 {
+                        HStack(spacing: 4) {
+                            ForEach(itinerary.days) { day in
+                                Circle()
+                                    .fill(day.stops.isEmpty ? Theme.separator : Theme.accent)
+                                    .frame(width: 8, height: 8)
+                            }
                         }
-                        Spacer(minLength: 0)
-                        Image(systemName: "chevron.right")
-                            .font(.app(.footnote, .semibold))
-                            .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
                     }
-                    .padding(12)
-                    .fieldFill(cornerRadius: 14)
-                    .contentShape(.rect)
+                    Text(verbatim: "\(planned)/\(itinerary.days.count)")
+                        .font(.app(.caption, .semibold))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                    Image(systemName: "chevron.right")
+                        .font(.app(.caption2, .bold))
+                        .foregroundStyle(.tertiary)
                 }
-                .buttonStyle(.plain)
-            } else {
+                .padding(.horizontal, Theme.isRuled ? 0 : 14)
+                .frame(minHeight: 64)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Itinerary, \(planned) of \(itinerary.days.count) days planned")
+            .homePanel(cornerRadius: 20)
+        } else {
+            TripCard(title: "Itinerary", icon: "map.fill") {
                 Text("Plan each day of this trip: places to go, things to do, and where to eat.")
                     .font(.app(.footnote))
                     .foregroundStyle(.secondary)
@@ -1490,46 +1467,60 @@ struct TripDetailView: View {
                     )
                 }
             }
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(expense.title).font(.app(.subheadline, .semibold))
-                        Text("Paid by \(payer.map { $0.id == me ? "you" : $0.name } ?? "—") • \(expense.date.formatted(date: .abbreviated, time: .omitted))")
-                            .font(.app(.caption)).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Text(money(expense.amount, trip.currencyCode))
-                        .font(.app(.subheadline, .semibold))
-                    Image(systemName: "chevron.right")
-                        .font(.app(.caption2, .bold))
-                        .foregroundStyle(.tertiary)
-                }
-                if expense.participantIDs.contains(me) {
-                    Text("Your share: \(money(yourShare, trip.currencyCode))")
-                        .font(.app(.caption))
-                        .foregroundStyle(expense.payerID == me ? Theme.positive : Theme.negative)
-                }
-                HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(expense.title)
+                    .font(.app(.subheadline, .semibold))
+                    .lineLimit(1)
+                // Date plus receipt / comment glyphs; the payer is the avatar.
+                HStack(spacing: 8) {
+                    Text(verbatim: expense.date.formatted(date: .abbreviated, time: .omitted))
                     if expense.receiptURL != nil || !expense.items.isEmpty {
-                        HStack(spacing: 4) {
-                            Image(systemName: "doc.text.viewfinder")
-                            Text(expense.items.isEmpty ? "Receipt" : "Receipt • \(expense.items.count) item\(expense.items.count == 1 ? "" : "s")")
+                        HStack(spacing: 3) {
+                            Image(systemName: "doc.text")
+                            if !expense.items.isEmpty {
+                                Text(verbatim: "\(expense.items.count)")
+                            }
                         }
-                        .font(.app(.caption2, .medium))
-                        .foregroundStyle(.secondary)
+                        .accessibilityLabel(expense.items.isEmpty ? "Receipt" : "Receipt, \(expense.items.count) items")
                     }
                     let commentCount = trip.comments[expense.id.uuidString]?.count ?? 0
                     if commentCount > 0 {
-                        HStack(spacing: 4) {
-                            Image(systemName: "bubble.left.fill")
-                            Text("\(commentCount)")
+                        HStack(spacing: 3) {
+                            Image(systemName: "bubble.left")
+                            Text(verbatim: "\(commentCount)")
                         }
-                        .font(.app(.caption2, .medium))
-                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("\(commentCount) comments")
                     }
                 }
+                .font(.app(.caption))
+                .foregroundStyle(.secondary)
             }
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 3) {
+                Text(money(expense.amount, trip.currencyCode))
+                    .font(.app(.subheadline, .bold))
+                    .monospacedDigit()
+                if expense.participantIDs.contains(me) {
+                    // Your share as a signed pill: what you're owed back when you
+                    // paid, what you owe when someone else did.
+                    let mine = expense.payerID == me
+                    let shareColor = mine ? Theme.positive : Theme.negative
+                    Text(verbatim: (mine ? "+" : "−") + money(mine ? expense.amount - yourShare : yourShare, trip.currencyCode))
+                        .font(.app(.caption2, .bold))
+                        .foregroundStyle(shareColor)
+                        .monospacedDigit()
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(shareColor.opacity(Theme.isRuled ? 0 : 0.12), in: .capsule)
+                        .accessibilityLabel(mine ? "Owed back to you" : "Your share")
+                }
+            }
+            Image(systemName: "chevron.right")
+                .font(.app(.caption2, .bold))
+                .foregroundStyle(.tertiary)
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text(verbatim: "\(expense.title), paid by \(payer.map { $0.id == me ? String(localized: "you") : $0.name } ?? "—")"))
         .padding(.vertical, 12)
         .padding(.horizontal, Theme.isRuled ? 0 : 12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1541,12 +1532,4 @@ struct TripDetailView: View {
         }
     }
 
-    private func statColumn(_ title: LocalizedStringKey, _ value: String, _ color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .inscription(orFont: .app(.caption))
-                .foregroundStyle(.secondary)
-            Text(value).font(.app(.subheadline, .bold)).foregroundStyle(color)
-        }
-    }
 }

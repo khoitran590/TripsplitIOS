@@ -164,7 +164,7 @@ struct HomeScreen: View {
     private var tripsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Upcoming & Active")
+                Text("Trips")
                     .homeSectionHeading()
                     .padding(.leading, Theme.isRuled ? 0 : 4)
                 Spacer()
@@ -242,7 +242,7 @@ struct HomeScreen: View {
                         Image(systemName: "archivebox")
                             .font(.app(.subheadline, .semibold))
                             .foregroundStyle(.secondary)
-                        Text("Archived Trips")
+                        Text("Archived")
                             .font(.app(.subheadline, .semibold))
                         Text(verbatim: "\(store.archivedTrips.count)")
                             .font(.app(.caption, .bold))
@@ -361,8 +361,9 @@ struct HomeScreen: View {
         // the header keeps the balance card + actions + trips above the fold.
         HStack(spacing: Theme.isRuled ? 0 : 12) {
             QuickActionButton(
-                title: "Split Expense",
-                icon: "divide.circle.fill"
+                title: "Split",
+                icon: "divide",
+                tint: [Theme.accent, Theme.accentSecondary]
             ) { startQuickAction(.split) }
 
             // Ruled style divides the two actions with a hairline instead of a gap,
@@ -374,8 +375,9 @@ struct HomeScreen: View {
             }
 
             QuickActionButton(
-                title: "Add Expense",
-                icon: "plus.circle.fill"
+                title: "Expense",
+                icon: "plus",
+                tint: [Color(hex: 0x16A34A), Color(hex: 0x34C468)]
             ) { startQuickAction(.addExpense) }
         }
         // A hairline keeps this strip attached to the budget block it acts on, rather
@@ -423,7 +425,7 @@ struct HomeScreen: View {
             .filter(\.canDelete)
         return VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Recent Transactions")
+                Text("Recent")
                     .homeSectionHeading()
                     .padding(.leading, Theme.isRuled ? 0 : 4)
                 Spacer()
@@ -871,7 +873,10 @@ struct BalanceCard: View {
                             HStack(spacing: 5) {
                                 Text(LocalizedStringKey(heroLabel))
                                 Text(verbatim: "·")
-                                if totals.budgetedTripCount == totals.totalTripCount {
+                                if hasConvertedBudget {
+                                    Text("of")
+                                    Text(verbatim: summaryMoney(totals.budget, displayCurrency, compact: true))
+                                } else if totals.budgetedTripCount == totals.totalTripCount {
                                     Text("\(totals.totalTripCount) trips budgeted")
                                 } else {
                                     Text("\(totals.budgetedTripCount) of \(totals.totalTripCount) trips budgeted")
@@ -884,12 +889,14 @@ struct BalanceCard: View {
 
                         if hasConvertedBudget {
                             Spacer(minLength: 8)
-                            // The status colour carries this on ruled themes; a tinted
-                            // capsule around it would be saying the same thing twice.
-                            Text(LocalizedStringKey(statusText))
-                                .inscription(orFont: .app(.caption, .semibold))
+                            // Budget health as a glyph, not a sentence; the label is
+                            // kept for VoiceOver.
+                            Image(systemName: isOver ? "exclamationmark" : isNear ? "gauge.with.needle" : "checkmark")
+                                .font(.app(.body, .bold))
                                 .foregroundStyle(statusColor)
-                                .pillTint(statusColor.opacity(0.12))
+                                .frame(width: 44, height: 44)
+                                .background(statusColor.opacity(Theme.isRuled ? 0 : 0.12), in: .circle)
+                                .accessibilityLabel(LocalizedStringKey(statusText))
                         }
                     }
                 }
@@ -899,41 +906,11 @@ struct BalanceCard: View {
 
                 if hasConvertedBudget {
                     Button { showBudgetBreakdown = true } label: {
-                        VStack(spacing: 7) {
-                            HStack {
-                                Text("Budget used")
-                                    .font(.app(.caption))
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                if isOver {
-                                    Text("+\(summaryMoney(totals.spent - totals.budget, displayCurrency)) over")
-                                        .font(.app(.caption, .semibold))
-                                        .foregroundStyle(statusColor)
-                                }
-                                Text(verbatim: "\(Int((fraction * 100).rounded()))%")
-                                    .font(.app(.caption, .semibold))
-                                    .foregroundStyle(statusColor)
-                            }
-                            MeterBar(
-                                fraction: fraction,
-                                colors: progressColors(isOver: isOver, isNear: isNear),
-                                height: 9
-                            )
-                            .animation(.easeInOut(duration: 0.4), value: fraction)
-                            HStack {
-                                Text(verbatim: summaryMoney(totals.spent, displayCurrency))
-                                Text("of")
-                                Text(verbatim: summaryMoney(totals.budget, displayCurrency))
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .font(.app(.caption2, .bold))
-                            }
-                            .font(.app(.caption))
-                            .foregroundStyle(.secondary)
-                        }
-                        .contentShape(.rect)
+                        tripSegments(totals, isOver: isOver, isNear: isNear)
+                            .contentShape(.rect)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("\(Int((fraction * 100).rounded()))% of budget used")
                 } else if hasBudget {
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)
@@ -945,8 +922,6 @@ struct BalanceCard: View {
                 } else {
                     noBudgetCallout
                 }
-
-                statGrid(totals, hasBudget: hasBudget, hasConvertedBudget: hasConvertedBudget)
 
                 if totals.youOwe > 0 || totals.owedToYou > 0 {
                     settlementBand(totals)
@@ -996,52 +971,58 @@ struct BalanceCard: View {
             : AnyLayout(HStackLayout(alignment: .bottom, spacing: 12))
     }
 
-    private func statGrid(
-        _ totals: TripStore.HomeTotals,
-        hasBudget: Bool,
-        hasConvertedBudget: Bool
-    ) -> some View {
-        let boxes = [
-            statBox(
-                label: "SPENT",
-                value: summaryMoney(totals.spent, displayCurrency),
-                valueColor: Theme.accent,
-                background: Theme.accent.opacity(0.10)
-            ),
-            statBox(
-                label: "BUDGET",
-                value: hasConvertedBudget
-                    ? summaryMoney(totals.budget, displayCurrency)
-                    : hasBudget ? "—" : String(localized: "Not set"),
-                valueColor: hasConvertedBudget ? .primary : .secondary,
-                background: Color.primary.opacity(0.05)
-            )
-        ]
+    /// Spending as one bar split per trip, each segment in that trip's cover colour,
+    /// with a swatch legend beneath — the visual stand-in for the old spent/budget
+    /// stat boxes. Over budget, the bar scales to total spend so the overflow shows.
+    private func tripSegments(_ totals: TripStore.HomeTotals, isOver: Bool, isNear: Bool) -> some View {
+        let trips = totals.budgetTrips.filter { ($0.convertedSpent ?? 0) > 0 }
+        let scale = max(totals.budget, totals.spent, 0.01)
+        let statusColor = isOver ? Color(hex: 0xDC2626) : isNear ? Color(hex: 0xD97706) : Theme.accent
 
-        return Group {
-            if dynamicTypeSize.isAccessibilitySize {
-                VStack(spacing: 8) { ForEach(0..<2, id: \.self) { boxes[$0] } }
-            } else {
-                HStack(spacing: 8) { boxes[0]; boxes[1] }
+        return VStack(alignment: .leading, spacing: 10) {
+            GeometryReader { geo in
+                HStack(spacing: 2) {
+                    ForEach(trips) { trip in
+                        let fraction = (trip.convertedSpent ?? 0) / scale
+                        Rectangle()
+                            .fill(TripCoverView.palette(for: trip.id).first ?? Theme.accent)
+                            .frame(width: max(2, geo.size.width * fraction))
+                    }
+                    if isOver {
+                        // The overflow segment is the only place status colour appears.
+                        Rectangle()
+                            .fill(statusColor)
+                            .frame(width: max(2, geo.size.width * (totals.spent - totals.budget) / scale))
+                    }
+                    Spacer(minLength: 0)
+                }
             }
-        }
-    }
+            .frame(height: 10)
+            .background(Color.primary.opacity(0.08))
+            .clipShape(.rect(cornerRadius: Theme.isRuled ? 0 : 5))
 
-    /// One tile in `statGrid`. Mirrors `UserTripCard.statBox` so the home summary and
-    /// the trip cards below it read as the same family.
-    private func statBox(label: String, value: String, valueColor: Color, background: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(LocalizedStringKey(label))
-                .inscription()
-                .foregroundStyle(.secondary)
-                .lineLimit(1).minimumScaleFactor(0.8)
-            Text(verbatim: value)
-                .font(.app(.subheadline, .bold))
-                .foregroundStyle(valueColor)
-                .lineLimit(1).minimumScaleFactor(0.7)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 14) {
+                    ForEach(trips) { trip in
+                        HStack(spacing: 6) {
+                            LinearGradient(
+                                colors: TripCoverView.palette(for: trip.id),
+                                startPoint: .topLeading, endPoint: .bottomTrailing
+                            )
+                            .frame(width: 22, height: 22)
+                            .clipShape(.rect(cornerRadius: Theme.isRuled ? 0 : 7))
+                            Text(verbatim: summaryMoney(trip.convertedSpent ?? 0, displayCurrency, compact: true))
+                                .font(.app(.caption, .semibold))
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel(Text(verbatim: trip.name))
+                    }
+                }
+            }
+            .scrollClipDisabled()
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .calloutBlock(tint: background, cornerRadius: 12)
     }
 
     private var noBudgetCallout: some View {
@@ -1109,12 +1090,6 @@ struct BalanceCard: View {
         }
         .font(.app(.caption))
         .calloutBlock(tint: Color.primary.opacity(0.035))
-    }
-
-    private func progressColors(isOver: Bool, isNear: Bool) -> [Color] {
-        isOver ? [Color(hex: 0xF87171), Color(hex: 0xDC2626)]
-            : isNear ? [Color(hex: 0xFBBF24), Color(hex: 0xD97706)]
-            : [Color(hex: 0x4ADE80), Color(hex: 0x16A34A)]
     }
 
     private var pickerTrips: [Trip] {
@@ -1358,20 +1333,25 @@ struct TripRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            cover
-            VStack(alignment: .leading, spacing: 12) {
-                ruledEyebrow
-                titleRow
-                dateRow
-                budgetBoxes
-                progress
+        Group {
+            if Theme.isRuled {
+                VStack(alignment: .leading, spacing: 0) {
+                    cover
+                    VStack(alignment: .leading, spacing: 12) {
+                        ruledEyebrow
+                        titleRow
+                        dateRow
+                        progress
+                    }
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    // The ruled style has no material anywhere, which also makes it
+                    // Reduce Transparency-correct without a second code path.
+                    .background(Theme.surface)
+                }
+            } else {
+                photoCard
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            // The ruled style has no material anywhere, which also makes it Reduce
-            // Transparency-correct without a second code path.
-            .background(Theme.isRuled ? AnyShapeStyle(Theme.surface) : AnyShapeStyle(.regularMaterial))
         }
         .clipShape(.rect(cornerRadius: Theme.isRuled ? 0 : 24))
         .overlay(
@@ -1384,34 +1364,115 @@ struct TripRow: View {
         .shadow(color: .black.opacity(Theme.isRuled ? 0 : 0.18), radius: 10, y: 5)
     }
 
-    // MARK: Cover
+    // MARK: Photo card (card themes)
+
+    /// The cover is the whole card: location chip and member avatars along the top,
+    /// title, dates, the remaining figure and a hairline meter on a scrim at the foot.
+    private var photoCard: some View {
+        TripCoverView(trip: trip)
+            .frame(height: 220)
+            .frame(maxWidth: .infinity)
+            .clipped()
+            .overlay {
+                LinearGradient(
+                    stops: [
+                        .init(color: .black.opacity(0.18), location: 0),
+                        .init(color: .clear, location: 0.25),
+                        .init(color: .clear, location: 0.42),
+                        .init(color: .black.opacity(0.68), location: 1)
+                    ],
+                    startPoint: .top, endPoint: .bottom
+                )
+            }
+            .overlay(alignment: .topLeading) {
+                if let location = trip.location, !location.isEmpty {
+                    Label(location, systemImage: "mappin.circle.fill")
+                        .font(.app(.caption, .semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .padding(.horizontal, 10)
+                        .frame(minHeight: 28)
+                        .background(.white.opacity(0.22), in: .capsule)
+                        .padding(14)
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                HStack(spacing: 8) {
+                    if isOver || isNear { healthBadge }
+                    memberStack
+                }
+                .padding(14)
+            }
+            .overlay(alignment: .bottom) {
+                VStack(alignment: .leading, spacing: 9) {
+                    HStack(alignment: .bottom, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(trip.name)
+                                .font(.app(.title3, .bold))
+                                .lineLimit(1)
+                            Text(trip.dateRangeText ?? "\(trip.expenses.count) expense\(trip.expenses.count == 1 ? "" : "s")")
+                                .font(.app(.caption))
+                                .opacity(0.85)
+                        }
+                        Spacer(minLength: 8)
+                        if hasBudget {
+                            VStack(alignment: .trailing, spacing: 1) {
+                                Text(money(abs(remaining), trip.currencyCode))
+                                    .font(.app(.headline, .bold))
+                                    .foregroundStyle(isOver ? Color(hex: 0xFCA5A5) : isNear ? Color(hex: 0xFBBF24) : .white)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.7)
+                                Text(isOver ? "over" : "left")
+                                    .font(.app(.caption2))
+                                    .opacity(0.85)
+                            }
+                        }
+                    }
+                    if hasBudget {
+                        MeterBar(
+                            fraction: percent / 100,
+                            colors: isOver ? [Color(hex: 0xFCA5A5)] : isNear ? [Color(hex: 0xFBBF24)] : [.white],
+                            track: .white.opacity(0.28),
+                            height: 4
+                        )
+                    }
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 14)
+            }
+    }
+
+    /// Up to three member avatars, overlapped, with a "+n" disc for the rest.
+    private var memberStack: some View {
+        let shown = Array(trip.members.prefix(3))
+        let extra = trip.members.count - shown.count
+        return HStack(spacing: -8) {
+            ForEach(shown) { person in
+                AvatarView(person: person, size: 26)
+                    .overlay(Circle().strokeBorder(.black.opacity(0.35), lineWidth: 2))
+            }
+            if extra > 0 {
+                Text(verbatim: "+\(extra)")
+                    .font(.app(.caption2, .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 26, height: 26)
+                    .background(.white.opacity(0.3), in: .circle)
+                    .overlay(Circle().strokeBorder(.black.opacity(0.35), lineWidth: 2))
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(trip.members.count) members")
+    }
+
+    // MARK: Cover (ruled themes)
 
     private var cover: some View {
         TripCoverView(trip: trip)
             // A framed band rather than the card's hero photo.
-            .frame(height: Theme.isRuled ? 112 : 130)
+            .frame(height: 112)
             .frame(maxWidth: .infinity)
             .clipped()
-            // On ruled themes the cover is a plain plate and its caption is set below
-            // on the paper (as in the trip detail hero), so there is nothing to scrim.
-            .overlay {
-                if !Theme.isRuled {
-                    LinearGradient(
-                        colors: [.clear, .clear, .black.opacity(0.55)],
-                        startPoint: .top, endPoint: .bottom
-                    )
-                }
-            }
-            .overlay(alignment: .bottomLeading) {
-                if !Theme.isRuled {
-                    Label(trip.location?.isEmpty == false ? trip.location! : trip.name,
-                          systemImage: "mappin.circle.fill")
-                        .font(.app(.caption, .semibold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                        .padding(12)
-                }
-            }
             .overlay(alignment: .topTrailing) {
                 if isOver || isNear { healthBadge.padding(12) }
             }
@@ -1467,44 +1528,17 @@ struct TripRow: View {
         .foregroundStyle(.secondary)
     }
 
-    private var budgetBoxes: some View {
-        HStack(spacing: 12) {
-            statBox(
-                label: "SPENT",
-                value: money(spent, trip.currencyCode),
-                valueColor: Theme.accent,
-                background: Theme.accent.opacity(0.10)
-            )
-            statBox(
-                label: isOver ? "OVER BY" : "REMAINING",
-                value: money(abs(remaining), trip.currencyCode),
-                valueColor: accent,
-                background: (isOver ? Color(hex: 0xDC2626) : Color(hex: 0x16A34A)).opacity(0.12)
-            )
-        }
-    }
-
-    private func statBox(label: String, value: String, valueColor: Color, background: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(LocalizedStringKey(label))
-                .inscription()
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.app(.subheadline, .bold)).foregroundStyle(valueColor)
-                .lineLimit(1).minimumScaleFactor(0.7)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .calloutBlock(tint: background, cornerRadius: 12)
-    }
-
     private var progress: some View {
         VStack(spacing: 6) {
             HStack {
-                Text("Budget Usage").font(.app(.caption)).foregroundStyle(.secondary)
+                Text(hasBudget ? (isOver ? "Over by" : "Remaining") : "No budget set")
+                    .font(.app(.caption)).foregroundStyle(.secondary)
                 Spacer()
-                Text(hasBudget ? "\(Int(percent.rounded()))%" : "No budget set")
-                    .font(.app(.caption, .semibold))
-                    .foregroundStyle(isOver || isNear ? accent : .secondary)
+                if hasBudget {
+                    Text(money(abs(remaining), trip.currencyCode))
+                        .font(.app(.caption, .semibold))
+                        .foregroundStyle(isOver || isNear ? accent : .primary)
+                }
             }
             MeterBar(
                 fraction: percent / 100,
@@ -1713,6 +1747,8 @@ struct CurrencyConverterCard: View {
 struct QuickActionButton: View {
     let title: LocalizedStringKey
     let icon: String
+    /// Gradient behind the icon disc on card themes.
+    let tint: [Color]
     let action: () -> Void
     @Environment(\.colorScheme) private var colorScheme
 
@@ -1734,32 +1770,37 @@ struct QuickActionButton: View {
             .buttonStyle(.plain)
         } else {
             Button(action: action) {
-                HStack(spacing: 10) {
+                HStack(spacing: 12) {
                     Image(systemName: icon)
-                        .font(.app(.body, .semibold))
-                        .foregroundStyle(highContrastInk)
-                        .frame(width: 34, height: 34)
-                        // The title labels the whole button. Keeping the icon
-                        // monochrome also avoids exposing a decorative gradient
-                        // as an unnamed low-contrast accessibility node.
+                        .font(.app(.body, .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .background(
+                            LinearGradient(colors: tint, startPoint: .topLeading, endPoint: .bottomTrailing),
+                            in: .circle
+                        )
+                        // The title labels the whole button.
                         .accessibilityHidden(true)
                     Text(title)
-                        .font(.app(.subheadline, .semibold))
+                        .font(.app(.body, .bold))
                         .foregroundStyle(highContrastInk)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                     Spacer(minLength: 0)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 11)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
                 // The label has transparent gaps (spacer, padding); without an explicit
                 // shape only the icon and text hit-test, leaving dead zones mid-button.
-                .contentShape(.capsule)
+                .contentShape(.rect(cornerRadius: 20))
             }
             .buttonStyle(.plain)
-            .background(highContrastSurface, in: .capsule)
+            .background(highContrastSurface, in: .rect(cornerRadius: 20))
             .overlay {
-                Capsule().strokeBorder(Theme.separator, lineWidth: 1)
+                RoundedRectangle(cornerRadius: 20).strokeBorder(Theme.separator, lineWidth: 0.5)
             }
+            .shadow(color: Theme.elevatedShadow, radius: 8, y: 3)
         }
     }
 }
@@ -2010,11 +2051,20 @@ struct TransactionRow: View {
                 .frame(width: 40, height: 40)
                 .background(transaction.color, in: .circle)
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(transaction.name).font(.app(.subheadline, .semibold))
-                Text("\(transaction.category) • \(transaction.date)")
-                    .font(.app(.caption))
-                    .foregroundStyle(.secondary)
+                // Payer as a colour dot rather than "Paid by …"; VoiceOver still
+                // gets the words.
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(transaction.color)
+                        .frame(width: 8, height: 8)
+                    Text(verbatim: transaction.date)
+                        .font(.app(.caption))
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Text(verbatim: "\(transaction.category), \(transaction.date)"))
             }
             Spacer()
             Text(money(transaction.amount, transaction.currencyCode))
