@@ -812,11 +812,21 @@ struct PlaceStampBadge: View {
     /// so the stamp prints as ink alone: no disc of its own, no shadow, and its scene's
     /// negative space filled with the page rather than a lighter stock punched into it.
     private let pageStock: Color?
+    /// The profile rail's simpler print: one double ring, the name set straight across
+    /// the top, the scene, and the year (or category) beneath — no arc text or diamonds.
+    private let compact: Bool
 
-    init(place: VisitedPlace, size: CGFloat = 150, page: Color? = nil) {
+    /// Set by the share card: the top arc then prints "ENTRY · MAR 2026" the way a border
+    /// stamp dates itself, instead of the category word.
+    private let entryDate: Date?
+
+    init(place: VisitedPlace, size: CGFloat = 150, page: Color? = nil, compact: Bool = false,
+         entryDate: Date? = nil) {
         self.place = place
         self.size = size
         pageStock = page
+        self.compact = compact
+        self.entryDate = entryDate
         theme = PlaceTheme.inferred(from: place.name)
         landmark = PlaceLandmark.matching(place.name)
         var seed: UInt64 = 5381
@@ -849,6 +859,13 @@ struct PlaceStampBadge: View {
         return Bundle.main.localizedString(forKey: key, value: key, table: nil).uppercased()
     }
 
+    /// What the top arc prints: the entry date when the stamp is dated, else the category.
+    private var topText: String {
+        guard let entryDate else { return categoryText }
+        let month = Bundle.main.localizedString(forKey: "Entry", value: "Entry", table: nil)
+        return "\(month) · \(entryDate.formatted(.dateTime.month(.abbreviated).year()))".uppercased()
+    }
+
     /// A stable per-place tilt (±5°) so a row of stamps looks hand-stuck.
     private var tilt: Double { Double(sceneSeed % 11) - 5 }
 
@@ -858,6 +875,46 @@ struct PlaceStampBadge: View {
     /// The stamp: paper disc, double ring, curved wording, a centred emblem, and two
     /// small diamonds where the top and bottom arcs meet.
     var body: some View {
+        if compact {
+            compactBody
+        } else {
+            fullBody
+        }
+    }
+
+    private var compactBody: some View {
+        ZStack {
+            Circle()
+                .fill(paper)
+                .overlay(Circle().strokeBorder(ink, lineWidth: 2.5 * scale))
+                .overlay(Circle().inset(by: 6 * scale).strokeBorder(ink.opacity(0.9), lineWidth: scale))
+                .shadow(color: Theme.elevatedShadow, radius: 6 * scale, x: 0, y: 4 * scale)
+
+            VStack(spacing: 2 * scale) {
+                Text(verbatim: place.shortName.uppercased())
+                    .font(.app(size: 11 * scale, weight: .bold))
+                    .tracking(2 * scale)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                PlaceSceneView(theme: theme, landmark: landmark, tint: ink, paper: paper, seed: sceneSeed)
+                    .frame(width: 66 * scale, height: 66 * scale)
+                    .clipShape(Circle())
+                Text(verbatim: place.date.map { $0.formatted(.dateTime.year()) } ?? categoryText)
+                    .font(.app(size: 11 * scale, weight: .bold))
+                    .tracking(2 * scale)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+            }
+            .foregroundStyle(ink)
+            .padding(.horizontal, 16 * scale)
+        }
+        .frame(width: size, height: size)
+        .rotationEffect(.degrees(tilt))
+        .accessibilityElement()
+        .accessibilityLabel(Text(verbatim: "\(categoryText), \(place.shortName)"))
+    }
+
+    private var fullBody: some View {
         ZStack {
             Circle()
                 // Transparent on a caller's own page: a disc and a shadow would print the
@@ -872,7 +929,7 @@ struct PlaceStampBadge: View {
                 .frame(width: 82 * scale, height: 82 * scale)
                 .clipShape(Circle())
 
-            StampArcText(text: categoryText, color: ink, fontSize: 9.5 * scale,
+            StampArcText(text: topText, color: ink, fontSize: 9.5 * scale,
                          atBottom: false, letterSpacing: 2.2 * scale)
             StampArcText(text: place.shortName.uppercased(), color: ink, fontSize: 10.5 * scale,
                          atBottom: true, letterSpacing: 2.2 * scale)

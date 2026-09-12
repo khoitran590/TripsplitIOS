@@ -150,8 +150,14 @@ struct ProfileDetailView: View {
             // four separately-boxed cards with 24pt between them — the old layout put
             // 16pt of card padding on either side of every gap, which read as windows
             // stacked inside windows.
-            VStack(spacing: 18) {
-                heroCard
+            VStack(spacing: 22) {
+                identityHeader
+
+                statsCard
+
+                moneyCard
+
+                milestoneRail
 
                 FriendsSection { token in
                     viewingProfile = SharedProfileLink(token: token)
@@ -195,7 +201,8 @@ struct ProfileDetailView: View {
                 .accessibilityLabel("Settings")
             }
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Edit") { showEditor = true }
+                Button { showEditor = true } label: { Image(systemName: "pencil") }
+                    .accessibilityLabel("Edit profile")
             }
         }
         .refreshable {
@@ -258,7 +265,8 @@ struct ProfileDetailView: View {
                     imageData: store.profileImageData,
                     avatarPath: store.currentUser.avatarURL,
                     stats: stats,
-                    places: visitedPlaces
+                    places: visitedPlaces,
+                    shareURL: friends.shareURL()
                 )
             } label: {
                 Label("Share Card", systemImage: "photo")
@@ -282,28 +290,34 @@ struct ProfileDetailView: View {
         return components.queryItems?.first { $0.name == "token" }?.value
     }
 
-    /// Identity and the numbers behind it, in one card: photo, name, birthday, bio, the
-    /// four counts, and where the user stands on money. The money is `homeTotals`, the
-    /// same figures the Trips tab reports, in the user's home currency.
-    ///
-    /// The counts are a flat strip separated by hairlines, not four tinted tiles. Tiles
-    /// drew their own rounded background inside this card's, which was the one place in
-    /// the app nesting a surface directly inside another surface.
-    private var heroCard: some View {
-        let stats = stats
-        return VStack(spacing: 14) {
-            // Tapping your own photo is the expected way into the editor; it used to be
-            // inert, with Edit in the toolbar as the only route.
+    /// Identity, unboxed: ringed photo (tap to edit), name, birthday pill, bio.
+    private var identityHeader: some View {
+        VStack(spacing: 12) {
             Button { showEditor = true } label: {
-                AvatarView(person: store.currentUser, imageData: store.profileImageData, size: 88)
+                AvatarView(person: store.currentUser, imageData: store.profileImageData, size: 92)
+                    .padding(4)
+                    .background(Theme.surfaceSubtle, in: .circle)
+                    .padding(3)
+                    .background(
+                        LinearGradient(colors: [Theme.accent, Theme.accentSecondary],
+                                       startPoint: .topLeading, endPoint: .bottomTrailing),
+                        in: .circle
+                    )
+                    .overlay(alignment: .bottomTrailing) {
+                        Image(systemName: "camera.fill")
+                            .font(.app(.caption, .semibold))
+                            .foregroundStyle(.primary)
+                            .frame(width: 30, height: 30)
+                            .background(Theme.surface, in: .circle)
+                            .overlay(Circle().stroke(Theme.separator, lineWidth: 0.5))
+                            .shadow(color: Theme.elevatedShadow, radius: 4, y: 2)
+                    }
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Profile photo")
             .accessibilityHint("Opens profile editing")
 
-            VStack(spacing: 4) {
-                // Split rather than a ternary inside one `Text`: the placeholder is a key
-                // to translate, the name is user text to render as typed.
+            VStack(spacing: 8) {
                 Group {
                     if store.currentUser.name.isEmpty {
                         Text("TripSplit User")
@@ -311,117 +325,188 @@ struct ProfileDetailView: View {
                         Text(verbatim: store.currentUser.name)
                     }
                 }
-                .font(.app(.title2, .bold))
+                .font(.app(size: 26, weight: .bold))
+                .multilineTextAlignment(.center)
 
-                // Birthday was a full row in its own card; as a caption under the name it
-                // costs one line instead of a card, and reads as part of the identity.
                 if let dob = store.userProfile.dateOfBirth {
-                    Label {
-                        Text(verbatim: dob.formatted(date: .abbreviated, time: .omitted))
-                    } icon: {
-                        Image(systemName: "birthday.cake.fill")
-                    }
-                    .font(.app(.caption))
-                    .foregroundStyle(.secondary)
+                    infoPill(Text(verbatim: dob.formatted(date: .abbreviated, time: .omitted)),
+                             icon: "birthday.cake.fill")
                 }
 
                 if !store.userProfile.bio.trimmingCharacters(in: .whitespaces).isEmpty {
                     Text(verbatim: store.userProfile.bio)
                         .font(.app(.subheadline))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.textSecondary)
                         .multilineTextAlignment(.center)
                         .lineLimit(3)
-                        .padding(.top, 4)
+                        .padding(.horizontal, 24)
                 }
             }
+        }
+        .frame(maxWidth: .infinity)
+    }
 
-            statStrip(stats)
+    private func infoPill(_ label: Text, icon: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon).font(.app(.caption2, .semibold))
+            label.font(.app(.caption, .semibold))
+        }
+        .foregroundStyle(Theme.textSecondary)
+        .padding(.horizontal, 10)
+        .frame(minHeight: 26)
+        .background(Theme.fieldBackground, in: .capsule)
+    }
 
-            Divider()
+    /// The four counts as icon tiles in one card.
+    private var statsCard: some View {
+        let stats = stats
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(spacing: 16))
+            : AnyLayout(HStackLayout(spacing: 0))
+        return layout {
+            statTile(icon: "globe.americas.fill", value: stats.countries, label: "Countries")
+            statTile(icon: "mappin.and.ellipse", value: stats.places, label: "Places")
+            statTile(icon: "suitcase.fill", value: stats.trips, label: "Trips")
+            statTile(icon: "calendar", value: stats.days, label: "Days away")
+        }
+        .frame(maxWidth: .infinity)
+        .panelPadding(horizontal: 12, vertical: 16)
+        .homePanel(cornerRadius: Theme.cardRadius)
+    }
 
-            moneyStrip(stats)
+    private func statTile(icon: String, value: Int, label: LocalizedStringKey) -> some View {
+        VStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.app(.subheadline, .semibold))
+                .foregroundStyle(Theme.accent)
+                .frame(width: 36, height: 36)
+                .background(Theme.accent.opacity(0.12), in: .circle)
+            Text(verbatim: "\(value)")
+                .font(.app(.title2, .bold))
+                .monospacedDigit()
+            Text(label)
+                .font(.app(.caption2, .semibold))
+                .foregroundStyle(Theme.textSecondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
+    }
 
-            if !milestones(for: stats).isEmpty {
-                FlowLayout(spacing: 8) {
-                    ForEach(milestones(for: stats), id: \.self) { milestone in
-                        Text(LocalizedStringKey(milestone))
-                            .font(.app(.caption, .semibold))
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(Theme.accent.opacity(0.15), in: .capsule)
+    /// Spent, plus the standing as two arrow chips — the same figures the Trips tab
+    /// reports (`homeTotals`), in the user's home currency.
+    private var moneyCard: some View {
+        let stats = stats
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Spent on trips")
+                        .font(.app(.caption2, .semibold))
+                        .textCase(.uppercase)
+                        .tracking(0.4)
+                        .foregroundStyle(.secondary)
+                    (Text(verbatim: formattedMoney(stats.spent, displayCurrency))
+                        .font(.app(size: 28, weight: .bold))
+                     + Text(verbatim: " " + displayCurrency)
+                        .font(.app(.footnote, .semibold))
+                        .foregroundStyle(.secondary))
+                        .monospacedDigit()
+                }
+                Spacer()
+                Image(systemName: stats.owe > 0 ? "exclamationmark" : "checkmark")
+                    .font(.app(.subheadline, .bold))
+                    .foregroundStyle(stats.owe > 0 ? Theme.negative : Theme.positive)
+                    .frame(width: 36, height: 36)
+                    .background((stats.owe > 0 ? Theme.negative : Theme.positive).opacity(0.14), in: .circle)
+                    .accessibilityLabel(stats.owe > 0 ? "You still owe money" : "You're settled up")
+            }
+            let chips = dynamicTypeSize.isAccessibilitySize
+                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+                : AnyLayout(HStackLayout(spacing: 8))
+            chips {
+                moneyChip(Text(verbatim: formattedMoney(stats.owed, displayCurrency)) + Text(" owed to you"),
+                          icon: "arrow.up", color: Theme.positive)
+                moneyChip(Text(verbatim: formattedMoney(stats.owe, displayCurrency)) + Text(" you owe"),
+                          icon: "arrow.down", color: Theme.negative)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .panelPadding(horizontal: 16, vertical: 16)
+        .homePanel(cornerRadius: Theme.cardRadius)
+    }
+
+    private func moneyChip(_ label: Text, icon: String, color: Color) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon).font(.app(.caption2, .bold))
+            label.font(.app(.caption, .semibold)).monospacedDigit()
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 10)
+        .frame(minHeight: 26)
+        .background(color.opacity(0.12), in: .capsule)
+        .accessibilityElement(children: .combine)
+    }
+
+    /// Milestones the numbers have already earned, as a rail of medal pills.
+    @ViewBuilder
+    private var milestoneRail: some View {
+        let earned = milestones(for: stats)
+        if !earned.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(earned, id: \.self) { milestone in
+                        HStack(spacing: 6) {
+                            Image(systemName: "star.fill")
+                                .font(.app(size: 9, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 18, height: 18)
+                                .background(
+                                    LinearGradient(colors: [Color(hex: 0xF59E0B), Color(hex: 0xFBBF24)],
+                                                   startPoint: .topLeading, endPoint: .bottomTrailing),
+                                    in: .circle
+                                )
+                            Text(LocalizedStringKey(milestone))
+                                .font(.app(.caption, .semibold))
+                        }
+                        .padding(.leading, 6)
+                        .padding(.trailing, 12)
+                        .frame(minHeight: 30)
+                        .background(Theme.surface, in: .capsule)
+                        .overlay(Capsule().stroke(Theme.separator, lineWidth: 0.5))
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16)
             }
-        }
-        .frame(maxWidth: .infinity)
-        .padding(16)
-        .readableSurface(cornerRadius: Theme.cardRadius)
-    }
-
-    private func statStrip(_ stats: ProfileStats) -> some View {
-        let layout = dynamicTypeSize.isAccessibilitySize
-            ? AnyLayout(VStackLayout(spacing: 12))
-            : AnyLayout(HStackLayout(spacing: 0))
-        return layout {
-            statColumn(value: "\(stats.countries)", label: "Countries")
-            if !dynamicTypeSize.isAccessibilitySize { stripDivider }
-            statColumn(value: "\(stats.places)", label: "Places")
-            if !dynamicTypeSize.isAccessibilitySize { stripDivider }
-            statColumn(value: "\(stats.trips)", label: "Trips")
-            if !dynamicTypeSize.isAccessibilitySize { stripDivider }
-            statColumn(value: "\(stats.days)", label: "Days away")
+            .padding(.horizontal, -16)
+            .accessibilityLabel("Milestones")
         }
     }
 
-    /// Spent, owed and owing side by side. All three legs are always shown so the strip
-    /// keeps the same shape as the counts above it — the Trips tab owns the full balance
-    /// card (budgets, per-trip breakdown); this is the standing only.
-    private func moneyStrip(_ stats: ProfileStats) -> some View {
-        let layout = dynamicTypeSize.isAccessibilitySize
-            ? AnyLayout(VStackLayout(spacing: 12))
-            : AnyLayout(HStackLayout(spacing: 0))
-        return layout {
-            moneyColumn(label: "Spent", amount: stats.spent, color: .primary)
-            if !dynamicTypeSize.isAccessibilitySize { stripDivider }
-            moneyColumn(label: "You're owed", amount: stats.owed, color: Theme.positive)
-            if !dynamicTypeSize.isAccessibilitySize { stripDivider }
-            moneyColumn(label: "You owe", amount: stats.owe, color: Theme.negative)
-        }
-    }
-
-    private var stripDivider: some View {
-        Divider().frame(height: 28)
-    }
-
-    private func statColumn(value: String, label: LocalizedStringKey) -> some View {
-        VStack(spacing: 2) {
-            Text(verbatim: value)
+    /// Section heading: title, a quiet count, and an optional trailing control.
+    private func sectionHeading(_ title: LocalizedStringKey, count: Int,
+                                @ViewBuilder trailing: () -> some View = { EmptyView() }) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(title)
                 .font(.app(.title3, .bold))
-                .monospacedDigit()
-            Text(label)
-                .font(.app(.caption2))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+            if count > 0 {
+                Text(verbatim: "\(count)")
+                    .font(.app(.footnote, .semibold))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            Spacer()
+            trailing()
         }
-        .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
     }
 
-    private func moneyColumn(label: LocalizedStringKey, amount: Double, color: Color) -> some View {
-        VStack(spacing: 2) {
-            Text(verbatim: formattedMoney(amount, displayCurrency))
-                .font(.app(.headline))
-                .foregroundStyle(color)
-                .monospacedDigit()
-                .multilineTextAlignment(.center)
-            Text(label)
-                .font(.app(.caption2))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity)
-        .accessibilityElement(children: .combine)
+    private func headingDisc(_ icon: String) -> some View {
+        Image(systemName: icon)
+            .font(.app(.footnote, .bold))
+            .foregroundStyle(.primary)
+            .frame(width: 30, height: 30)
+            .background(Theme.fieldBackground, in: .circle)
     }
 
     /// Milestones the numbers have already earned. English keys the catalog localizes.
@@ -447,21 +532,32 @@ struct ProfileDetailView: View {
     private var travelMapCard: some View {
         let places = mappedPlaces
         if !places.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Your map")
-                    .font(.app(.title3, .bold))
-
-                Map(initialPosition: .region(region(for: places)), interactionModes: [.pan, .zoom]) {
-                    ForEach(places) { place in
-                        Marker(place.name, systemImage: "mappin", coordinate: place.coordinate)
-                            .tint(Theme.accent)
-                    }
+            let stats = stats
+            Map(initialPosition: .region(region(for: places)), interactionModes: [.pan, .zoom]) {
+                ForEach(places) { place in
+                    Marker(place.name, systemImage: "mappin", coordinate: place.coordinate)
+                        .tint(Theme.accent)
                 }
-                .frame(height: 220)
-                .clipShape(.rect(cornerRadius: 20))
-                .accessibilityLabel("Map of the places you've been")
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: 220)
+            .clipShape(.rect(cornerRadius: 24))
+            .overlay(alignment: .topLeading) {
+                HStack(spacing: 5) {
+                    Image(systemName: "mappin.and.ellipse")
+                        .font(.app(.caption2, .semibold))
+                        .foregroundStyle(Theme.accent)
+                    Text("\(stats.places) places · \(stats.countries) countries")
+                        .font(.app(.caption, .semibold))
+                        .monospacedDigit()
+                }
+                .padding(.horizontal, 10)
+                .frame(minHeight: 26)
+                .background(Theme.surface, in: .capsule)
+                .shadow(color: Theme.elevatedShadow, radius: 4, y: 2)
+                .padding(12)
+            }
+            .shadow(color: Theme.elevatedShadow, radius: 8, y: 4)
+            .accessibilityLabel("Map of the places you've been")
         }
     }
 
@@ -489,12 +585,11 @@ struct ProfileDetailView: View {
         let mapPlaces = store.userProfile.savedMapPlaces
         let destinations = savedDestinations
         if !mapPlaces.isEmpty || !destinations.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Saved")
-                    .font(.app(.title3, .bold))
+            VStack(alignment: .leading, spacing: 12) {
+                sectionHeading("Saved", count: mapPlaces.count + destinations.count)
 
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 14) {
+                    HStack(spacing: 12) {
                         ForEach(destinations) { destination in
                             SavedDestinationCard(destination: destination)
                                 .contextMenu {
@@ -528,9 +623,12 @@ struct ProfileDetailView: View {
 
     @ViewBuilder
     private var placesSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Where I've been")
-                .font(.app(.title3, .bold))
+        VStack(alignment: .leading, spacing: 12) {
+            sectionHeading("Where I've been", count: visitedPlaces.count) {
+                Button { showEditor = true } label: { headingDisc("plus") }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Add visited places")
+            }
 
             if visitedPlaces.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
@@ -545,7 +643,7 @@ struct ProfileDetailView: View {
                 // Full-bleed horizontal rail of passport-style cards (negative padding
                 // cancels the parent's inset so the row runs edge to edge like a gallery).
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 14) {
+                    HStack(spacing: 12) {
                         ForEach(visitedPlaces) { VisitedPlaceCard(place: $0) }
                     }
                     .padding(.horizontal, 16)
@@ -558,9 +656,8 @@ struct ProfileDetailView: View {
 
     @ViewBuilder
     private var tripsSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("My trips")
-                .font(.app(.title3, .bold))
+        VStack(alignment: .leading, spacing: 12) {
+            sectionHeading("My trips", count: myTrips.count)
 
             // The section used to vanish entirely when empty, unlike Places and Friends
             // above it, so a new account's profile just stopped mid-page.
@@ -570,7 +667,7 @@ struct ProfileDetailView: View {
                     .foregroundStyle(.secondary)
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 14) {
+                    HStack(spacing: 12) {
                         ForEach(myTrips) { trip in
                             Button { selectedTrip = trip } label: {
                                 ProfileTripCard(trip: trip)

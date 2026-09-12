@@ -10,19 +10,21 @@ struct VisitedPlaceCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            PlaceStampBadge(place: place)
-                .frame(width: 168, height: 176)
+        VStack(spacing: 4) {
+            PlaceStampBadge(place: place, size: 128, compact: true)
+                .frame(width: 136, height: 136)
 
-            Text(verbatim: place.name)
-                .font(.app(.subheadline, .semibold))
+            Text(verbatim: place.shortName)
+                .font(.app(.footnote, .semibold))
                 .lineLimit(1)
+                .padding(.top, 4)
             Text(verbatim: monthYear ?? " ")
                 .font(.app(.caption))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
-        .frame(width: 168, alignment: .leading)
+        .frame(width: 128)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -32,26 +34,30 @@ struct SavedDestinationCard: View {
     let destination: Destination
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            LinearGradient(colors: destination.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
-                .overlay(alignment: .bottomTrailing) {
-                    Image(systemName: destination.symbol)
-                        .font(.app(size: 30, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.35))
-                        .padding(12)
+        VStack(alignment: .leading, spacing: 6) {
+            DestinationPhoto(destination: destination, symbolSize: 36)
+                .frame(width: 120, height: 120)
+                .clipShape(.rect(cornerRadius: 22))
+                .overlay(alignment: .topTrailing) {
+                    Image(systemName: "heart.fill")
+                        .font(.app(.caption2, .bold))
+                        .foregroundStyle(.red)
+                        .frame(width: 26, height: 26)
+                        .background(Theme.surface, in: .circle)
+                        .padding(8)
+                        .accessibilityHidden(true)
                 }
-                .frame(width: 168, height: 110)
-                .clipShape(.rect(cornerRadius: 18))
 
-            Text(verbatim: destination.title)
-                .font(.app(.subheadline, .semibold))
+            Text(verbatim: destination.city)
+                .font(.app(.footnote, .semibold))
                 .lineLimit(1)
-            Text(verbatim: "\(destination.city), \(destination.country)")
+            Text("\(destination.country) · \(destination.days) days")
                 .font(.app(.caption))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
-        .frame(width: 168, alignment: .leading)
+        .frame(width: 120, alignment: .leading)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -60,25 +66,36 @@ struct SavedMapPlaceCard: View {
     let place: SavedMapPlace
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            RoundedRectangle(cornerRadius: 18)
-                .fill(Theme.accent.opacity(0.15))
+        VStack(alignment: .leading, spacing: 6) {
+            RoundedRectangle(cornerRadius: 22)
+                .fill(Theme.accent.opacity(0.12))
                 .overlay {
-                    Image(systemName: "mappin.circle.fill")
+                    Image(systemName: "mappin.and.ellipse")
                         .font(.app(size: 34, weight: .semibold))
                         .foregroundStyle(Theme.accent)
                 }
-                .frame(width: 168, height: 110)
+                .overlay(alignment: .bottomLeading) {
+                    if !place.category.isEmpty {
+                        Text(verbatim: place.category.capitalized)
+                            .font(.app(.caption2, .semibold))
+                            .padding(.horizontal, 8)
+                            .frame(minHeight: 22)
+                            .background(Theme.surface, in: .capsule)
+                            .padding(8)
+                    }
+                }
+                .frame(width: 120, height: 120)
 
             Text(verbatim: place.name)
-                .font(.app(.subheadline, .semibold))
+                .font(.app(.footnote, .semibold))
                 .lineLimit(1)
-            Text(verbatim: place.address ?? place.category.capitalized)
+            Text(verbatim: place.address ?? " ")
                 .font(.app(.caption))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
-        .frame(width: 168, alignment: .leading)
+        .frame(width: 120, alignment: .leading)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -88,35 +105,43 @@ struct ProfileTripCard: View {
     let trip: Trip
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            TripCoverView(trip: trip)
-                .frame(width: 220, height: 148)
-                .clipShape(.rect(cornerRadius: 18))
-
-            Text(verbatim: trip.name)
-                .font(.app(.subheadline, .semibold))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-
-            if let location = trip.location?.trimmingCharacters(in: .whitespaces), !location.isEmpty {
-                Label {
-                    Text(verbatim: location)
-                } icon: {
-                    Image(systemName: "mappin.and.ellipse")
+        TripCoverView(trip: trip)
+            .frame(width: 210, height: 150)
+            .overlay {
+                LinearGradient(stops: [.init(color: .clear, location: 0.4),
+                                       .init(color: .black.opacity(0.7), location: 1)],
+                               startPoint: .top, endPoint: .bottom)
+            }
+            .overlay(alignment: .bottomLeading) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(verbatim: trip.name)
+                        .font(.app(.callout, .bold))
+                        .lineLimit(1)
+                    HStack(spacing: 5) {
+                        if let location = trip.location?.trimmingCharacters(in: .whitespaces), !location.isEmpty {
+                            coverChip(Text(verbatim: location), icon: "mappin.and.ellipse")
+                        }
+                        if let dates = trip.dateRangeText {
+                            coverChip(Text(verbatim: dates), icon: nil)
+                        }
+                    }
                 }
-                .font(.app(.caption))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+                .foregroundStyle(.white)
+                .padding(12)
             }
+            .clipShape(.rect(cornerRadius: 22))
+            .shadow(color: Theme.elevatedShadow, radius: 8, y: 4)
+            .accessibilityElement(children: .combine)
+    }
 
-            if let dates = trip.dateRangeText {
-                Text(verbatim: dates)
-                    .font(.app(.caption))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
+    private func coverChip(_ label: Text, icon: String?) -> some View {
+        HStack(spacing: 4) {
+            if let icon { Image(systemName: icon).font(.app(size: 9, weight: .bold)) }
+            label.font(.app(.caption2, .semibold)).lineLimit(1)
         }
-        .frame(width: 220, alignment: .leading)
+        .padding(.horizontal, 7)
+        .frame(minHeight: 22)
+        .background(.white.opacity(0.22), in: .capsule)
     }
 }
 

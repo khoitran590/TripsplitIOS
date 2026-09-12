@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreImage
 import UIKit
 
 /// The invitation sent with a shared profile, whether it goes out as the card picture or
@@ -18,6 +19,8 @@ struct ShareCardItem: Identifiable {
     let avatarPath: String?
     let stats: ProfileStats
     let places: [VisitedPlace]
+    /// The profile deep link the card's QR code encodes; nil until the token has loaded.
+    let shareURL: URL?
 }
 
 /// The cover a share card is printed on, taken from real passport covers — the object
@@ -146,17 +149,19 @@ struct ProfileShareCard: View {
     let places: [VisitedPlace]
     /// The passport cover the page is bound in: its board, its paper and its foil.
     var cover: ShareCardCover = .unitedStates
+    /// Encoded as the QR code in the page's corner, so a posted card actually connects.
+    var shareURL: URL?
 
     /// 4:5. Deliberately not the old 0.61: that was too tall for a feed, which cropped it,
     /// and too short for a story, which letterboxed it. `ImageRenderer` rasterizes at 3x,
     /// so the shared picture is 1140x1410.
-    private let width: CGFloat = 380
-    private let height: CGFloat = 470
+    private let width: CGFloat = 360
+    private let height: CGFloat = 450
     /// How much cover shows around the mounted page — the border of the passport's own
     /// board, and the first thing the card is read by.
     private let margin: CGFloat = 14
     /// The deeper band of cover above the page, carrying the foil a cover is embossed with.
-    private let coverBand: CGFloat = 30
+    private let coverBand: CGFloat = 42
 
     /// The page is printed in the cover's deepest tone on the cover's own stock, so a Japan
     /// cover prints a red-inked page on warm paper and a Mexico cover a green-inked one on
@@ -184,9 +189,9 @@ struct ProfileShareCard: View {
     /// them reads as a chart rather than as a travel record.
     private var stampLayout: [(x: CGFloat, y: CGFloat, size: CGFloat, tilt: Double)] {
         switch stamped.count {
-        case 1: [(0.50, 0.00, 106, -7)]
-        case 2: [(0.28, -0.06, 100, -10), (0.72, 0.08, 92, 7)]
-        default: [(0.20, -0.07, 98, -11), (0.49, 0.11, 88, 6), (0.79, -0.09, 94, -4)]
+        case 1: [(0.50, 0.00, 100, -7)]
+        case 2: [(0.28, -0.05, 94, -10), (0.72, 0.07, 88, 7)]
+        default: [(0.19, -0.06, 92, -9), (0.50, 0.09, 84, 5), (0.81, -0.07, 90, -4)]
         }
     }
 
@@ -264,15 +269,15 @@ struct ProfileShareCard: View {
     /// `Text + Text` is deprecated, and translators leave a brand name alone inside a
     /// string anyway.
     private var coverWordmark: some View {
-        HStack(spacing: 9) {
+        HStack(spacing: 10) {
             foilRule
             Image(systemName: "globe")
-                .font(.system(size: 11, weight: .light))
+                .font(.system(size: 18, weight: .light))
                 .foregroundStyle(cover.foil.opacity(0.92))
-            Text("TripSplit · Travel passport")
-                .font(.system(size: 8.5, weight: .bold))
+            Text("Passport")
+                .font(.system(size: 11, weight: .heavy))
                 .textCase(.uppercase)
-                .tracking(2.2)
+                .tracking(4)
                 .foregroundStyle(cover.foil.opacity(0.92))
                 .fixedSize()
             foilRule
@@ -297,17 +302,16 @@ struct ProfileShareCard: View {
             VStack(alignment: .leading, spacing: 0) {
                 identity
                 counts
-                    .padding(.top, 14)
-                    .overlay(alignment: .top) { rule }
                     .padding(.top, 12)
+                    .overlay(alignment: .top) { rule }
+                    .padding(.top, 16)
                 visaBand
                 endorsements
-                    .overlay(alignment: .bottomTrailing) { ghostPortrait }
                     .padding(.bottom, 10)
                 machineReadableZone
             }
-            .padding(.horizontal, 14)
-            .padding(.top, 14)
+            .padding(.horizontal, 16)
+            .padding(.top, 16)
             .padding(.bottom, 12)
         }
     }
@@ -325,7 +329,7 @@ struct ProfileShareCard: View {
             ZStack {
                 ForEach(Array(stamped.enumerated()), id: \.offset) { index, place in
                     let spec = stampLayout[index]
-                    PlaceStampBadge(place: place, size: spec.size, page: page)
+                    PlaceStampBadge(place: place, size: spec.size, page: page, entryDate: place.date)
                         // Just off full strength: a stamp is ink pressed into paper, and
                         // at 100% it sits on top of the page as artwork rather than in it.
                         .opacity(0.94)
@@ -355,9 +359,7 @@ struct ProfileShareCard: View {
                 .tracking(1.5)
                 .foregroundStyle(page)
             Spacer()
-            // The type and issuing-state codes every data page opens with.
-            Text(verbatim: "TYPE P").font(document(8.5, .medium)).foregroundStyle(page.opacity(0.72))
-            Text(verbatim: "CODE \(cover.code)").font(document(8.5, .medium)).foregroundStyle(page.opacity(0.72))
+            Text(verbatim: cover.code).font(document(8.5, .medium)).foregroundStyle(page.opacity(0.72))
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
@@ -406,24 +408,31 @@ struct ProfileShareCard: View {
             VStack(alignment: .leading, spacing: 12) {
                 field("Name / Nom") {
                     Text(verbatim: name.uppercased())
-                        .font(document(19, .bold))
+                        .font(document(20, .bold))
                         .foregroundStyle(ink)
                         .lineLimit(2)
                         .minimumScaleFactor(0.55)
                 }
-                // Paired into two columns rather than stacked down one: three short values
-                // in a single column left the page's whole upper right quarter empty, and
-                // a data page is a grid of fields, not a list of them.
-                HStack(alignment: .top, spacing: 10) {
+                HStack(alignment: .top, spacing: 12) {
                     field("Passport no.") { documentValue(Text(verbatim: "TS\(serial)")) }
-                    field("Authority / Autorité") { documentValue(Text(cover.label)) }
-                }
-                HStack(alignment: .top, spacing: 10) {
                     field("Issued / Délivré") { documentValue(Text(verbatim: monthYear(issued))) }
-                    field("Expires / Expire") { documentValue(Text(verbatim: monthYear(expires))) }
                 }
+                signature
             }
+            .padding(.top, 2)
         }
+    }
+
+    /// The bearer's signature: the name in a script face over a short rule.
+    private var signature: some View {
+        Text(verbatim: name)
+            .font(.custom("SnellRoundhand-Bold", size: 15))
+            .foregroundStyle(ink.opacity(0.8))
+            .lineLimit(1)
+            .minimumScaleFactor(0.6)
+            .padding(.bottom, 1)
+            .frame(width: 110, alignment: .leading)
+            .overlay(alignment: .bottom) { Rectangle().fill(ink.opacity(0.35)).frame(height: 0.8) }
     }
 
     /// A data-page value in one of the paired columns: allowed to shrink rather than wrap,
@@ -459,12 +468,12 @@ struct ProfileShareCard: View {
         }
         // Slightly shorter than it was: the cover band and margins take height off the
         // page, and the visa band is where that would otherwise have come from.
-        .frame(width: 80, height: 110)
+        .frame(width: 72, height: 94)
         .clipped()
         .overlay(Rectangle().strokeBorder(ink.opacity(0.32), lineWidth: 0.75))
         // Straddling the portrait's corner, the way a laminate seal is applied over the
         // photo's edge so the picture can't be swapped without breaking it.
-        .overlay(alignment: .bottomTrailing) { laminateSeal.offset(x: 13, y: 12) }
+        .overlay(alignment: .bottomTrailing) { laminateSeal.offset(x: 11, y: 10) }
     }
 
     /// The optically variable patch a laminated data page carries over its portrait: an
@@ -475,7 +484,7 @@ struct ProfileShareCard: View {
     /// document is monochrome by nature, and without this the card had no colour of its own
     /// beyond whatever the stamps happened to bring.
     private var laminateSeal: some View {
-        let diameter: CGFloat = 36
+        let diameter: CGFloat = 32
         return ZStack {
             Circle().fill(
                 AngularGradient(
@@ -498,41 +507,33 @@ struct ProfileShareCard: View {
         .opacity(0.72)
     }
 
-    /// The secondary portrait a data page repeats down beside the machine-readable zone,
-    /// printed faint and desaturated where the main one is neither.
-    ///
-    /// Only drawn when there is a photo: a second copy of the monogram would read as a
-    /// duplicated view rather than as a security feature.
-    @ViewBuilder
-    private var ghostPortrait: some View {
-        if let photo {
-            Image(uiImage: photo)
-                .resizable()
-                .scaledToFill()
-                .frame(width: 40, height: 54)
-                .clipped()
-                .grayscale(0.85)
-                .opacity(0.5)
-                .overlay(Rectangle().strokeBorder(ink.opacity(0.22), lineWidth: 0.5))
-                .offset(y: -10)
-        }
-    }
-
     /// Three counts, not the old four: `places` and `countries` answer nearly the same
     /// question, and the fourth column cost every number the size that makes it legible
     /// once the card is a thumbnail in a feed.
     private var counts: some View {
         HStack(spacing: 0) {
-            field("Countries / Pays", alignment: .center) { number(stats.countries) }
+            count(stats.countries, "Countries")
             countDivider
-            field("Trips / Voyages", alignment: .center) { number(stats.trips) }
+            count(stats.trips, "Trips")
             countDivider
-            field("Days / Jours", alignment: .center) { number(stats.days) }
+            count(stats.days, "Days")
         }
     }
 
+    private func count(_ value: Int, _ label: LocalizedStringKey) -> some View {
+        VStack(spacing: 2) {
+            number(value)
+            Text(label)
+                .font(.system(size: 7, weight: .semibold))
+                .textCase(.uppercase)
+                .tracking(0.9)
+                .foregroundStyle(ink.opacity(0.5))
+        }
+        .frame(maxWidth: .infinity)
+    }
+
     private var countDivider: some View {
-        Rectangle().fill(ink.opacity(0.2)).frame(width: 1, height: 34)
+        Rectangle().fill(ink.opacity(0.2)).frame(width: 1, height: 30)
     }
 
     private func number(_ value: Int) -> some View {
@@ -543,26 +544,52 @@ struct ProfileShareCard: View {
             .minimumScaleFactor(0.6)
     }
 
-    /// Flags and the overflow count on one line, under one label. Stacked as two rows it
-    /// took a third of the page's height to say very little, and every point it used came
-    /// out of the visa band above it. A profile with nowhere in it prints the label over an
-    /// empty value, which is what a passport with no endorsements yet looks like.
+    /// Flags on the left, the profile's QR code on the right. The QR is what makes a
+    /// posted card connect: scanning it opens this profile in the app.
     private var endorsements: some View {
-        field("Visas / Endorsements") {
-            HStack(alignment: .firstTextBaseline, spacing: 7) {
-                ForEach(flags, id: \.self) { flag in
-                    Text(verbatim: flag).font(.system(size: 17))
+        HStack(alignment: .bottom) {
+            field("Visas") {
+                HStack(spacing: 4) {
+                    ForEach(flags, id: \.self) { flag in
+                        Text(verbatim: flag).font(.system(size: 17))
+                    }
                 }
-                if places.count > stamped.count {
-                    Text("+\(places.count - stamped.count) more")
-                        .font(document(8.5))
+            }
+            if let qr = qrImage {
+                HStack(spacing: 8) {
+                    Text("Scan to\nadd me")
+                        .font(.system(size: 7, weight: .bold))
                         .textCase(.uppercase)
-                        .tracking(0.6)
-                        .foregroundStyle(ink.opacity(0.5))
-                        .padding(.leading, 2)
+                        .tracking(1.2)
+                        .multilineTextAlignment(.trailing)
+                        .foregroundStyle(ink.opacity(0.6))
+                    Image(uiImage: qr)
+                        .interpolation(.none)
+                        .resizable()
+                        .frame(width: 38, height: 38)
+                        .padding(3)
+                        .background(.white)
+                        .overlay(Rectangle().strokeBorder(ink.opacity(0.32), lineWidth: 0.75))
                 }
             }
         }
+    }
+
+    /// The share link as a QR code, printed in the page's ink. CoreImage's generator
+    /// draws at one point per module; the image is scaled up without interpolation.
+    private var qrImage: UIImage? {
+        guard let shareURL, let data = shareURL.absoluteString.data(using: .utf8),
+              let generator = CIFilter(name: "CIQRCodeGenerator") else { return nil }
+        generator.setValue(data, forKey: "inputMessage")
+        generator.setValue("M", forKey: "inputCorrectionLevel")
+        guard let code = generator.outputImage,
+              let tint = CIFilter(name: "CIFalseColor") else { return nil }
+        tint.setValue(code, forKey: kCIInputImageKey)
+        tint.setValue(CIColor(color: UIColor(ink)), forKey: "inputColor0")
+        tint.setValue(CIColor(color: .white), forKey: "inputColor1")
+        guard let output = tint.outputImage,
+              let cgImage = CIContext().createCGImage(output, from: output.extent) else { return nil }
+        return UIImage(cgImage: cgImage)
     }
 
     /// The two lines of chevrons every passport ends with — the most recognizable mark the
@@ -576,8 +603,8 @@ struct ProfileShareCard: View {
             Text(verbatim: mrz.first)
             Text(verbatim: mrz.second)
         }
-        .font(document(9, .medium))
-        .foregroundStyle(ink.opacity(0.82))
+        .font(document(8.5, .medium))
+        .foregroundStyle(ink.opacity(0.7))
         .lineLimit(1)
         .minimumScaleFactor(0.5)
     }
@@ -750,77 +777,93 @@ struct ProfileShareSheet: View {
     @AppStorage("shareCardCover") private var cover: ShareCardCover = .unitedStates
     /// Rasterized on appear and again whenever the cover changes.
     @State private var image: Image?
+    /// The same picture as `UIImage`, for saving to Photos.
+    @State private var rendered: UIImage?
+    @State private var didSave = false
     /// The portrait, resolved once — from this device's copy, or downloaded from Storage.
     @State private var photo: UIImage?
     @State private var didResolvePhoto = false
-    @State private var showCovers = false
     @Environment(TripStore.self) private var store
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                LinearGradient(colors: Theme.sheetGradient, startPoint: .top, endPoint: .bottom)
-                    .ignoresSafeArea()
-
-                VStack(spacing: 24) {
-                    Group {
-                        if let image {
-                            image
-                                .resizable()
-                                .scaledToFit()
-                        } else {
-                            // Holds the card's shape for the frame or two before the
-                            // renderer returns, so the sheet doesn't open on nothing —
-                            // cover, mounted page and header band, in that cover's colours.
-                            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                                .fill(LinearGradient(colors: cover.colors,
-                                                     startPoint: .topLeading,
-                                                     endPoint: .bottomTrailing))
-                                .overlay {
-                                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                        .fill(cover.paper)
-                                        .overlay(alignment: .top) {
-                                            Rectangle().fill(cover.ink).frame(height: 26)
-                                        }
-                                        .clipShape(.rect(cornerRadius: 5, style: .continuous))
-                                        .padding(.horizontal, 14)
-                                        .padding(.top, 30)
-                                        .padding(.bottom, 14)
-                                }
-                                .aspectRatio(0.81, contentMode: .fit)
-                        }
+            VStack(spacing: 28) {
+                Group {
+                    if let image {
+                        image
+                            .resizable()
+                            .scaledToFit()
+                    } else {
+                        // Holds the card's shape for the frame or two before the renderer
+                        // returns, in that cover's colours.
+                        RoundedRectangle(cornerRadius: 22, style: .continuous)
+                            .fill(LinearGradient(colors: cover.colors,
+                                                 startPoint: .topLeading,
+                                                 endPoint: .bottomTrailing))
+                            .aspectRatio(0.8, contentMode: .fit)
                     }
-                    .clipShape(.rect(cornerRadius: 24))
-                    .shadow(color: Theme.elevatedShadow, radius: 12, y: 6)
-                    .padding(.horizontal, 24)
+                }
+                .clipShape(.rect(cornerRadius: 22))
+                .shadow(color: Theme.elevatedShadow, radius: 16, y: 10)
+                .frame(maxWidth: 306)
+                .padding(.top, 8)
 
+                // Every cover in one row under the card, so a tap restyles it in place.
+                HStack(spacing: 10) {
+                    ForEach(ShareCardCover.allCases) { option in
+                        Button { cover = option } label: { coverSwatch(option) }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(option.label)
+                            .accessibilityAddTraits(cover == option ? [.isButton, .isSelected] : .isButton)
+                    }
+                }
+
+                Spacer(minLength: 0)
+
+                HStack(spacing: 10) {
                     if let image {
                         ShareLink(item: image,
                                   subject: Text("Add me on TripSplit"),
                                   message: Text(profileInvite),
                                   preview: SharePreview(Text(profileInvite), image: image)) {
-                            Label("Share Card", systemImage: "square.and.arrow.up")
-                                .font(.app(.subheadline, .semibold))
+                            Label("Share passport", systemImage: "square.and.arrow.up")
+                                .font(.app(.subheadline, .bold))
                                 .foregroundStyle(Theme.onAccent)
                                 .frame(maxWidth: .infinity)
-                                .padding(.vertical, 13)
+                                .frame(minHeight: 50)
                         }
                         .buttonStyle(.plain)
-                        .actionFill(tint: Theme.accent)
-                        .padding(.horizontal, 24)
+                        .background(
+                            LinearGradient(colors: [Theme.accent, Theme.accentSecondary],
+                                           startPoint: .topLeading, endPoint: .bottomTrailing),
+                            in: .capsule
+                        )
+                        .shadow(color: Theme.elevatedShadow, radius: 8, y: 4)
                     }
+                    Button {
+                        guard let rendered else { return }
+                        UIImageWriteToSavedPhotosAlbum(rendered, nil, nil, nil)
+                        didSave = true
+                    } label: {
+                        Image(systemName: didSave ? "checkmark" : "square.and.arrow.down")
+                            .font(.app(.subheadline, .bold))
+                            .foregroundStyle(didSave ? Theme.positive : .primary)
+                            .frame(width: 50, height: 50)
+                            .background(Theme.surface, in: .circle)
+                            .overlay(Circle().stroke(Theme.separator, lineWidth: 0.5))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(rendered == nil)
+                    .accessibilityLabel(didSave ? "Saved to Photos" : "Save to Photos")
                 }
+                .padding(.bottom, 8)
             }
-            .navigationTitle("Share Card")
+            .padding(.horizontal, 24)
+            .background { AppBackground() }
+            .navigationTitle("Travel passport")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button { showCovers = true } label: {
-                        Image(systemName: "paintpalette")
-                    }
-                    .accessibilityLabel("Card cover")
-                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
@@ -828,20 +871,40 @@ struct ProfileShareSheet: View {
             // Rendered with whatever portrait is in hand so the sheet fills immediately,
             // then again if a cloud-only avatar had to be downloaded first.
             .task(id: cover) {
-                image = render()
+                didSave = false
+                render()
                 guard !didResolvePhoto else { return }
                 photo = await resolvePhoto()
                 didResolvePhoto = true
-                if photo != nil { image = render() }
-            }
-            .sheet(isPresented: $showCovers) {
-                ShareCardCoverPicker(cover: $cover)
-                    // Short enough that the card stays visible above the picker, so each
-                    // cover is judged on the card rather than on a swatch.
-                    .presentationDetents([.height(320)])
-                    .presentationBackgroundInteraction(.enabled(upThrough: .height(320)))
+                if photo != nil { render() }
             }
         }
+    }
+
+    /// A cover in miniature: board, foil emblem, and the page with its inked header.
+    private func coverSwatch(_ option: ShareCardCover) -> some View {
+        let isSelected = cover == option
+        return RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(LinearGradient(colors: option.colors, startPoint: .topLeading, endPoint: .bottomTrailing))
+            .frame(width: 44, height: 56)
+            .overlay {
+                VStack(spacing: 3) {
+                    Circle().strokeBorder(option.foil, lineWidth: 1).frame(width: 8, height: 8)
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(option.paper)
+                        .overlay(alignment: .top) { Rectangle().fill(option.ink).frame(height: 5) }
+                        .clipShape(.rect(cornerRadius: 3, style: .continuous))
+                }
+                .padding(.horizontal, 6)
+                .padding(.top, 7)
+                .padding(.bottom, 6)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .stroke(isSelected ? Theme.accent : .clear, lineWidth: 2.5)
+                    .padding(-3)
+            }
+            .shadow(color: Theme.elevatedShadow, radius: 4, y: 2)
     }
 
     /// Rasterizes the card at 3x so it stays sharp in a photo library or a message
@@ -849,18 +912,20 @@ struct ProfileShareSheet: View {
     /// cover — and the renderer would otherwise resolve the stamps' adaptive colors
     /// against whatever appearance the app happens to be in.
     @MainActor
-    private func render() -> Image? {
+    private func render() {
         let content = ProfileShareCard(
             name: card.name,
             photo: photo,
             stats: card.stats,
             places: card.places,
-            cover: cover
+            cover: cover,
+            shareURL: card.shareURL
         )
         let renderer = ImageRenderer(content: content.environment(\.colorScheme, .light))
         renderer.scale = 3
-        guard let uiImage = renderer.uiImage else { return nil }
-        return Image(uiImage: uiImage)
+        guard let uiImage = renderer.uiImage else { return }
+        rendered = uiImage
+        image = Image(uiImage: uiImage)
     }
 
     /// The portrait, the same way `AvatarView` finds one: this device's copy first, then

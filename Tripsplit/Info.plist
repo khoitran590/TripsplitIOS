@@ -13,6 +13,8 @@
 			</array>
 		</dict>
 	</array>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Saves your travel passport card to your photo library.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>TripSplit uses your location to show nearby places and center the travel map.</string>
 	<key>UILaunchScreen</key>

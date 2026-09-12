@@ -320,72 +320,91 @@ struct FriendsSection: View {
     var body: some View {
         // 10, matching the other Profile sections: a heading 14pt off its own content but
         // only 18 off the previous section floated between the two.
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("Friends")
                     .font(.app(.title3, .bold))
+                if !friends.friends.isEmpty {
+                    Text(verbatim: "\(friends.friends.count)")
+                        .font(.app(.footnote, .semibold))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
                 Spacer()
                 NavigationLink {
                     FriendsListView()
                 } label: {
-                    HStack(spacing: 4) {
-                        if !friends.friends.isEmpty {
-                            Text(verbatim: "\(friends.friends.count)")
-                                .font(.app(.subheadline, .semibold))
-                        }
-                        Text("See all")
-                            .font(.app(.subheadline, .semibold))
-                    }
-                    .foregroundStyle(Theme.accent)
+                    Image(systemName: "chevron.right")
+                        .font(.app(.footnote, .bold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 30, height: 30)
+                        .background(Theme.fieldBackground, in: .circle)
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("See all friends")
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isHeader)
+
+            ForEach(friends.incoming) { request in
+                RequestRow(request: request)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .readableSurface(cornerRadius: Theme.cardRadius)
             }
 
-            if !friends.incoming.isEmpty {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Requests")
-                        .font(.app(.subheadline, .semibold))
-                        .foregroundStyle(.secondary)
-                    ForEach(friends.incoming) { request in
-                        RequestRow(request: request)
-                    }
-                }
-                .padding(14)
-                .readableSurface(cornerRadius: Theme.cardRadius)
-            }
-
-            if friends.friends.isEmpty {
-                Text("Share your profile to connect with travel buddies. Friends you add show up here.")
-                    .font(.app(.subheadline))
-                    .foregroundStyle(.secondary)
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 16) {
-                        ForEach(friends.friends) { friend in
-                            Button { onOpenProfile(friend.shareToken) } label: {
-                                VStack(spacing: 8) {
-                                    AvatarView(person: friend.person, size: 62)
-                                    Text(verbatim: friend.name)
-                                        .font(.app(.caption, .medium))
-                                        .foregroundStyle(.primary)
-                                        .lineLimit(1)
-                                        .frame(width: 72)
-                                }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 14) {
+                    if let url = friends.shareURL() {
+                        ShareLink(item: url) {
+                            VStack(spacing: 6) {
+                                Image(systemName: "plus")
+                                    .font(.app(.title3, .semibold))
+                                    .foregroundStyle(Theme.accent)
+                                    .frame(width: 60, height: 60)
+                                    .overlay(Circle().stroke(style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+                                        .foregroundStyle(.secondary))
+                                Text("Invite")
+                                    .font(.app(.caption, .medium))
+                                    .foregroundStyle(Theme.accent)
+                                    .lineLimit(1)
+                                    .frame(width: 72)
                             }
-                            .buttonStyle(.plain)
-                            // `FriendsStore.removeFriend` existed with no way to reach it
-                            // from anywhere in the app.
-                            .contextMenu {
-                                Button("View Profile") { onOpenProfile(friend.shareToken) }
-                                Button("Remove Friend", role: .destructive) {
-                                    pendingRemoval = friend
-                                }
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Invite a friend")
+                    }
+                    ForEach(friends.friends) { friend in
+                        Button { onOpenProfile(friend.shareToken) } label: {
+                            VStack(spacing: 6) {
+                                AvatarView(person: friend.person, size: 60)
+                                Text(verbatim: friend.name)
+                                    .font(.app(.caption, .medium))
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
+                                    .frame(width: 72)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        // `FriendsStore.removeFriend` existed with no way to reach it
+                        // from anywhere in the app.
+                        .contextMenu {
+                            Button("View Profile") { onOpenProfile(friend.shareToken) }
+                            Button("Remove Friend", role: .destructive) {
+                                pendingRemoval = friend
                             }
                         }
                     }
-                    .padding(.horizontal, 16)
+                    if friends.friends.isEmpty {
+                        Text("Share your profile to connect with travel buddies. Friends you add show up here.")
+                            .font(.app(.subheadline))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 240, alignment: .leading)
+                    }
                 }
-                .padding(.horizontal, -16)
+                .padding(.horizontal, 16)
             }
+            .padding(.horizontal, -16)
 
             // Requests the user sent. They were fetched into `friends.outgoing` and then
             // never rendered, so a sent request looked like it had gone nowhere.
@@ -434,9 +453,14 @@ private struct RequestRow: View {
     var body: some View {
         HStack(spacing: 12) {
             AvatarView(person: request.person, size: 40)
-            Text(verbatim: request.name)
-                .font(.app(.subheadline, .medium))
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: request.name)
+                    .font(.app(.subheadline, .semibold))
+                    .lineLimit(1)
+                Text("wants to connect")
+                    .font(.app(.caption))
+                    .foregroundStyle(.secondary)
+            }
             Spacer()
             if busy {
                 ProgressView()
