@@ -350,7 +350,7 @@ struct FriendsSection: View {
                     }
                 }
                 .padding(14)
-                .glassEffect(.regular, in: .rect(cornerRadius: 20))
+                .readableSurface(cornerRadius: Theme.cardRadius)
             }
 
             if friends.friends.isEmpty {
@@ -408,7 +408,7 @@ struct FriendsSection: View {
                     }
                 }
                 .padding(14)
-                .glassEffect(.regular, in: .rect(cornerRadius: 20))
+                .readableSurface(cornerRadius: Theme.cardRadius)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -633,7 +633,7 @@ struct FriendsListView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+        .readableSurface(cornerRadius: Theme.cardRadius)
     }
 
     private func section<Content: View>(_ title: LocalizedStringKey,
@@ -646,7 +646,7 @@ struct FriendsListView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+        .readableSurface(cornerRadius: Theme.cardRadius)
     }
 
     private func add() {
@@ -783,7 +783,7 @@ struct SharedProfileView: View {
                         .font(.app(.body))
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(16)
-                        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+                        .readableSurface(cornerRadius: Theme.cardRadius)
                 }
 
                 if let dob = profile.dateOfBirth {
@@ -797,7 +797,7 @@ struct SharedProfileView: View {
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 14)
-                    .glassEffect(.regular, in: .rect(cornerRadius: 20))
+                    .readableSurface(cornerRadius: Theme.cardRadius)
                 }
 
                 if !profile.visitedPlaces.isEmpty {
@@ -850,14 +850,14 @@ struct SharedProfileView: View {
                 .foregroundStyle(Theme.positive)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
-                .glassEffect(.regular, in: .capsule)
+                .controlSurface(in: .capsule)
         case "requested":
             Label("Request sent", systemImage: "clock")
                 .font(.app(.subheadline, .semibold))
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
-                .glassEffect(.regular, in: .capsule)
+                .controlSurface(in: .capsule)
         default:
             Button {
                 actionBusy = true
@@ -880,7 +880,7 @@ struct SharedProfileView: View {
                 .padding(.vertical, 12)
             }
             .buttonStyle(.plain)
-            .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+            .actionFill(tint: Theme.accent)
             .disabled(actionBusy)
         }
     }

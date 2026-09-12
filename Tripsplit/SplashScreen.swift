@@ -26,9 +26,12 @@ struct RootView: View {
         if isUITest {
             UserDefaults.standard.set(AppearancePreference.light.rawValue, forKey: "appearancePreference")
             UserDefaults.standard.set(0.0, forKey: "navbarTransparency")
-            UserDefaults.standard.set(AppTheme.classic.rawValue, forKey: "appTheme")
+            let requestedTheme = arguments.firstIndex(of: "-ui-test-theme").flatMap { index in
+                arguments.indices.contains(index + 1) ? AppTheme(rawValue: arguments[index + 1]) : nil
+            } ?? .classic
+            UserDefaults.standard.set(requestedTheme.rawValue, forKey: "appTheme")
             UserDefaults.standard.set(AppFontChoice.system.rawValue, forKey: "appFont")
-            ThemeManager.shared.selection = .classic
+            ThemeManager.shared.selection = requestedTheme
             FontManager.shared.selection = .system
         }
 

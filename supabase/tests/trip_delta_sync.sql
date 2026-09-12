@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(19);
+select plan(32);
 
 insert into auth.users (id, email) values
     ('a2000000-0000-0000-0000-000000000001', 'delta-owner@example.com'),
@@ -22,7 +22,7 @@ set local role authenticated;
 select lives_ok($$select pg_temp.save(jsonb_build_object('metadata', jsonb_build_object(
     'id', 'b2000000-0000-0000-0000-000000000001', 'name', 'Delta trip', 'currencyCode', 'USD',
     'creatorID', 'a2000000-0000-0000-0000-000000000001',
-    'members', '[{"id":"a2000000-0000-0000-0000-000000000001"},{"id":"a2000000-0000-0000-0000-000000000002"}]'::jsonb),
+    'members', '[{"id":"a2000000-0000-0000-0000-000000000001"},{"id":"a2000000-0000-0000-0000-000000000002"},{"id":"a2000000-0000-0000-0000-000000000004"}]'::jsonb),
     'expenses', jsonb_build_array(pg_temp.expense('c2000000-0000-0000-0000-000000000001',
         'a2000000-0000-0000-0000-000000000001', 10))))$$, 'delta creates a trip and expense');
 reset role;
@@ -57,6 +57,52 @@ select is((select name from public.trips where id = 'b2000000-0000-0000-0000-000
     'Delta trip', 'omitted metadata stays unchanged');
 set local role authenticated;
 
+select set_config('request.jwt.claims', '{"sub":"a2000000-0000-0000-0000-000000000002","role":"authenticated"}', true);
+select lives_ok($$select pg_temp.save('{"settlements":{"a2000000-0000-0000-0000-000000000002->a2000000-0000-0000-0000-000000000001":[
+    {"id":"e2000000-0000-0000-0000-000000000001","amount":12,"method":"Cash","note":"Paid","status":"pending","date":"2026-09-01T12:00:00Z"}]}}')$$,
+    'debtor creates a pending settlement');
+select lives_ok($$select pg_temp.save('{"settlements":{"a2000000-0000-0000-0000-000000000002->a2000000-0000-0000-0000-000000000001":[
+    {"id":"e2000000-0000-0000-0000-000000000001","amount":12,"method":"Cash","note":"Changed on retry","status":"pending","date":"2026-09-01T12:00:00Z"}]}}')$$,
+    'retrying a pending settlement is idempotent');
+reset role;
+select is((select payload->>'note' from public.settlement_records where id = 'e2000000-0000-0000-0000-000000000001'),
+    'Paid', 'a same-state retry cannot change settlement details');
+
+set local role authenticated;
+select lives_ok($$select pg_temp.save('{"settlements":{"a2000000-0000-0000-0000-000000000002->a2000000-0000-0000-0000-000000000004":[
+    {"id":"e2000000-0000-0000-0000-000000000005","amount":6,"method":"Cash App","note":"Guest is offline","status":"pending","selfApproved":false,"date":"2026-09-01T12:00:00Z"}]}}')$$,
+    'debtor records a payment for an unavailable creditor');
+select lives_ok($$select pg_temp.save('{"settlements":{"a2000000-0000-0000-0000-000000000002->a2000000-0000-0000-0000-000000000004":[
+    {"id":"e2000000-0000-0000-0000-000000000005","amount":6,"method":"Cash App","note":"Guest is offline","status":"confirmed","selfApproved":true,"date":"2026-09-01T12:00:00Z"}]}}')$$,
+    'debtor explicitly self-approves after group agreement');
+reset role;
+select is((select payload->>'selfApprovedBy' from public.settlement_records where id = 'e2000000-0000-0000-0000-000000000005'),
+    'a2000000-0000-0000-0000-000000000002', 'self-approval records debtor provenance');
+
+select set_config('request.jwt.claims', '{"sub":"a2000000-0000-0000-0000-000000000001","role":"authenticated"}', true);
+set local role authenticated;
+select lives_ok($$select pg_temp.save('{"settlements":{"a2000000-0000-0000-0000-000000000002->a2000000-0000-0000-0000-000000000001":[
+    {"id":"e2000000-0000-0000-0000-000000000001","amount":12,"method":"Cash","note":"Paid","status":"confirmed","date":"2026-09-01T12:00:00Z"}]}}')$$,
+    'creditor confirms a pending settlement');
+select lives_ok($$select pg_temp.save('{"settlements":{"a2000000-0000-0000-0000-000000000002->a2000000-0000-0000-0000-000000000001":[
+    {"id":"e2000000-0000-0000-0000-000000000001","amount":12,"method":"Cash","note":"Paid","status":"confirmed","date":"2026-09-01T12:00:00Z"}]}}')$$,
+    'retrying a confirmed settlement is idempotent');
+reset role;
+select is((select status from public.settlement_records where id = 'e2000000-0000-0000-0000-000000000001'),
+    'confirmed', 'confirmed settlement persists');
+
+set local role authenticated;
+select lives_ok($$select pg_temp.save('{"settlements":{"a2000000-0000-0000-0000-000000000004->a2000000-0000-0000-0000-000000000001":[
+    {"id":"e2000000-0000-0000-0000-000000000002","amount":8,"method":"Venmo","note":"Guest paid owner","status":"confirmed","date":"2026-09-01T12:00:00Z"}]}}')$$,
+    'creditor records payment from a manual tripmate');
+select lives_ok($$select pg_temp.save('{"settlements":{"a2000000-0000-0000-0000-000000000001->a2000000-0000-0000-0000-000000000004":[
+    {"id":"e2000000-0000-0000-0000-000000000003","amount":7,"method":"PayPal","note":"Owner paid guest","status":"pending","date":"2026-09-01T12:00:00Z"}]}}')$$,
+    'debtor records payment to a manual tripmate');
+reset role;
+select is((select count(*) from public.settlement_records where trip_id = 'b2000000-0000-0000-0000-000000000001'),
+    4::bigint, 'account-backed, manual-tripmate, and self-approved settlements persist together');
+set local role authenticated;
+
 select lives_ok($$select pg_temp.save('{"comments":{"c2000000-0000-0000-0000-000000000001":[
     {"id":"d2000000-0000-0000-0000-000000000001","authorID":"a2000000-0000-0000-0000-000000000001","text":"Hello","date":"2026-09-01T12:00:00Z"}]}}')$$,
     'comment delta is accepted');
@@ -86,6 +132,9 @@ select lives_ok($$select public.sync_trip_normalized('b2000000-0000-0000-0000-00
     'legacy full-snapshot RPC still accepts unchanged snapshots');
 
 select set_config('request.jwt.claims', '{"sub":"a2000000-0000-0000-0000-000000000003","role":"authenticated"}', true);
+select throws_ok($$select pg_temp.save('{"settlements":{"a2000000-0000-0000-0000-000000000003->a2000000-0000-0000-0000-000000000001":[
+    {"id":"e2000000-0000-0000-0000-000000000004","amount":5,"method":"Cash","note":"Invalid","status":"pending","date":"2026-09-01T12:00:00Z"}]}}')$$,
+    'P0001', 'You are not a member of this trip.', 'outsider cannot create a settlement');
 select throws_ok($$select pg_temp.save('{}')$$, 'P0001', 'You are not a member of this trip.', 'outsider cannot sync a trip');
 select throws_ok($$select public.sync_trip_delta_v1('b2000000-0000-0000-0000-000000000099',
     'a2000000-0000-0000-0000-000000000003', '{}')$$, 'P0001',

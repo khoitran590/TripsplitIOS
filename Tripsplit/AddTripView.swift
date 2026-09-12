@@ -38,7 +38,7 @@ struct AddTripView: View {
                 AppBackground()
 
                 ScrollView {
-                    VStack(spacing: 18) {
+                    VStack(spacing: Theme.Space.section) {
                         coverHero
                         header
                         whereCard
@@ -47,7 +47,7 @@ struct AddTripView: View {
                         tripmatesCard
                         if let errorMessage {
                             Text(errorMessage)
-                                .font(.app(.caption))
+                                .font(Theme.Typography.metadata)
                                 .foregroundStyle(Theme.negative)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -127,9 +127,9 @@ struct AddTripView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Plan a new trip")
-                .font(.app(.largeTitle, .bold))
+                .font(Theme.Typography.pageTitle)
             Text("Name it, pick a place, and bring your crew.")
-                .font(.app(.subheadline))
+                .font(Theme.Typography.secondary)
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -152,7 +152,7 @@ struct AddTripView: View {
             LocationField(text: $location)
 
             HStack {
-                Text("Currency").font(.app(.subheadline)).foregroundStyle(.secondary)
+                Text("Currency").font(Theme.Typography.secondary).foregroundStyle(.secondary)
                 Spacer()
                 Menu {
                     Picker("Currency", selection: $currency) {
@@ -160,7 +160,7 @@ struct AddTripView: View {
                     }
                 } label: {
                     HStack(spacing: 4) {
-                        Text(currency).font(.app(.subheadline, .semibold))
+                        Text(currency).font(Theme.Typography.rowTitle)
                         Image(systemName: "chevron.down").font(.app(.caption2, .bold))
                     }
                     .padding(.horizontal, 12)
@@ -178,9 +178,9 @@ struct AddTripView: View {
                 .tint(Theme.accent)
             if hasDates {
                 DatePicker("Start", selection: $startDate, displayedComponents: .date)
-                    .font(.app(.subheadline))
+                    .font(Theme.Typography.secondary)
                 DatePicker("End", selection: $endDate, in: startDate..., displayedComponents: .date)
-                    .font(.app(.subheadline))
+                    .font(Theme.Typography.secondary)
             }
         }
     }
@@ -196,7 +196,7 @@ struct AddTripView: View {
                 } else {
                     Label("Start planning", systemImage: "arrow.right")
                         .labelStyle(.titleAndIcon)
-                        .font(.app(.headline))
+                        .font(Theme.Typography.sectionTitle)
                 }
             }
             .foregroundStyle(Theme.onAccent)
@@ -204,7 +204,7 @@ struct AddTripView: View {
             .padding(.vertical, 15)
         }
         .buttonStyle(.plain)
-        .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+        .actionFill(tint: Theme.accent)
         .disabled(!canCreate)
         .opacity(canCreate ? 1 : 0.5)
         .padding(.horizontal)
@@ -224,7 +224,7 @@ struct AddTripView: View {
                     .focused($focusedField, equals: .budget)
                     .accessibilityLabel("Budget in \(currency)")
             }
-            .font(.app(.title3, .semibold))
+            .font(Theme.Typography.amount)
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
             .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
@@ -264,7 +264,7 @@ struct AddTripView: View {
                         .frame(width: 44, height: 44)
                 }
                 .buttonStyle(.plain)
-                .glassEffect(.regular.tint(Theme.accent).interactive(), in: .circle)
+                .actionFill(tint: Theme.accent, in: .circle)
                 .disabled(memberName.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }

@@ -659,7 +659,7 @@ struct TripFeedView: View {
             TripCard(title: "Trip Feed", icon: "photo.on.rectangle.angled") {
                 VStack(spacing: 10) {
                     Text(verbatim: loadError)
-                        .font(.app(.subheadline)).foregroundStyle(.secondary)
+                        .font(Theme.Typography.secondary).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                     Button("Retry") { Task { await reload() } }
                         .buttonStyle(.borderedProminent)
@@ -698,7 +698,7 @@ struct TripFeedView: View {
             }
             // Lazy so long feeds build post cards (and kick off their photo loads)
             // only as they scroll into view. Spacing matches the enclosing detail VStack.
-            LazyVStack(spacing: 18) {
+            LazyVStack(spacing: Theme.Space.section) {
                 ForEach(posts) { post in
                     FeedPostCard(tripID: tripID, post: post)
                 }
@@ -706,7 +706,7 @@ struct TripFeedView: View {
         }
 
         if let olderPostsError {
-            Text(verbatim: olderPostsError).font(.app(.caption)).foregroundStyle(.secondary)
+            Text(verbatim: olderPostsError).font(Theme.Typography.metadata).foregroundStyle(.secondary)
         }
         if store.feedNextCursors[tripID] != nil {
             Button {
@@ -783,7 +783,7 @@ private struct FeedComposerCard: View {
                                         if index < picks.count { picks.remove(at: index) }
                                     } label: {
                                         Image(systemName: "xmark.circle.fill")
-                                            .font(.app(.body))
+                                            .font(Theme.Typography.body)
                                             .foregroundStyle(.white, .black.opacity(0.55))
                                     }
                                     .buttonStyle(.plain)
@@ -805,7 +805,7 @@ private struct FeedComposerCard: View {
                         self.locationName = nil
                     } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.app(.caption))
+                            .font(Theme.Typography.metadata)
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
@@ -816,19 +816,19 @@ private struct FeedComposerCard: View {
             }
 
             if let postError {
-                Text(verbatim: postError).font(.app(.caption)).foregroundStyle(Theme.negative)
+                Text(verbatim: postError).font(Theme.Typography.metadata).foregroundStyle(Theme.negative)
             }
 
             HStack {
                 PhotosPicker(selection: $picks, maxSelectionCount: 4, matching: .images) {
                     Label("Photos", systemImage: "photo.badge.plus")
-                        .font(.app(.subheadline, .semibold))
+                        .font(Theme.Typography.rowTitle)
                 }
                 Button {
                     showLocationPicker = true
                 } label: {
                     Label("Location", systemImage: "mappin.and.ellipse")
-                        .font(.app(.subheadline, .semibold))
+                        .font(Theme.Typography.rowTitle)
                 }
                 .padding(.leading, 12)
                 Spacer()
@@ -848,7 +848,7 @@ private struct FeedComposerCard: View {
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular, in: .rect(cornerRadius: 24))
+        .readableSurface(cornerRadius: Theme.cardRadius)
         .onChange(of: picks) { _, newPicks in
             Task { await loadPreviews(newPicks) }
         }
@@ -954,10 +954,10 @@ private struct FeedLocationPicker: View {
                         Task { await choose(completion) }
                     } label: {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(verbatim: completion.title).font(.app(.subheadline, .semibold))
+                            Text(verbatim: completion.title).font(Theme.Typography.rowTitle)
                             if !completion.subtitle.isEmpty {
                                 Text(verbatim: completion.subtitle)
-                                    .font(.app(.caption)).foregroundStyle(.secondary)
+                                    .font(Theme.Typography.metadata).foregroundStyle(.secondary)
                             }
                         }
                     }
@@ -1070,7 +1070,7 @@ private struct FeedPostCard: View {
             if isEditingPost {
                 postEditor
             } else if !post.text.isEmpty {
-                Text(verbatim: post.text).font(.app(.subheadline))
+                Text(verbatim: post.text).font(Theme.Typography.secondary)
             }
             if !post.photoPaths.isEmpty {
                 photosRow
@@ -1086,7 +1086,7 @@ private struct FeedPostCard: View {
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular, in: .rect(cornerRadius: 24))
+        .readableSurface(cornerRadius: Theme.cardRadius)
         .sheet(item: $reportTarget) { target in
             ReportContentView(target: target)
         }
@@ -1123,13 +1123,13 @@ private struct FeedPostCard: View {
         HStack(spacing: 10) {
             AvatarView(person: author, size: 34)
             VStack(alignment: .leading, spacing: 1) {
-                Text(verbatim: author.name).font(.app(.subheadline, .semibold))
+                Text(verbatim: author.name).font(Theme.Typography.rowTitle)
                 Text(post.date.formatted(.relative(presentation: .named)))
-                    .font(.app(.caption)).foregroundStyle(.secondary)
+                    .font(Theme.Typography.metadata).foregroundStyle(.secondary)
                 if let location = post.locationName, !location.isEmpty {
                     HStack(spacing: 3) {
                         Image(systemName: "mappin.and.ellipse").font(.app(.caption2))
-                        Text(verbatim: location).font(.app(.caption)).lineLimit(1)
+                        Text(verbatim: location).font(Theme.Typography.metadata).lineLimit(1)
                     }
                     .foregroundStyle(Theme.accent)
                 }
@@ -1169,7 +1169,7 @@ private struct FeedPostCard: View {
                 }
             } label: {
                 Image(systemName: "ellipsis")
-                    .font(.app(.subheadline, .semibold))
+                    .font(Theme.Typography.rowTitle)
                     .foregroundStyle(.secondary)
                     .frame(width: 30, height: 30)
                     .contentShape(.rect)
@@ -1181,7 +1181,7 @@ private struct FeedPostCard: View {
     private var postEditor: some View {
         VStack(alignment: .leading, spacing: 10) {
             TextField("Edit post", text: $editedPostText, axis: .vertical)
-                .font(.app(.subheadline))
+                .font(Theme.Typography.secondary)
                 .lineLimit(1...6)
                 .padding(.horizontal, 12).padding(.vertical, 8)
                 .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
@@ -1207,7 +1207,7 @@ private struct FeedPostCard: View {
                         editedExactLocation = nil
                     } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.app(.caption))
+                            .font(Theme.Typography.metadata)
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
@@ -1283,7 +1283,7 @@ private struct FeedPostCard: View {
             store.toggleFeedReaction(emoji, on: post.id, in: tripID)
         } label: {
             HStack(spacing: 4) {
-                Text(verbatim: emoji).font(.app(.subheadline))
+                Text(verbatim: emoji).font(Theme.Typography.secondary)
                 if !reactors.isEmpty {
                     Text(verbatim: "\(reactors.count)")
                         .font(.app(.caption, .bold))
@@ -1318,7 +1318,7 @@ private struct FeedPostCard: View {
                 if editingCommentID == comment.id {
                     HStack(spacing: 8) {
                         TextField("Edit comment", text: $editedCommentText, axis: .vertical)
-                            .font(.app(.subheadline))
+                            .font(Theme.Typography.secondary)
                             .padding(.horizontal, 10).padding(.vertical, 6)
                             .background(Theme.fieldBackground, in: .rect(cornerRadius: 10))
                         Button {
@@ -1340,7 +1340,7 @@ private struct FeedPostCard: View {
                         .buttonStyle(.plain)
                     }
                 } else {
-                    Text(verbatim: comment.text).font(.app(.subheadline))
+                    Text(verbatim: comment.text).font(Theme.Typography.secondary)
                 }
             }
             Spacer(minLength: 0)
@@ -1393,7 +1393,7 @@ private struct FeedPostCard: View {
     private var commentField: some View {
         HStack(spacing: 8) {
             TextField("Add a comment…", text: $newComment)
-                .font(.app(.subheadline))
+                .font(Theme.Typography.secondary)
                 .padding(.horizontal, 12).padding(.vertical, 8)
                 .background(Theme.fieldBackground, in: .capsule)
                 .onSubmit(sendComment)

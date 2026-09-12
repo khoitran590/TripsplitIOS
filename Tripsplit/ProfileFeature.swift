@@ -253,7 +253,7 @@ struct ProfileScreen: View {
                                 .padding(.vertical, 12)
                         }
                         .buttonStyle(.plain)
-                        .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+                        .actionFill(tint: Theme.accent)
                     }
                     .padding(.horizontal, 32)
                 }
@@ -654,7 +654,7 @@ struct ProfileDetailView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(16)
-        .glassEffect(.regular, in: .rect(cornerRadius: 24))
+        .readableSurface(cornerRadius: Theme.cardRadius)
     }
 
     private func statStrip(_ stats: ProfileStats) -> some View {
@@ -2606,7 +2606,7 @@ struct ProfileShareSheet: View {
                                 .padding(.vertical, 13)
                         }
                         .buttonStyle(.plain)
-                        .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+                        .actionFill(tint: Theme.accent)
                         .padding(.horizontal, 24)
                     }
                 }
@@ -3018,7 +3018,7 @@ struct EditProfileView: View {
                     .padding(.vertical, 11)
             }
             .buttonStyle(.plain)
-            .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+            .actionFill(tint: Theme.accent)
 
             if hasPhoto {
                 Button {
@@ -3033,7 +3033,7 @@ struct EditProfileView: View {
                         .padding(.vertical, 11)
                 }
                 .buttonStyle(.plain)
-                .glassEffect(.regular.interactive(), in: .capsule)
+                .controlSurface(in: .capsule)
             }
         }
     }

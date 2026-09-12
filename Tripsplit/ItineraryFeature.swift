@@ -399,13 +399,13 @@ struct ItineraryPlannerSection: View {
                 if !store.itineraryTrips.isEmpty {
                     Button(action: onCreate) {
                         Label("New", systemImage: "plus")
-                            .font(.app(.subheadline, .semibold))
+                            .font(Theme.Typography.rowTitle)
                             .foregroundStyle(Theme.onAccent)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 8)
                     }
                     .buttonStyle(.plain)
-                    .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+                    .actionFill(tint: Theme.accent)
                 }
             }
 
@@ -425,10 +425,10 @@ struct ItineraryPlannerSection: View {
                             )
                         VStack(alignment: .leading, spacing: 3) {
                             Text("Build your own itinerary")
-                                .font(.app(.subheadline, .semibold))
+                                .font(Theme.Typography.rowTitle)
                                 .foregroundStyle(.primary)
-                            Text("Set a budget and days, plan places to go, things to do, and where to eat.")
-                                .font(.app(.caption))
+                            Text("Places, days, and a shared budget.")
+                                .font(Theme.Typography.metadata)
                                 .foregroundStyle(.secondary)
                                 .multilineTextAlignment(.leading)
                         }
@@ -438,7 +438,7 @@ struct ItineraryPlannerSection: View {
                             .foregroundStyle(.tertiary)
                     }
                     .padding(14)
-                    .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 20))
+                    .readableSurface(cornerRadius: Theme.cardRadius)
                 }
                 .buttonStyle(.plain)
             } else {
@@ -493,12 +493,12 @@ struct ItineraryTripCard: View {
             }
             VStack(alignment: .leading, spacing: 3) {
                 Text(verbatim: trip.name)
-                    .font(.app(.subheadline, .semibold))
+                    .font(Theme.Typography.rowTitle)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 if let location = trip.location, !location.isEmpty {
                     Text(verbatim: location)
-                        .font(.app(.caption))
+                        .font(Theme.Typography.metadata)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -585,7 +585,7 @@ struct CreateItineraryView: View {
                 AppBackground()
 
                 ScrollView {
-                    VStack(spacing: 18) {
+                    VStack(spacing: Theme.Space.section) {
                         header
                         whereCard
                         budgetCard
@@ -610,9 +610,9 @@ struct CreateItineraryView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Build an itinerary")
-                .font(.app(.largeTitle, .bold))
-            Text("Plan each day: where to go, what to do, and where to eat.")
-                .font(.app(.subheadline))
+                .font(Theme.Typography.pageTitle)
+            Text("Places, activities, and meals.")
+                .font(Theme.Typography.secondary)
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -632,7 +632,7 @@ struct CreateItineraryView: View {
             LocationField(text: $location)
 
             HStack {
-                Text("Currency").font(.app(.subheadline)).foregroundStyle(.secondary)
+                Text("Currency").font(Theme.Typography.secondary).foregroundStyle(.secondary)
                 Spacer()
                 Menu {
                     Picker("Currency", selection: $currency) {
@@ -640,7 +640,7 @@ struct CreateItineraryView: View {
                     }
                 } label: {
                     HStack(spacing: 4) {
-                        Text(currency).font(.app(.subheadline, .semibold))
+                        Text(currency).font(Theme.Typography.rowTitle)
                         Image(systemName: "chevron.down").font(.app(.caption2, .bold))
                     }
                     .padding(.horizontal, 12)
@@ -653,15 +653,12 @@ struct CreateItineraryView: View {
 
     private var budgetCard: some View {
         TripCard(title: "Total budget", icon: "wallet.bifold.fill") {
-            Text("Divided evenly across the days of your itinerary.")
-                .font(.app(.footnote))
-                .foregroundStyle(.secondary)
             HStack(spacing: 2) {
                 Text(verbatim: currencySymbol(currency)).foregroundStyle(.secondary)
                 TextField("0.00", text: $budgetText)
                     .keyboardType(.decimalPad)
             }
-            .font(.app(.title3, .semibold))
+            .font(Theme.Typography.amount)
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
             .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
@@ -672,12 +669,12 @@ struct CreateItineraryView: View {
         TripCard(title: "How many days?", icon: "calendar") {
             Stepper(value: $dayCount, in: 1...30) {
                 Text("\(dayCount) day\(dayCount == 1 ? "" : "s")")
-                    .font(.app(.subheadline, .semibold))
+                    .font(Theme.Typography.rowTitle)
             }
             if budget > 0 {
                 HStack(spacing: 6) {
                     Image(systemName: "chart.pie.fill")
-                        .font(.app(.caption))
+                        .font(Theme.Typography.metadata)
                         .foregroundStyle(Theme.accent)
                     Text("About \(money(budget / Double(dayCount), currency)) per day")
                         .font(.app(.footnote, .medium))
@@ -689,7 +686,7 @@ struct CreateItineraryView: View {
                 .tint(Theme.accent)
             if hasStartDate {
                 DatePicker("Starts", selection: $startDate, displayedComponents: .date)
-                    .font(.app(.subheadline))
+                    .font(Theme.Typography.secondary)
             }
         }
     }
@@ -699,9 +696,7 @@ struct CreateItineraryView: View {
     /// the moment the new itinerary's planner opens.
     private var aiPlanCard: some View {
         TripCard(title: "AI trip planner", icon: "sparkles") {
-            Text("Want AI to put together a day-to-day plan for your \(dayCount) day\(dayCount == 1 ? "" : "s")? It drafts places to go, things to do, and where to eat — you choose whether to add or discard it.")
-                .font(.app(.footnote))
-                .foregroundStyle(.secondary)
+            ContextHelp(title: "About AI plans", detail: "Drafts places, activities, and meals for each day. Review the plan before adding it; you can edit or discard it.")
             Toggle("Draft my days with AI", isOn: $wantsAIPlan)
                 .font(.app(.subheadline, .medium))
                 .tint(Theme.accent)
@@ -710,7 +705,7 @@ struct CreateItineraryView: View {
 
     private var friendsCard: some View {
         TripCard(title: "Who's coming?", icon: "person.2.fill") {
-            Text("Add friends by name now — you can invite people with an account by email once the itinerary is created.")
+            Text("Add names now. Invite by email after creating the itinerary.")
                 .font(.app(.footnote))
                 .foregroundStyle(.secondary)
 
@@ -739,7 +734,7 @@ struct CreateItineraryView: View {
                         .frame(width: 40, height: 40)
                 }
                 .buttonStyle(.plain)
-                .glassEffect(.regular.tint(Theme.accent).interactive(), in: .circle)
+                .actionFill(tint: Theme.accent, in: .circle)
                 .disabled(memberName.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
@@ -774,13 +769,13 @@ struct CreateItineraryView: View {
         } label: {
             Label("Create itinerary", systemImage: "arrow.right")
                 .labelStyle(.titleAndIcon)
-                .font(.app(.headline))
+                .font(Theme.Typography.sectionTitle)
                 .foregroundStyle(Theme.onAccent)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 15)
         }
         .buttonStyle(.plain)
-        .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+        .actionFill(tint: Theme.accent)
         .disabled(!canCreate)
         .opacity(canCreate ? 1 : 0.5)
         .padding(.horizontal)
@@ -1093,7 +1088,7 @@ struct ItineraryDetailView: View {
                     )
                 }
                 Text(verbatim: trip.name)
-                    .font(.app(size: 30, weight: .bold))
+                    .font(Theme.Typography.pageTitle)
                     .foregroundStyle(.white)
                     .lineLimit(2)
                     .minimumScaleFactor(0.7)
@@ -1248,7 +1243,7 @@ struct ItineraryDetailView: View {
                         .font(.app(.title, .bold))
                      + Text(verbatim: " ")
                      + Text(budget > 0 ? "planned of \(money(budget, trip.currencyCode))" : "planned · no budget")
-                        .font(.app(.subheadline, .semibold))
+                        .font(Theme.Typography.rowTitle)
                         .foregroundStyle(.secondary))
                         .monospacedDigit()
                         .lineLimit(2)
@@ -1305,7 +1300,7 @@ struct ItineraryDetailView: View {
                 .accessibilityLabel("\(Int((planned / budget * 100).rounded())) percent of budget planned")
             }
         }
-        .panelPadding(horizontal: 18, vertical: 18)
+        .panelPadding(horizontal: Theme.Space.card, vertical: Theme.Space.card)
         .frame(maxWidth: .infinity, alignment: .leading)
         .homePanel(cornerRadius: Theme.cardRadius)
     }
@@ -1421,7 +1416,7 @@ struct ItineraryDetailView: View {
             HStack(alignment: .firstTextBaseline) {
                 (Text("Day \(dayIndex + 1)").font(.app(.headline, .bold))
                  + Text(verbatim: date.map { " · " + $0.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()) } ?? "")
-                    .font(.app(.subheadline))
+                    .font(Theme.Typography.secondary)
                     .foregroundStyle(.secondary))
                     .lineLimit(1)
                 Spacer(minLength: 8)
@@ -1517,7 +1512,7 @@ struct ItineraryDetailView: View {
             .shadow(color: Theme.elevatedShadow, radius: 8, y: 4)
             .padding(.top, 4)
         }
-        .panelPadding(horizontal: 18, vertical: 18)
+        .panelPadding(horizontal: Theme.Space.card, vertical: Theme.Space.card)
         .frame(maxWidth: .infinity, alignment: .leading)
         .homePanel(cornerRadius: Theme.cardRadius)
         // Swipe the plan card left/right to flip between days without reaching up
@@ -1551,7 +1546,7 @@ struct ItineraryDetailView: View {
                 .accessibilityLabel(stop.time == nil ? Text("Anytime") : Text(verbatim: stop.time!.formatted(date: .omitted, time: .shortened)))
 
             Image(systemName: stop.kind.icon)
-                .font(.app(.subheadline, .semibold))
+                .font(Theme.Typography.rowTitle)
                 .foregroundStyle(.white)
                 .frame(width: 36, height: 36)
                 .background(stop.kind.tint, in: .circle)
@@ -1565,7 +1560,7 @@ struct ItineraryDetailView: View {
                     .lineLimit(1)
                 if !stop.notes.isEmpty {
                     Text(verbatim: stop.notes)
-                        .font(.app(.caption))
+                        .font(Theme.Typography.metadata)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -1626,7 +1621,7 @@ struct ItineraryDetailView: View {
                         .padding(.vertical, 9)
                     }
                     .buttonStyle(.plain)
-                    .glassEffect(.regular.interactive(), in: .capsule)
+                    .controlSurface(in: .capsule)
                 }
 
                 HStack(spacing: 10) {
@@ -1716,7 +1711,7 @@ struct ItineraryDetailView: View {
                 TimelineView(.periodic(from: generationStartedAt, by: 1)) { context in
                     let seconds = max(0, Int(context.date.timeIntervalSince(generationStartedAt)))
                     Text(seconds < 25 ? "Drafting your plan… \(seconds)s" : "Still waiting for the planner… \(seconds)s")
-                        .font(.app(.caption))
+                        .font(Theme.Typography.metadata)
                         .foregroundStyle(.secondary)
                 }
                 Button("Cancel planning") {
@@ -1730,7 +1725,7 @@ struct ItineraryDetailView: View {
 
             if let aiMessage {
                 Text(verbatim: aiMessage)
-                    .font(.app(.caption))
+                    .font(Theme.Typography.metadata)
                     .foregroundStyle(Theme.negative)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -1742,7 +1737,7 @@ struct ItineraryDetailView: View {
                     .accessibilityIdentifier("itinerary-ai-cooldown")
             }
         }
-        .panelPadding(horizontal: 18, vertical: 18)
+        .panelPadding(horizontal: Theme.Space.card, vertical: Theme.Space.card)
         .frame(maxWidth: .infinity, alignment: .leading)
         .homePanel(cornerRadius: Theme.cardRadius)
     }
@@ -1753,13 +1748,9 @@ struct ItineraryDetailView: View {
         HStack(spacing: 12) {
             Image(systemName: "sparkles")
                 .font(.app(.headline, .bold))
-                .foregroundStyle(.white)
+                .foregroundStyle(Theme.accent)
                 .frame(width: 44, height: 44)
-                .background(
-                    LinearGradient(colors: [Color(hex: 0x8B5CF6), Color(hex: 0xC084FC)],
-                                   startPoint: .topLeading, endPoint: .bottomTrailing),
-                    in: .circle
-                )
+                .background(Theme.accent.opacity(0.12), in: .circle)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("AI plan")
@@ -1773,12 +1764,12 @@ struct ItineraryDetailView: View {
                         String(localized: suggestion.days.count == 1 ? "1 day" : "\(suggestion.days.count) days"),
                         total > 0 ? money(total, currencyCode) : nil
                     ].compactMap { $0 }.joined(separator: " · "))
-                        .font(.app(.caption))
+                        .font(Theme.Typography.metadata)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 } else {
-                    Text("Drafts places, activities, and meals for every day. You decide whether to use it.")
-                        .font(.app(.caption))
+                    Text("An editable draft for your trip.")
+                        .font(Theme.Typography.metadata)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -1830,7 +1821,7 @@ struct ItineraryDetailView: View {
                     .font(.app(.subheadline, .bold))
                     .lineLimit(1)
                 Text(verbatim: day.title)
-                    .font(.app(.subheadline))
+                    .font(Theme.Typography.secondary)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Spacer(minLength: 4)
@@ -1862,7 +1853,7 @@ struct ItineraryDetailView: View {
                 .frame(width: 52, alignment: .leading)
                 .padding(.top, 3)
             Image(systemName: stop.kind.icon)
-                .font(.app(.caption))
+                .font(Theme.Typography.metadata)
                 .foregroundStyle(stop.kind.tint)
                 .frame(width: 20)
                 .padding(.top, 2)
@@ -2072,7 +2063,7 @@ struct ItineraryDetailView: View {
 
                 HStack(spacing: 10) {
                     TextField("Add friend's name", text: $manualMemberName)
-                        .font(.app(.subheadline))
+                        .font(Theme.Typography.secondary)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 10)
                         .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
@@ -2086,7 +2077,7 @@ struct ItineraryDetailView: View {
                             .frame(width: 40, height: 40)
                     }
                     .buttonStyle(.plain)
-                    .glassEffect(.regular.tint(Theme.accent).interactive(), in: .circle)
+                    .actionFill(tint: Theme.accent, in: .circle)
                     .disabled(manualMemberName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
 
@@ -2095,7 +2086,7 @@ struct ItineraryDetailView: View {
                         .textInputAutocapitalization(.never)
                         .keyboardType(.emailAddress)
                         .autocorrectionDisabled()
-                        .font(.app(.subheadline))
+                        .font(Theme.Typography.secondary)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 10)
                         .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
@@ -2112,7 +2103,7 @@ struct ItineraryDetailView: View {
                         .frame(width: 40, height: 40)
                     }
                     .buttonStyle(.plain)
-                    .glassEffect(.regular.tint(Theme.accent).interactive(), in: .circle)
+                    .actionFill(tint: Theme.accent, in: .circle)
                     .disabled(inviteEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isInviting)
                     .opacity(inviteEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isInviting ? 0.55 : 1)
                     .accessibilityLabel("Invite Member")
@@ -2120,22 +2111,22 @@ struct ItineraryDetailView: View {
 
                 Button { generateInviteLink(trip) } label: {
                     HStack(spacing: 8) {
-                        if isGeneratingLink { ProgressView().tint(.white) }
+                        if isGeneratingLink { ProgressView().tint(Theme.onAccent) }
                         Label("Invitation link", systemImage: "link")
                     }
-                    .font(.app(.subheadline, .semibold))
-                    .foregroundStyle(.white)
+                    .font(Theme.Typography.rowTitle)
+                    .foregroundStyle(Theme.onAccent)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
                 }
                 .buttonStyle(.plain)
-                .glassEffect(.regular.tint(Color(hex: 0x10B981)).interactive(), in: .capsule)
+                .actionFill(tint: Theme.accent)
                 .disabled(isGeneratingLink)
 
                 if let inviteLink {
                     HStack(spacing: 8) {
                         Text(verbatim: inviteLink.absoluteString)
-                            .font(.app(.caption))
+                            .font(Theme.Typography.metadata)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -2163,7 +2154,7 @@ struct ItineraryDetailView: View {
 
                 if let inviteMessage {
                     Text(verbatim: inviteMessage)
-                        .font(.app(.caption))
+                        .font(Theme.Typography.metadata)
                         .foregroundStyle(inviteMessage.localizedCaseInsensitiveContains("invited") || inviteMessage.localizedCaseInsensitiveContains("copied") || inviteMessage.localizedCaseInsensitiveContains("ready") ? Theme.positive : Theme.negative)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -2374,7 +2365,7 @@ struct ItineraryStopEditorView: View {
                 AppBackground()
 
                 ScrollView {
-                    VStack(spacing: 18) {
+                    VStack(spacing: Theme.Space.section) {
                         TripCard(title: "What is it?", icon: "square.grid.2x2.fill") {
                             Picker("Kind", selection: $kind) {
                                 ForEach(ItineraryStopKind.allCases) { kind in
@@ -2416,11 +2407,11 @@ struct ItineraryStopEditorView: View {
                                                     .frame(width: 22)
                                                 VStack(alignment: .leading, spacing: 1) {
                                                     Text(verbatim: suggestion.title)
-                                                        .font(.app(.subheadline))
+                                                        .font(Theme.Typography.secondary)
                                                         .foregroundStyle(.primary)
                                                     if !suggestion.subtitle.isEmpty {
                                                         Text(verbatim: suggestion.subtitle)
-                                                            .font(.app(.caption))
+                                                            .font(Theme.Typography.metadata)
                                                             .foregroundStyle(.secondary)
                                                             .lineLimit(1)
                                                     }
@@ -2446,7 +2437,7 @@ struct ItineraryStopEditorView: View {
                                 .tint(Theme.accent)
                             if hasTime {
                                 DatePicker("Time", selection: $time, displayedComponents: .hourAndMinute)
-                                    .font(.app(.subheadline))
+                                    .font(Theme.Typography.secondary)
                             }
                         }
 
@@ -2456,7 +2447,7 @@ struct ItineraryStopEditorView: View {
                                 TextField("0.00", text: $costText)
                                     .keyboardType(.decimalPad)
                             }
-                            .font(.app(.title3, .semibold))
+                            .font(Theme.Typography.amount)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 12)
                             .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
@@ -2465,7 +2456,7 @@ struct ItineraryStopEditorView: View {
                         TripCard(title: "Notes", icon: "note.text") {
                             TextField("Anything to remember (tickets, reservations…)", text: $notes, axis: .vertical)
                                 .lineLimit(2...5)
-                                .font(.app(.subheadline))
+                                .font(Theme.Typography.secondary)
                                 .padding(.horizontal, 14)
                                 .padding(.vertical, 12)
                                 .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))

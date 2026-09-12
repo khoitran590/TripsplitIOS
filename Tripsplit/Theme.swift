@@ -415,16 +415,15 @@ enum AppTheme: String, CaseIterable, Identifiable {
     }
 }
 
-// MARK: - Ruled themes
+// MARK: - Palette overrides
 
-/// Colonnade asks for a layout the palette alone can't express: no cards, full-bleed
-/// hairlines, a wider content column, and tracked-caps labels. Views branch on this
-/// style rather than on the theme's name, so the eight card themes are untouched and
-/// a future ruled theme inherits the whole layout by returning `.ruled` here.
+/// All palettes use the same card layout. Legacy ruled helpers remain available
+/// while existing call sites migrate; no user-selectable palette activates them.
 extension AppTheme {
     enum SurfaceStyle { case card, ruled }
 
-    var surfaceStyle: SurfaceStyle { self == .colonnade ? .ruled : .card }
+    // Palettes customize color only; navigation and component geometry stay stable.
+    var surfaceStyle: SurfaceStyle { .card }
 
     /// Hairline color for this theme; `nil` uses the shared cool-neutral separator.
     /// The shared one reads blue against travertine, which is the whole reason this exists.
@@ -491,43 +490,10 @@ extension AppTheme {
 
 // MARK: - Shared app backdrop
 
-/// The one backdrop every screen sits on: the theme's vertical wash plus two soft
-/// accent glows near the top. Use `.background { AppBackground() }` (or as the base
-/// layer of a `ZStack`) instead of ad-hoc gradients so all tabs and sheets match
-/// and follow the chosen theme in both light and dark mode.
+/// Shared neutral backdrop for pages and sheets in every palette.
 struct AppBackground: View {
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-
     var body: some View {
-        let theme = ThemeManager.shared.selection
-        // Kept faint so glass materials layered on top refract a hint of the
-        // theme instead of a saturated blob. Ruled themes take none at all: their
-        // ground is one uninterrupted field, and a bloom across it reads as a smudge
-        // on the paper rather than as light.
-        let hasGlow = !reduceTransparency && theme.surfaceStyle != .ruled
-        let glowOpacity = colorScheme == .dark ? 0.08 : 0.10
-        LinearGradient(colors: theme.homeGradient, startPoint: .top, endPoint: .bottom)
-            .overlay(alignment: .topLeading) {
-                if hasGlow {
-                    glow(theme.accent, opacity: glowOpacity)
-                        .offset(x: -100, y: -140)
-                }
-            }
-            .overlay(alignment: .topTrailing) {
-                if hasGlow {
-                    glow(theme.accentSecondary, opacity: glowOpacity)
-                        .offset(x: 120, y: -60)
-                }
-            }
-            .ignoresSafeArea()
-    }
-
-    private func glow(_ color: Color, opacity: Double) -> some View {
-        Circle()
-            .fill(color.opacity(opacity))
-            .frame(width: 340, height: 340)
-            .blur(radius: 110)
+        Theme.background.ignoresSafeArea()
     }
 }
 
@@ -552,24 +518,46 @@ final class ThemeManager {
 /// screen reads correctly in both light and dark appearances. Accent and backdrop
 /// colors resolve through `ThemeManager`, so they follow the user's chosen theme.
 enum Theme {
+    /// Shared roles resolve the selected typeface on every render and scale with Dynamic Type.
+    enum Typography {
+        static var pageTitle: Font { .app(.largeTitle, .bold) }
+        static var sectionTitle: Font { .app(.headline) }
+        static var rowTitle: Font { .app(.subheadline, .semibold) }
+        static var body: Font { .app(.body) }
+        static var secondary: Font { .app(.subheadline) }
+        static var metadata: Font { .app(.footnote) }
+        static var amount: Font { .app(.title2, .semibold) }
+        static var heroAmount: Font { .app(.largeTitle, .bold) }
+    }
+
+    enum Space {
+        static let small: CGFloat = 4
+        static let compact: CGFloat = 8
+        static let content: CGFloat = 12
+        static let card: CGFloat = 16
+        static let page: CGFloat = 16
+        static let section: CGFloat = 24
+    }
+
+    enum Radius {
+        static let field: CGFloat = 12
+        static let action: CGFloat = 14
+        static let card: CGFloat = 20
+    }
+
     /// Corner radius for the card family. Explore's cards had drifted to 18/20/22 for
     /// what reads as one object, so the browse surface looked subtly inconsistent from
     /// section to section. Photo thumbnails nested *inside* a card keep their own,
     /// smaller radii — an inner corner has to be tighter than the corner enclosing it.
-    static let cardRadius: CGFloat = 20
+    static let cardRadius: CGFloat = Radius.card
 
-    /// Home dashboard backdrop for the current theme.
-    static var homeGradient: [Color] {
-        ThemeManager.shared.selection.homeGradient
+    /// A quiet, palette-aware neutral shared by pages and presented sheets.
+    static var background: Color {
+        ThemeManager.shared.selection.homeGradient.last ?? surfaceSubtle
     }
 
-    /// Backdrop for presented sheets (add trip, trip detail, add expense, split, settle).
-    static var sheetGradient: [Color] {
-        ThemeManager.shared.selection.sheetOverride ?? [
-            Color(light: 0xF2F5F8, dark: 0x1C1C1E),
-            Color(light: 0xFFFFFF, dark: 0x0E0E10),
-        ]
-    }
+    static var homeGradient: [Color] { [background, background] }
+    static var sheetGradient: [Color] { [background, background] }
 
     /// Fill for text fields and inline controls inside cards.
     static var fieldBackground: Color {
@@ -646,7 +634,7 @@ enum Theme {
 
     /// Horizontal inset for the home screen's content column. `nil` on card themes so
     /// they keep SwiftUI's default padding rather than a hard-coded stand-in for it.
-    static var contentInset: CGFloat? { isRuled ? ruledInset : nil }
+    static var contentInset: CGFloat? { Space.page }
 
     /// How strong a break a rule marks. A ruled page takes its structure from the
     /// *contrast* between these — one repeated hairline gives a screen no hierarchy at
@@ -720,26 +708,23 @@ extension View {
         }
     }
 
-    /// The same switch for panels whose card form is Liquid Glass rather than a readable
-    /// surface, so card themes keep exactly the material they had.
+    /// Compatibility entry point: content panels now share the opaque card surface.
     @ViewBuilder
     func homeGlassPanel(cornerRadius: CGFloat = 20, weight: Theme.RuleWeight = .section) -> some View {
         if Theme.isRuled {
             modifier(RuledSectionModifier(weight: weight))
         } else {
-            glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
+            readableSurface(cornerRadius: cornerRadius)
         }
     }
 
-    /// The interactive glass a standalone row carries on card themes, and nothing at
-    /// all on ruled ones, where a rule bounds the same row. Unlike `homeGlassPanel`
-    /// this adds no rule of its own — for rows that already sit under one.
+    /// Compatibility entry point for standalone content rows.
     @ViewBuilder
     func cardOnlyGlass(cornerRadius: CGFloat) -> some View {
         if Theme.isRuled {
             self
         } else {
-            glassEffect(.regular.interactive(), in: .rect(cornerRadius: cornerRadius))
+            readableSurface(cornerRadius: cornerRadius)
         }
     }
 
@@ -942,7 +927,7 @@ struct RuledPrimaryButton: View {
                     .contentShape(.capsule)
             }
             .buttonStyle(.plain)
-            .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+            .actionFill(tint: Theme.accent)
         }
     }
 }
@@ -1029,20 +1014,17 @@ extension View {
 
     /// A text-field fill. Ruled themes square every filled shape; the fill colour
     /// itself already resolves through the theme via `Theme.fieldBackground`.
-    func fieldFill(cornerRadius: CGFloat = 12) -> some View {
+    func fieldFill(cornerRadius: CGFloat = Theme.Radius.field) -> some View {
         background(Theme.fieldBackground, in: .rect(cornerRadius: Theme.isRuled ? 0 : cornerRadius))
     }
 
-    /// A primary action's fill: the tinted glass capsule on card themes, a flat
-    /// unrounded band on ruled ones. `RuledPrimaryButton` is the same trade for
-    /// call sites whose label is just a title; this is for the richer ones
-    /// (icons, spinners, disabled states) that need to keep their own label.
+    /// A solid fill for primary actions; floating map controls use glass directly.
     @ViewBuilder
     func actionFill(tint: Color, in shape: some Shape = .capsule) -> some View {
         if Theme.isRuled {
             background(tint)
         } else {
-            glassEffect(.regular.tint(tint).interactive(), in: shape)
+            background(tint, in: shape)
         }
     }
 
@@ -1073,33 +1055,58 @@ extension View {
     /// intentionally more opaque than decorative glass and keeps a visible edge in
     /// light mode, where translucent cards otherwise disappear into the backdrop.
     func readableSurface(cornerRadius: CGFloat = 20, elevated: Bool = false) -> some View {
-        modifier(ReadableSurfaceModifier(cornerRadius: cornerRadius, elevated: elevated))
+        modifier(ReadableSurfaceModifier(cornerRadius: cornerRadius))
     }
 }
 
 private struct ReadableSurfaceModifier: ViewModifier {
     let cornerRadius: CGFloat
-    let elevated: Bool
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     func body(content: Content) -> some View {
         content
             .background(
-                Theme.surface.opacity(reduceTransparency ? 1 : 0.96),
+                Theme.surface,
                 in: .rect(cornerRadius: cornerRadius)
             )
             .overlay {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .strokeBorder(
-                        Theme.separator.opacity(colorSchemeContrast == .increased ? 1 : 0.85),
+                        Theme.separator.opacity(colorSchemeContrast == .increased ? 1 : 0.5),
                         lineWidth: colorSchemeContrast == .increased ? 2 : 1
                     )
             }
-            .shadow(
-                color: elevated ? Theme.elevatedShadow : .clear,
-                radius: elevated ? 10 : 0,
-                y: elevated ? 4 : 0
-            )
+    }
+}
+
+// MARK: - Shared action hierarchy
+
+/// The same action geometry in every palette, with readable disabled/pressed states.
+struct AppActionStyle: ButtonStyle {
+    var primary = true
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.app(.subheadline, .semibold))
+            .foregroundStyle(primary ? Theme.onAccent : Theme.accent)
+            .frame(maxWidth: .infinity, minHeight: 48)
+            .padding(.horizontal, 12)
+            .background(primary ? Theme.accent : Theme.surface, in: .rect(cornerRadius: Theme.Radius.action))
+            .overlay {
+                if !primary {
+                    RoundedRectangle(cornerRadius: Theme.Radius.action)
+                        .strokeBorder(Theme.separator, lineWidth: 1)
+                }
+            }
+            .opacity(!isEnabled ? 0.45 : (configuration.isPressed ? 0.75 : 1))
+    }
+}
+
+extension View {
+    /// Opaque control surface for inline filters and pickers. Glass is reserved for overlays.
+    func controlSurface(tint: Color? = nil, in shape: some Shape = .capsule) -> some View {
+        background(tint ?? Theme.surface, in: shape)
+            .overlay { shape.stroke(Theme.separator.opacity(tint == nil ? 0.5 : 0), lineWidth: 1) }
     }
 }

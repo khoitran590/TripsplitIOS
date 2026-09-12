@@ -58,6 +58,8 @@ struct AddExpenseView: View {
     @State private var showReceiptAIConsent = false
     @State private var pendingConsentReceipt: (image: UIImage, originalData: Data?)?
     @State private var isSaving = false
+    @State private var showDetails = false
+    @State private var showSplitConfiguration = false
     /// When false (default) the expense only covers the current user's share.
     /// Toggling true unlocks the full split-method picker and per-item configuration.
     @State private var payForOthers = false
@@ -114,26 +116,17 @@ struct AddExpenseView: View {
 
                 if let trip {
                     ScrollView {
-                        // Ruled themes bound each section with a rule of its own, so
-                        // the stack stops adding gaps between them.
-                        VStack(spacing: Theme.isRuled ? 0 : 18) {
-                            if !isEditing {
-                                OneTimeTipBanner(
-                                    key: "tipScanReceiptDismissed",
-                                    icon: "doc.text.viewfinder",
-                                    message: "Skip the typing: scan the receipt with the Camera button below and the items, tax, and tip fill in automatically."
-                                )
-                            }
+                        VStack(spacing: Theme.Space.section) {
                             amountCard(trip)
-                            locationCard
-                            payerCard(trip)
-                            receiptCard(trip)
                             if items.isEmpty {
                                 splitCard(trip)
-                            } else {
+                            }
+                            receiptCard(trip)
+                            if !items.isEmpty {
                                 taxTipCard(trip)
                                 itemSplitsCard(trip)
                             }
+                            optionalDetails
                         }
                         .padding(.horizontal, Theme.contentInset)
                         .padding(.vertical, 16)
@@ -142,14 +135,19 @@ struct AddExpenseView: View {
                 }
             }
             .safeAreaInset(edge: .bottom) {
-                // On ruled themes the primary action is a pinned band, not a toolbar
-                // button — the one place accent fills a shape on the screen.
-                if Theme.isRuled, let trip {
-                    RuledPrimaryButton(title: isEditing ? "Save" : "Add Expense") {
-                        Task { await save() }
+                if let trip {
+                    Button { Task { await save() } } label: {
+                        HStack(spacing: 8) {
+                            if isSaving { ProgressView().tint(Theme.onAccent) }
+                            Text(isEditing ? "Save expense" : "Add expense")
+                        }
                     }
-                    .disabled(!canSave(trip) || isSaving)
-                    .opacity(canSave(trip) && !isSaving ? 1 : 0.5)
+                    .buttonStyle(AppActionStyle())
+                    .disabled(!canSave(trip) || isSaving || isScanning || isUploading)
+                    .accessibilityIdentifier("save-expense")
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(Theme.background)
                 }
             }
             .navigationTitle(isEditing ? "Edit Expense" : "Add Expense")
@@ -157,14 +155,6 @@ struct AddExpenseView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    if isSaving {
-                        ProgressView()
-                    } else if !Theme.isRuled {
-                        Button("Save") { Task { await save() } }
-                            .disabled(!(trip.map(canSave) ?? false))
-                    }
                 }
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
@@ -176,6 +166,14 @@ struct AddExpenseView: View {
             // amount field in lockstep instead of asking the user to copy it over.
             .onChange(of: grandTotal) {
                 if !items.isEmpty { amountText = formatted(grandTotal) }
+            }
+            .onChange(of: locationQuery) { _, newValue in
+                if isSelectingLocation {
+                    isSelectingLocation = false
+                    return
+                }
+                expenseLocation = nil
+                locationCompleter.update(query: newValue)
             }
             .onChange(of: receiptPick) { _, newValue in
                 guard let newValue else { return }
@@ -222,12 +220,7 @@ struct AddExpenseView: View {
     // MARK: Receipt
 
     private func receiptCard(_ trip: Trip) -> some View {
-        TripCard(title: "Receipt & Items", icon: "doc.text.viewfinder") {
-            if receiptImage == nil && items.isEmpty && removedItems.isEmpty {
-                Text("Scan a receipt to fill in the items and total for you.")
-                    .font(.app(.caption))
-                    .foregroundStyle(.secondary)
-            }
+        TripCard(title: "Receipt", icon: "doc.text.viewfinder") {
             if let receiptImage {
                 Image(uiImage: receiptImage)
                     .resizable().scaledToFill()
@@ -241,7 +234,7 @@ struct AddExpenseView: View {
                     Button {
                         showCamera = true
                     } label: {
-                        receiptActionLabel(icon: "camera.fill", title: "Camera")
+                        receiptActionLabel(icon: "camera.fill", title: "Scan receipt")
                     }
                     .buttonStyle(.plain)
                 }
@@ -249,7 +242,7 @@ struct AddExpenseView: View {
                 PhotosPicker(selection: $receiptPick, matching: .images) {
                     receiptActionLabel(
                         icon: receiptImage == nil ? "photo.on.rectangle" : "arrow.triangle.2.circlepath",
-                        title: receiptImage == nil ? "Library" : "Replace"
+                        title: receiptImage == nil ? "Upload receipt" : "Replace"
                     )
                 }
                 .buttonStyle(.plain)
@@ -258,17 +251,17 @@ struct AddExpenseView: View {
             if isScanning {
                 HStack(spacing: 6) {
                     ProgressView()
-                    Text("Scanning…").font(.app(.caption)).foregroundStyle(.secondary)
+                    Text("Scanning…").font(Theme.Typography.metadata).foregroundStyle(.secondary)
                 }
             } else if isUploading {
                 HStack(spacing: 6) {
                     ProgressView()
-                    Text("Uploading…").font(.app(.caption)).foregroundStyle(.secondary)
+                    Text("Uploading…").font(Theme.Typography.metadata).foregroundStyle(.secondary)
                 }
             } else if let uploadError {
                 VStack(alignment: .leading, spacing: 6) {
                     Label(uploadError, systemImage: "exclamationmark.icloud.fill")
-                        .font(.app(.caption)).foregroundStyle(Theme.negative)
+                        .font(Theme.Typography.metadata).foregroundStyle(Theme.negative)
                     if let receiptImage {
                         Button("Retry upload") {
                             Task { await uploadReceipt(receiptImage, originalData: nil) }
@@ -279,7 +272,7 @@ struct AddExpenseView: View {
                 }
             } else if receiptURL != nil {
                 Label("Receipt photo saved", systemImage: "checkmark.icloud.fill")
-                    .font(.app(.caption)).foregroundStyle(.secondary)
+                    .font(Theme.Typography.metadata).foregroundStyle(.secondary)
             }
 
             if usedRateLimitedReceiptFallback && !isScanning {
@@ -287,7 +280,7 @@ struct AddExpenseView: View {
                     "Using offline scan — AI limit reached. Try again shortly.",
                     systemImage: "bolt.slash.fill"
                 )
-                .font(.app(.caption))
+                .font(Theme.Typography.metadata)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("receipt-rate-limit-fallback")
             }
@@ -295,8 +288,8 @@ struct AddExpenseView: View {
             if !items.isEmpty || !removedItems.isEmpty {
                 itemsEditor(trip)
             } else if receiptImage != nil && !isScanning {
-                Text("No items detected — enter the amount manually below.")
-                    .font(.app(.caption)).foregroundStyle(.secondary)
+                Text("No items detected — enter the amount above.")
+                    .font(Theme.Typography.metadata).foregroundStyle(.secondary)
             }
 
             // Quiet entry point into itemized mode without a scan: one tap adds a first
@@ -317,7 +310,7 @@ struct AddExpenseView: View {
     private func receiptActionLabel(icon: String, title: LocalizedStringKey) -> some View {
         HStack(spacing: 8) {
             Image(systemName: icon)
-            Text(title).font(.app(.subheadline, .semibold))
+            Text(title).font(Theme.Typography.rowTitle)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 12)
@@ -334,9 +327,9 @@ struct AddExpenseView: View {
             ForEach($items) { $item in
                 HStack(spacing: 8) {
                     TextField("Item", text: $item.name)
-                        .font(.app(.subheadline))
+                        .font(Theme.Typography.secondary)
                     Spacer(minLength: 6)
-                    Text(currencySymbol(trip.currencyCode)).font(.app(.subheadline)).foregroundStyle(.secondary)
+                    Text(currencySymbol(trip.currencyCode)).font(Theme.Typography.secondary).foregroundStyle(.secondary)
                     TextField("0.00", value: $item.price, format: .number.precision(.fractionLength(2)))
                         .keyboardType(.decimalPad)
                         .multilineTextAlignment(.trailing)
@@ -586,7 +579,7 @@ struct AddExpenseView: View {
 
                 if !items.isEmpty {
                     Text("Total is calculated from the items, tax, and tip below.")
-                        .font(.app(.caption))
+                        .font(Theme.Typography.metadata)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
@@ -598,6 +591,7 @@ struct AddExpenseView: View {
                     .font(.app(.subheadline, .medium))
                     .multilineTextAlignment(.trailing)
                     .textContentType(.none)
+                    .accessibilityIdentifier("expense-title")
                     .submitLabel(.next)
                     .focused($focusedField, equals: .title)
                     .onSubmit { focusedField = .amount }
@@ -613,12 +607,31 @@ struct AddExpenseView: View {
     private func cardAmountCard(_ trip: Trip) -> some View {
         TripCard(title: "Expense", icon: "dollarsign.circle.fill") {
             VStack(alignment: .leading, spacing: 6) {
+                Text("Amount")
+                    .font(.app(.caption, .semibold))
+                    .foregroundStyle(Theme.textSecondary)
+                HStack(spacing: 6) {
+                    Text(trip.currencyCode).foregroundStyle(Theme.textSecondary)
+                    TextField("0.00", text: $amountText)
+                        .keyboardType(.decimalPad)
+                        .focused($focusedField, equals: .amount)
+                        .disabled(!items.isEmpty)
+                        .accessibilityLabel("Amount in \(trip.currencyCode)")
+                        .accessibilityIdentifier("expense-amount")
+                }
+                .font(Theme.Typography.amount)
+                .padding(.horizontal, 14).padding(.vertical, 12)
+                .fieldFill()
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
                 Text("Title")
                     .font(.app(.caption, .semibold))
                     .foregroundStyle(Theme.textSecondary)
                 TextField("Dinner", text: $title)
                     .font(.app(.subheadline, .medium))
                     .textContentType(.none)
+                    .accessibilityIdentifier("expense-title")
                     .submitLabel(.next)
                     .focused($focusedField, equals: .title)
                     .onSubmit { focusedField = .amount }
@@ -626,31 +639,14 @@ struct AddExpenseView: View {
                     .fieldFill()
             }
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Amount")
-                    .font(.app(.caption, .semibold))
-                    .foregroundStyle(Theme.textSecondary)
-                HStack(spacing: 6) {
-                    Text(currencySymbol(trip.currencyCode)).foregroundStyle(Theme.textSecondary)
-                    TextField("0.00", text: $amountText)
-                        .keyboardType(.decimalPad)
-                        .focused($focusedField, equals: .amount)
-                        .disabled(!items.isEmpty)
-                        .accessibilityLabel("Amount in \(trip.currencyCode)")
-                }
-                .font(.app(.title3, .semibold))
-                .padding(.horizontal, 14).padding(.vertical, 12)
-                .fieldFill()
-            }
-
             if !items.isEmpty {
                 Text("Total is calculated from the items, tax, and tip below.")
-                    .font(.app(.caption))
+                    .font(Theme.Typography.metadata)
                     .foregroundStyle(.secondary)
             }
 
-            DatePicker("Date", selection: $date, displayedComponents: .date)
-                .font(.app(.subheadline))
+            Divider()
+            payerRow(trip)
         }
     }
 
@@ -706,32 +702,58 @@ struct AddExpenseView: View {
     }
 
     private func cardPayerCard(_ trip: Trip) -> some View {
+        TripCard(title: "Paid by", icon: "creditcard.fill") { payerRow(trip) }
+    }
+
+    private func payerRow(_ trip: Trip) -> some View {
         let payer = trip.members.first { $0.id == resolvedPayer } ?? store.currentUser
-        let isMe = payer.id == store.currentUser.id
-        return TripCard(title: "Paid by", icon: "creditcard.fill") {
+        return HStack(spacing: 10) {
+            Text("Paid by").font(Theme.Typography.secondary).foregroundStyle(Theme.textSecondary)
+            Spacer()
             if canChoosePayer {
-                Menu {
-                    payerMenuItems(trip)
-                } label: {
-                    HStack(spacing: 10) {
-                        avatar(payer, size: 30)
-                        Text(LocalizedStringKey(isMe ? "You" : payer.name)).font(.app(.subheadline, .medium))
-                        Spacer()
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.app(.caption)).foregroundStyle(.secondary)
-                    }
-                    .foregroundStyle(.primary)
-                    .padding(.horizontal, 14).padding(.vertical, 10)
-                    .fieldFill()
-                }
+                Menu { payerMenuItems(trip) } label: { payerLabel(payer) }
+                    .accessibilityIdentifier("expense-payer")
             } else {
-                HStack {
-                    avatar(payer, size: 30)
-                    Text(LocalizedStringKey(isMe ? "You" : payer.name)).font(.app(.subheadline, .medium))
-                    Spacer()
-                }
+                payerLabel(payer)
             }
         }
+        .frame(minHeight: 44)
+    }
+
+    private func payerLabel(_ payer: Person) -> some View {
+        HStack(spacing: 8) {
+            avatar(payer, size: 28)
+            Text(payer.id == store.currentUser.id ? String(localized: "You") : payer.name)
+                .font(.app(.subheadline, .medium))
+            if canChoosePayer {
+                Image(systemName: "chevron.up.chevron.down").font(Theme.Typography.metadata)
+            }
+        }
+        .foregroundStyle(.primary)
+    }
+
+    private var optionalDetails: some View {
+        DisclosureGroup(isExpanded: $showDetails) {
+            VStack(alignment: .leading, spacing: 16) {
+                DatePicker("Date", selection: $date, displayedComponents: .date)
+                    .font(Theme.Typography.secondary)
+                locationCard
+            }
+            .padding(.top, 12)
+        } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                Label("Date & location", systemImage: "calendar")
+                    .font(Theme.Typography.rowTitle)
+                Text([date.formatted(date: .abbreviated, time: .omitted),
+                      expenseLocation?.name ?? locationQuery].filter { !$0.isEmpty }.joined(separator: " · "))
+                    .font(Theme.Typography.metadata).foregroundStyle(Theme.textSecondary)
+            }
+            .frame(minHeight: 44)
+        }
+        .tint(Theme.accent)
+        .padding(18)
+        .readableSurface()
+        .accessibilityIdentifier("expense-details")
     }
 
     private var locationCard: some View {
@@ -742,14 +764,7 @@ struct AddExpenseView: View {
                 cardLocationCard
             }
         }
-        .onChange(of: locationQuery) { _, newValue in
-            if isSelectingLocation {
-                isSelectingLocation = false
-                return
-            }
-            expenseLocation = nil
-            locationCompleter.update(query: newValue)
-        }
+
     }
 
     /// The location field as one ruled row, with the completer's suggestions listed
@@ -780,10 +795,10 @@ struct AddExpenseView: View {
                 ForEach(Array(locationCompleter.suggestions.prefix(5).enumerated()), id: \.offset) { _, suggestion in
                     Button { selectExpenseLocation(suggestion) } label: {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(suggestion.title).font(.app(.subheadline, .semibold))
+                            Text(suggestion.title).font(Theme.Typography.rowTitle)
                             if !suggestion.subtitle.isEmpty {
                                 Text(suggestion.subtitle)
-                                    .font(.app(.caption)).foregroundStyle(.secondary).lineLimit(1)
+                                    .font(Theme.Typography.metadata).foregroundStyle(.secondary).lineLimit(1)
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -795,7 +810,7 @@ struct AddExpenseView: View {
                 }
             } else if let expenseLocation, let address = expenseLocation.address {
                 Label(address, systemImage: "checkmark.circle.fill")
-                    .font(.app(.caption)).foregroundStyle(.secondary)
+                    .font(Theme.Typography.metadata).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 8)
             }
@@ -803,7 +818,9 @@ struct AddExpenseView: View {
     }
 
     private var cardLocationCard: some View {
-        TripCard(title: "Location (optional)", icon: "mappin.and.ellipse") {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Location (optional)", systemImage: "mappin.and.ellipse")
+                .font(Theme.Typography.rowTitle)
             HStack(spacing: 10) {
                 TextField("Merchant or place", text: $locationQuery)
                     .font(.app(.subheadline, .medium))
@@ -828,10 +845,10 @@ struct AddExpenseView: View {
                     ForEach(Array(locationCompleter.suggestions.prefix(5).enumerated()), id: \.offset) { index, suggestion in
                         Button { selectExpenseLocation(suggestion) } label: {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(suggestion.title).font(.app(.subheadline, .semibold))
+                                Text(suggestion.title).font(Theme.Typography.rowTitle)
                                 if !suggestion.subtitle.isEmpty {
                                     Text(suggestion.subtitle)
-                                        .font(.app(.caption)).foregroundStyle(.secondary).lineLimit(1)
+                                        .font(Theme.Typography.metadata).foregroundStyle(.secondary).lineLimit(1)
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -844,7 +861,7 @@ struct AddExpenseView: View {
                 .fieldFill()
             } else if let expenseLocation, let address = expenseLocation.address {
                 Label(address, systemImage: "checkmark.circle.fill")
-                    .font(.app(.caption)).foregroundStyle(.secondary)
+                    .font(Theme.Typography.metadata).foregroundStyle(.secondary)
             }
         }
     }
@@ -872,53 +889,70 @@ struct AddExpenseView: View {
     private func splitCard(_ trip: Trip) -> some View {
         let outcome = result(for: trip)
         return TripCard(title: "Split", icon: "divide.circle.fill") {
-            payForOthersButton(trip)
+            DisclosureGroup(isExpanded: $showSplitConfiguration) {
+                VStack(alignment: .leading, spacing: 14) {
+                    payForOthersButton(trip)
 
-            if payForOthers {
-                Menu {
-                    ForEach(SplitMethod.allCases) { option in
-                        Button {
-                            method = option
-                            configureForMethod(trip)
+                    if payForOthers {
+                        Menu {
+                            ForEach(SplitMethod.allCases) { option in
+                                Button {
+                                    method = option
+                                    configureForMethod(trip)
+                                } label: {
+                                    Label(LocalizedStringKey(option.rawValue), systemImage: option.icon)
+                                }
+                            }
                         } label: {
-                            Label(LocalizedStringKey(option.rawValue), systemImage: option.icon)
+                            HStack {
+                                // The ruled style carries no icon chrome: the method reads as a
+                                // value on a field row, not as a filled control.
+                                if !Theme.isRuled { Image(systemName: method.icon) }
+                                Text(LocalizedStringKey(method.rawValue)).font(Theme.Typography.rowTitle)
+                                Spacer()
+                                Image(systemName: "chevron.up.chevron.down").font(Theme.Typography.metadata).foregroundStyle(.secondary)
+                            }
+                            .foregroundStyle(.primary)
+                            .padding(.horizontal, Theme.isRuled ? 0 : 14)
+                            .padding(.vertical, Theme.isRuled ? 0 : 12)
+                            .frame(minHeight: Theme.isRuled ? 46 : 0)
+                            .background {
+                                if !Theme.isRuled {
+                                    RoundedRectangle(cornerRadius: 12).fill(Theme.fieldBackground)
+                                }
+                            }
                         }
-                    }
-                } label: {
-                    HStack {
-                        // The ruled style carries no icon chrome: the method reads as a
-                        // value on a field row, not as a filled control.
-                        if !Theme.isRuled { Image(systemName: method.icon) }
-                        Text(LocalizedStringKey(method.rawValue)).font(.app(.subheadline, .semibold))
-                        Spacer()
-                        Image(systemName: "chevron.up.chevron.down").font(.app(.caption)).foregroundStyle(.secondary)
-                    }
-                    .foregroundStyle(.primary)
-                    .padding(.horizontal, Theme.isRuled ? 0 : 14)
-                    .padding(.vertical, Theme.isRuled ? 0 : 12)
-                    .frame(minHeight: Theme.isRuled ? 46 : 0)
-                    .background {
-                        if !Theme.isRuled {
-                            RoundedRectangle(cornerRadius: 12).fill(Theme.fieldBackground)
-                        }
-                    }
-                }
-                if Theme.isRuled { RuledDivider() }
+                        if Theme.isRuled { RuledDivider() }
 
-                switch method {
-                case .equalAll:
-                    Text("Split equally across all \(trip.members.count) member\(trip.members.count == 1 ? "" : "s").")
-                        .font(.app(.caption)).foregroundStyle(.secondary)
-                case .equalSelected:
-                    memberToggleList(trip)
-                case .noSplit:
-                    singlePayerList(trip)
-                case .percentage:
-                    valueFields(trip, unit: "%", values: $percentages)
-                case .amount:
-                    valueFields(trip, unit: currencySymbol(trip.currencyCode), values: $amounts)
+                        switch method {
+                        case .equalAll:
+                            Text("Split equally across all \(trip.members.count) member\(trip.members.count == 1 ? "" : "s").")
+                                .font(Theme.Typography.metadata).foregroundStyle(.secondary)
+                        case .equalSelected:
+                            memberToggleList(trip)
+                        case .noSplit:
+                            singlePayerList(trip)
+                        case .percentage:
+                            valueFields(trip, unit: "%", values: $percentages)
+                        case .amount:
+                            valueFields(trip, unit: currencySymbol(trip.currencyCode), values: $amounts)
+                        }
+                    }
+
+                    sharePreview(trip, outcome)
                 }
+                .padding(.top, 12)
+            } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(payForOthers ? LocalizedStringKey(method.rawValue) : "Just me")
+                        .font(Theme.Typography.rowTitle)
+                    Text("Your share \(money(outcome.owed[store.currentUser.id] ?? 0, trip.currencyCode))")
+                        .font(Theme.Typography.metadata).foregroundStyle(Theme.textSecondary)
+                }
+                .frame(minHeight: 44)
             }
+            .tint(Theme.accent)
+            .accessibilityIdentifier("expense-split")
 
             if let message = outcome.message, !outcome.isValid {
                 Label(message, systemImage: "exclamationmark.triangle.fill")
@@ -926,7 +960,6 @@ struct AddExpenseView: View {
                     .foregroundStyle(Theme.negative)
             }
 
-            sharePreview(trip, outcome)
         }
     }
 
@@ -969,9 +1002,9 @@ struct AddExpenseView: View {
                     .foregroundStyle(Theme.accent)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Pay for others")
-                        .font(.app(.subheadline, .semibold))
+                        .font(Theme.Typography.rowTitle)
                     Text(payForOthers ? "Covering other members' expenses" : "Only covering your own share")
-                        .font(.app(.caption)).foregroundStyle(.secondary)
+                        .font(Theme.Typography.metadata).foregroundStyle(.secondary)
                 }
                 Spacer()
             }
@@ -1035,7 +1068,7 @@ struct AddExpenseView: View {
                 .frame(width: 64)
                 .padding(.horizontal, 10).padding(.vertical, 8)
                 .fieldFill(cornerRadius: 10)
-                Text(unit).font(.app(.subheadline)).foregroundStyle(.secondary)
+                Text(unit).font(Theme.Typography.secondary).foregroundStyle(.secondary)
             }
         }
     }
@@ -1047,7 +1080,7 @@ struct AddExpenseView: View {
                 if owed > 0.005 {
                     HStack {
                         Text(LocalizedStringKey(member.id == store.currentUser.id ? "You" : member.name))
-                            .font(.app(.caption)).foregroundStyle(.secondary)
+                            .font(Theme.Typography.metadata).foregroundStyle(.secondary)
                         Spacer()
                         Text(money(owed, trip.currencyCode)).font(.app(.caption, .semibold))
                     }
@@ -1060,12 +1093,12 @@ struct AddExpenseView: View {
     private func chip(label: String, selected: Bool, color: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(label)
-                .font(.app(.subheadline, .semibold))
+                .font(Theme.Typography.rowTitle)
                 .foregroundStyle(selected ? AnyShapeStyle(Theme.onAccent) : AnyShapeStyle(.primary))
                 .padding(.horizontal, 14).padding(.vertical, 9)
         }
         .buttonStyle(.plain)
-        .glassEffect(selected ? .regular.tint(Theme.accent).interactive() : .regular.interactive(), in: .capsule)
+        .background(selected ? Theme.accent : Theme.fieldBackground, in: .capsule)
     }
 
     // MARK: Per-item split
@@ -1116,14 +1149,14 @@ struct AddExpenseView: View {
                 ruledFieldRow("Tax") { extraAmountField(trip, text: $taxText) }
                 ruledFieldRow("Tip") { extraAmountField(trip, text: $tipText) }
                 Text("Allocated across items by each person's subtotal.")
-                    .font(.app(.caption)).foregroundStyle(.secondary)
+                    .font(Theme.Typography.metadata).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 8)
             }
         } else {
             TripCard(title: "Tax & tip", icon: "percent") {
                 Text("Allocated across items by each person's subtotal.")
-                    .font(.app(.caption)).foregroundStyle(.secondary)
+                    .font(Theme.Typography.metadata).foregroundStyle(.secondary)
                 extraField(trip, title: "Tax", text: $taxText)
                 extraField(trip, title: "Tip", text: $tipText)
             }
@@ -1133,7 +1166,7 @@ struct AddExpenseView: View {
     private func extraAmountField(_ trip: Trip, text: Binding<String>) -> some View {
         HStack(spacing: 4) {
             Text(currencySymbol(trip.currencyCode))
-                .font(.app(.subheadline)).foregroundStyle(.secondary)
+                .font(Theme.Typography.secondary).foregroundStyle(.secondary)
             TextField("0.00", text: text)
                 .font(.app(.subheadline, .medium))
                 .keyboardType(.decimalPad)
@@ -1146,7 +1179,7 @@ struct AddExpenseView: View {
         HStack(spacing: 10) {
             Text(title).font(.app(.subheadline, .medium))
             Spacer()
-            Text(currencySymbol(trip.currencyCode)).font(.app(.subheadline)).foregroundStyle(.secondary)
+            Text(currencySymbol(trip.currencyCode)).font(Theme.Typography.secondary).foregroundStyle(.secondary)
             TextField("0.00", text: text)
                 .keyboardType(.decimalPad)
                 .multilineTextAlignment(.trailing)
@@ -1162,7 +1195,7 @@ struct AddExpenseView: View {
             payForOthersButton(trip)
 
             Text("Tap an item to choose how it's split.")
-                .font(.app(.caption)).foregroundStyle(.secondary)
+                .font(Theme.Typography.metadata).foregroundStyle(.secondary)
 
             ForEach(items.indices, id: \.self) { index in
                 let item = items[index]
@@ -1174,12 +1207,12 @@ struct AddExpenseView: View {
                 } label: {
                     HStack(spacing: 10) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(item.name).font(.app(.subheadline, .semibold)).lineLimit(1)
+                            Text(item.name).font(Theme.Typography.rowTitle).lineLimit(1)
                             Label(LocalizedStringKey(item.splitMethod.rawValue), systemImage: item.splitMethod.icon)
-                                .font(.app(.caption)).foregroundStyle(.secondary)
+                                .font(Theme.Typography.metadata).foregroundStyle(.secondary)
                         }
                         Spacer(minLength: 6)
-                        Text(money(item.price, trip.currencyCode)).font(.app(.subheadline, .semibold))
+                        Text(money(item.price, trip.currencyCode)).font(Theme.Typography.rowTitle)
                         Image(systemName: "slider.horizontal.3").foregroundStyle(Theme.accent)
                     }
                     .contentShape(.rect)
@@ -1207,7 +1240,7 @@ struct AddExpenseView: View {
                 if owed > 0.005 {
                     HStack {
                         Text(LocalizedStringKey(member.id == store.currentUser.id ? "You" : member.name))
-                            .font(.app(.caption)).foregroundStyle(.secondary)
+                            .font(Theme.Typography.metadata).foregroundStyle(.secondary)
                         Spacer()
                         Text(money(owed, trip.currencyCode)).font(.app(.caption, .semibold))
                     }
@@ -1247,6 +1280,7 @@ struct AddExpenseView: View {
 
     private func configureDefaults() {
         guard let trip else { return }
+        showSplitConfiguration = startWithFullSplit
         if let editing {
             expenseID = editing.id
             selectedPayerID = editing.payerID

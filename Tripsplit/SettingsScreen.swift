@@ -77,7 +77,7 @@ struct SettingsScreen: View {
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Account")
-                        .font(.app(.title2, .bold))
+                        .font(Theme.Typography.sectionTitle)
                         .padding(.bottom, 8)
 
                     PlainSettingsRow(icon: "person.fill", title: "Personal information",
@@ -88,18 +88,18 @@ struct SettingsScreen: View {
                     // page: it is account data only the holder can see, so it belongs
                     // with the account rows rather than in the public-facing profile.
                     PlainSettingsRow(icon: "lock.shield.fill", title: "Login & security",
-                                     value: auth.email, iconColor: Theme.positive) {
+                                     value: auth.email, iconColor: Theme.accent) {
                         showChangePassword = true
                     }
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Money")
-                        .font(.app(.title2, .bold))
+                        .font(Theme.Typography.sectionTitle)
                         .padding(.bottom, 8)
 
                     PlainSettingsRow(icon: "creditcard.fill", title: "Payment records",
-                                     iconColor: Color(hex: 0x8B5CF6)) {
+                                     iconColor: Theme.accent) {
                         showPaymentSettings = true
                     }
                     Menu {
@@ -108,40 +108,40 @@ struct SettingsScreen: View {
                         }
                     } label: {
                         PlainSettingsRow(icon: "dollarsign.arrow.circlepath", title: "Home currency",
-                                         value: displayCurrency, iconColor: Theme.positive)
+                                         value: displayCurrency, iconColor: Theme.accent)
                     }
                     .buttonStyle(.plain)
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Appearance")
-                        .font(.app(.title2, .bold))
+                        .font(Theme.Typography.sectionTitle)
                         .padding(.bottom, 8)
 
                     PlainSettingsRow(icon: "paintpalette.fill", title: "Appearance & theme",
                                      value: appearance.label,
-                                     iconColor: Color(hex: 0xEC4899)) {
+                                     iconColor: Theme.accent) {
                         showAppearanceSettings = true
                     }
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Privacy & Safety")
-                        .font(.app(.title2, .bold))
+                        .font(Theme.Typography.sectionTitle)
                         .padding(.bottom, 8)
 
                     PlainSettingsRow(icon: "hand.raised.fill", title: "Privacy & AI",
-                                     iconColor: Color(hex: 0x0EA5E9)) {
+                                     iconColor: Theme.accent) {
                         showPrivacyChoices = true
                     }
                     PlainSettingsRow(icon: "checkmark.shield.fill", title: "Community Standards",
-                                     iconColor: Color(hex: 0x10B981)) {
+                                     iconColor: Theme.accent) {
                         showCommunityStandards = true
                     }
                 }
 
                 PlainSettingsRow(icon: "rectangle.portrait.and.arrow.right", title: "Sign Out",
-                                 showsChevron: false, tint: Color(hex: 0xEF4444)) {
+                                 showsChevron: false, tint: Theme.negative) {
                     Task {
                         guard !isSigningOut else { return }
                         isSigningOut = true
@@ -155,7 +155,7 @@ struct SettingsScreen: View {
                 .disabled(isSigningOut)
 
                 PlainSettingsRow(icon: "person.crop.circle.badge.xmark", title: "Delete Account",
-                                 showsChevron: false, tint: Color(hex: 0xEF4444)) {
+                                 showsChevron: false, tint: Theme.negative) {
                     showDeleteAccount = true
                 }
                 .disabled(isSigningOut)
@@ -207,12 +207,12 @@ struct SettingsScreen: View {
                                   color: Color(hex: 0x06B6D4))
 
                 Text("Dock background transparency")
-                    .font(.app(.body))
+                    .font(Theme.Typography.body)
 
                 Spacer()
 
                 Text("\(Int((navbarTransparency * 100).rounded()))%")
-                    .font(.app(.subheadline))
+                    .font(Theme.Typography.secondary)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
@@ -227,7 +227,7 @@ struct SettingsScreen: View {
                 Spacer()
                 Text("Clear")
             }
-            .font(.app(.caption))
+            .font(Theme.Typography.metadata)
             .foregroundStyle(.secondary)
 
             Divider()
@@ -257,11 +257,11 @@ struct SettingsScreen: View {
                     }
                     .shadow(color: Theme.accent.opacity(0.35), radius: 4, y: 2)
                 Text("Theme")
-                    .font(.app(.body))
+                    .font(Theme.Typography.body)
                 Spacer()
                 // Theme names are proper nouns — shown verbatim, not localized.
                 Text(verbatim: themeManager.selection.label)
-                    .font(.app(.subheadline))
+                    .font(Theme.Typography.secondary)
                     .foregroundStyle(.secondary)
             }
             .padding(.top, 16)
@@ -328,10 +328,10 @@ struct SettingsScreen: View {
 
                     VStack(alignment: .leading, spacing: 3) {
                         Text(verbatim: displayName)
-                            .font(.app(.title3, .semibold))
+                            .font(Theme.Typography.amount)
                             .foregroundStyle(.primary)
                         Text("Show profile")
-                            .font(.app(.subheadline))
+                            .font(Theme.Typography.secondary)
                             .foregroundStyle(.secondary)
                     }
 
@@ -353,9 +353,9 @@ struct SettingsScreen: View {
         HStack(spacing: 14) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Featured travel guides")
-                    .font(.app(.headline))
+                    .font(Theme.Typography.sectionTitle)
                 Text("Find a destination, shape a plan, then share it with friends.")
-                    .font(.app(.subheadline))
+                    .font(Theme.Typography.secondary)
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -364,20 +364,20 @@ struct SettingsScreen: View {
                 .foregroundStyle(Theme.accent)
         }
         .padding(16)
-        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+        .readableSurface(cornerRadius: Theme.cardRadius)
     }
 
     /// Luma-style footer: app name, version, terms.
     private var versionFooter: some View {
         VStack(spacing: 6) {
             Text("TripSplit")
-                .font(.app(.headline))
+                .font(Theme.Typography.sectionTitle)
                 .foregroundStyle(.tertiary)
             Text("Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1") (\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"))")
-                .font(.app(.caption))
+                .font(Theme.Typography.metadata)
                 .foregroundStyle(.tertiary)
             Button("Privacy Policy") { showPrivacyPolicy = true }
-                .font(.app(.caption))
+                .font(Theme.Typography.metadata)
                 .foregroundStyle(.tertiary)
                 .buttonStyle(.plain)
         }
@@ -498,14 +498,14 @@ struct PlainSettingsRow: View {
                     SettingsIconBadge(icon: icon, color: iconColor ?? tint ?? Theme.accent)
 
                     Text(title)
-                        .font(.app(.body))
+                        .font(Theme.Typography.body)
                         .foregroundStyle(tint ?? .primary)
 
                     Spacer()
 
                     if let value {
                         Text(value)
-                            .font(.app(.subheadline))
+                            .font(Theme.Typography.secondary)
                             .foregroundStyle(.secondary)
                             // Values are short labels except the account email, which can
                             // be long enough to squeeze the title off the row.

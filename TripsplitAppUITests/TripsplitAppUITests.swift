@@ -34,6 +34,73 @@ final class TripsplitAppUITests: XCTestCase {
         try performAccessibilityAudit()
     }
 
+    func testTripOverviewDestinationsKeepHistoryAndEditingAccessible() throws {
+        launchDemoTrip(theme: "classic")
+
+        tapAfterScrolling(app.buttons["trip-members"])
+        XCTAssertTrue(app.navigationBars["Members & invitations"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Jamie Chen"].exists)
+        XCTAssertTrue(app.textFields["Invite by email"].exists)
+        captureDesignScreen("Members")
+        app.navigationBars["Members & invitations"].buttons.element(boundBy: 0).tap()
+
+        tapAfterScrolling(app.buttons["trip-expense-history"])
+        XCTAssertTrue(app.navigationBars["Expense history"].waitForExistence(timeout: 5))
+        let search = app.textFields["Search expenses"]
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        search.tap()
+        search.typeText("Ramen")
+        app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Ramen dinner")).firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Ramen dinner"].waitForExistence(timeout: 5))
+        app.buttons["Edit"].tap()
+        XCTAssertTrue(app.textFields["expense-amount"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["save-expense"].isEnabled)
+        app.buttons["Cancel"].tap()
+    }
+
+    func testTripOverviewUsesSameDestinationsWithLargeTextAndColonnade() throws {
+        launchDemoTrip(theme: "colonnade", largeText: true)
+        tapAfterScrolling(app.buttons["trip-all-balances"])
+        XCTAssertTrue(app.navigationBars["All balances"].waitForExistence(timeout: 5))
+        captureDesignScreen("Balances-large-text")
+        app.navigationBars["All balances"].buttons.element(boundBy: 0).tap()
+        tapAfterScrolling(app.buttons["trip-itinerary"])
+        XCTAssertTrue(app.navigationBars["Tokyo Together"].waitForExistence(timeout: 5))
+        captureDesignScreen("Itinerary-large-text")
+    }
+
+    private func launchDemoTrip(theme: String, largeText: Bool = false) {
+        app.launchArguments = ["-app-store-demo", "-ui-test-skip-onboarding", "-ui-test-theme", theme,
+                               "-appearancePreference", "light", "-AppleLanguages", "(en)"]
+        if largeText {
+            app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        }
+        app.launch()
+        XCTAssertTrue(app.buttons["Trips"].waitForExistence(timeout: 8))
+        app.buttons["Trips"].tap()
+        XCTAssertTrue(app.navigationBars["Your trips"].waitForExistence(timeout: 5))
+        captureDesignScreen("Trips-" + theme)
+        tapAfterScrolling(app.buttons["trip-card-D2000000-0000-0000-0000-000000000001"])
+        XCTAssertTrue(app.buttons["trip-add-expense"].waitForExistence(timeout: 5))
+        captureDesignScreen("Overview-" + theme)
+    }
+
+    private func tapAfterScrolling(_ element: XCUIElement) {
+        for _ in 0..<12 {
+            if element.exists && element.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(element.exists && element.isHittable, "Expected a reachable control: \(element)")
+        element.tap()
+    }
+
+    private func captureDesignScreen(_ name: String) {
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = name
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
     /// Keep the audit strict while making CI failures actionable. XCTest's default
     /// failure only names the category; logging the attached element identifies the
     /// exact control or label that needs correction.

@@ -62,7 +62,7 @@ struct SplitView: View {
                 ScrollView {
                     // Ruled themes bound each section with a rule, so the stack stops
                     // adding gaps between them.
-                    VStack(spacing: Theme.isRuled ? 0 : 18) {
+                    VStack(spacing: Theme.Space.section) {
                         amountCard
                         payerCard
                         methodCard
@@ -114,7 +114,7 @@ struct SplitView: View {
                 HStack(spacing: 2) {
                     Text(currencySymbol(currencyCode)).font(.app(.title, .semibold)).foregroundStyle(.secondary)
                     TextField("0.00", text: $amountText)
-                        .font(.app(size: 40, weight: .bold))
+                        .font(Theme.Typography.heroAmount)
                         .keyboardType(.decimalPad)
                         .multilineTextAlignment(.center)
                         .fixedSize()
@@ -159,16 +159,13 @@ struct SplitView: View {
                                     Image(systemName: option.icon)
                                     Text(LocalizedStringKey(option.shortLabel))
                                 }
-                                .font(.app(.subheadline, .semibold))
+                                .font(Theme.Typography.rowTitle)
                                 .foregroundStyle(method == option ? AnyShapeStyle(Theme.onAccent) : AnyShapeStyle(.primary))
                                 .padding(.horizontal, 14)
                                 .padding(.vertical, 9)
                             }
                             .buttonStyle(.plain)
-                            .glassEffect(
-                                method == option ? .regular.tint(Theme.accent).interactive() : .regular.interactive(),
-                                in: .capsule
-                            )
+                            .controlSurface(tint: method == option ? Theme.accent : nil, in: .capsule)
                         }
                     }
                 }
@@ -253,20 +250,20 @@ struct SplitView: View {
                 }
             } else {
                 Label("Split Review", systemImage: "list.bullet.rectangle.fill")
-                    .font(.app(.headline))
+                    .font(Theme.Typography.sectionTitle)
             }
 
             if let message = result.message, !result.isValid {
                 Label(message, systemImage: "exclamationmark.triangle.fill")
                     .font(.app(.footnote, .medium))
-                    .foregroundStyle(Color(hex: 0xEF4444))
+                    .foregroundStyle(Theme.negative)
                     .padding(.horizontal, Theme.isRuled ? 0 : 10)
                     .padding(.vertical, 10)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background {
                         if !Theme.isRuled {
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(Color(hex: 0xEF4444).opacity(0.12))
+                                .fill(Theme.negative.opacity(0.12))
                         }
                     }
             }
@@ -278,7 +275,7 @@ struct SplitView: View {
                         .font(.app(.subheadline, .medium))
                     Spacer()
                     Text(currency(result.owed[person.id] ?? 0))
-                        .font(.app(.subheadline, .semibold))
+                        .font(Theme.Typography.rowTitle)
                 }
             }
 
@@ -303,34 +300,34 @@ struct SplitView: View {
                             if isFullySettled(settlement) {
                                 Label("Settled", systemImage: "checkmark.seal.fill")
                                     .font(.app(.caption, .semibold))
-                                    .foregroundStyle(Color(hex: 0x10B981))
+                                    .foregroundStyle(Theme.positive)
                             } else {
                                 Text(currency(remainingAmount(for: settlement)))
                                     .fontWeight(.semibold)
-                                    .foregroundStyle(Color(hex: 0x10B981))
+                                    .foregroundStyle(Theme.positive)
                             }
                             Image(systemName: "chevron.right")
                                 .font(.app(.caption2, .bold))
                                 .foregroundStyle(.tertiary)
                         }
-                        .font(.app(.subheadline))
+                        .font(Theme.Typography.secondary)
                         .contentShape(.rect)
                     }
                     .buttonStyle(.plain)
                 }
             } else if result.isValid {
                 Text("All settled up — nothing owed.")
-                    .font(.app(.subheadline))
+                    .font(Theme.Typography.secondary)
                     .foregroundStyle(.secondary)
             }
         }
-        .panelPadding(horizontal: 18, vertical: 18)
+        .panelPadding(horizontal: Theme.Space.card, vertical: Theme.Space.card)
         .frame(maxWidth: .infinity, alignment: .leading)
 
         if Theme.isRuled {
             content.ruledSection()
         } else {
-            content.glassEffect(.regular.tint(Theme.accent.opacity(0.08)), in: .rect(cornerRadius: 24))
+            content.readableSurface(cornerRadius: Theme.cardRadius)
         }
     }
 
@@ -356,11 +353,11 @@ struct SplitView: View {
                 Text(title).inscription().foregroundStyle(Theme.textSecondary)
             } else {
                 Label(title, systemImage: icon)
-                    .font(.app(.headline))
+                    .font(Theme.Typography.sectionTitle)
             }
             content()
         }
-        .panelPadding(horizontal: 18, vertical: 18)
+        .panelPadding(horizontal: Theme.Space.card, vertical: Theme.Space.card)
         .frame(maxWidth: .infinity, alignment: .leading)
         .homeGlassPanel(cornerRadius: 24)
     }
@@ -387,13 +384,13 @@ struct SplitView: View {
         } else {
             Button(action: action) {
                 Text(title)
-                    .font(.app(.subheadline, .semibold))
+                    .font(Theme.Typography.rowTitle)
                     .foregroundStyle(selected ? AnyShapeStyle(Theme.onAccent) : AnyShapeStyle(.primary))
                     .padding(.horizontal, 14)
                     .padding(.vertical, 9)
             }
             .buttonStyle(.plain)
-            .glassEffect(selected ? .regular.tint(color).interactive() : .regular.interactive(), in: .capsule)
+            .controlSurface(tint: selected ? Theme.accent : nil, in: .capsule)
         }
     }
 
@@ -416,7 +413,7 @@ struct SplitView: View {
             }
             Text(person.name).font(.app(.subheadline, .medium))
             Spacer()
-            Text(trailing).font(.app(.subheadline, .semibold)).foregroundStyle(.secondary)
+            Text(trailing).font(Theme.Typography.rowTitle).foregroundStyle(.secondary)
             // The ruled row carries its include state as a mark on the right, where
             // the card row carries it as a checkbox on the left.
             if Theme.isRuled, leadingSystemImage != nil {
@@ -453,7 +450,7 @@ struct SplitView: View {
                     .frame(width: 64)
                 if suffix == "%" { Text("%").foregroundStyle(.secondary) }
             }
-            .font(.app(.subheadline, .semibold))
+            .font(Theme.Typography.rowTitle)
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
             // A filled input keeps its fill on every theme; ruled squares it.
@@ -463,11 +460,11 @@ struct SplitView: View {
 
     private func summaryLine(label: LocalizedStringKey, value: String, target: String) -> some View {
         HStack {
-            Text(label).font(.app(.subheadline, .semibold))
+            Text(label).font(Theme.Typography.rowTitle)
             Spacer()
             Text("\(value) / \(target)")
-                .font(.app(.subheadline, .semibold))
-                .foregroundStyle(result.isValid ? Color(hex: 0x10B981) : Color(hex: 0xEF4444))
+                .font(Theme.Typography.rowTitle)
+                .foregroundStyle(result.isValid ? Theme.positive : Theme.negative)
         }
     }
 
@@ -566,12 +563,14 @@ struct SettleView: View {
     /// Currency code used to format amounts; defaults to USD for the split review.
     var currencyCode: String = "USD"
     var tripName: String? = nil
-    /// When set, only this user (the debtor) may record new payments; others can only approve/decline.
+    /// When set, only this user (the debtor) may record new payments. The creditor can
+    /// approve/decline, while the debtor may self-approve after a confirmation notice.
     var currentUserID: Person.ID? = nil
 
     @State private var amountText = ""
     @State private var note = ""
     @State private var method: PaymentMethod = .cash
+    @State private var pendingSelfApproval: SettlementRecord?
     @AppStorage("defaultPaymentMethod") private var defaultPaymentMethod = PaymentMethod.cash.rawValue
 
     /// Only confirmed payments count toward the settled total (faithful to TripSplit).
@@ -589,6 +588,16 @@ struct SettleView: View {
         enteredAmount > 0 && enteredAmount <= remaining + 0.005
     }
 
+    /// Pending payments are approved by the creditor. A nil identity is used only by
+    /// the local split-preview flow, where no authenticated backend policy applies.
+    private var canModeratePendingPayments: Bool {
+        currentUserID == nil || settlement.to.id == currentUserID
+    }
+
+    private var canSelfApprovePendingPayments: Bool {
+        currentUserID == settlement.from.id
+    }
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -599,7 +608,7 @@ struct SettleView: View {
                 .ignoresSafeArea()
 
                 ScrollView {
-                    VStack(spacing: 18) {
+                    VStack(spacing: Theme.Space.section) {
                         overviewCard
                         if remaining > 0.005 && (currentUserID == nil || settlement.from.id == currentUserID) {
                             recordCard
@@ -625,6 +634,22 @@ struct SettleView: View {
             }
         }
         .onAppear { method = PaymentMethod(rawValue: defaultPaymentMethod) ?? .cash }
+        .alert(
+            "Self-approve this payment?",
+            isPresented: Binding(
+                get: { pendingSelfApproval != nil },
+                set: { if !$0 { pendingSelfApproval = nil } }
+            ),
+            presenting: pendingSelfApproval
+        ) { entry in
+            Button("Self-Approve Payment", role: .destructive) {
+                update(entry, to: .confirmed, selfApproved: true)
+                pendingSelfApproval = nil
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("Only continue if you have discussed this payment with \(settlement.to.name) and the other trip members, and everyone agrees it was paid.")
+        }
     }
 
     // MARK: Cards
@@ -632,7 +657,7 @@ struct SettleView: View {
     private var overviewCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             Label("Settlement Overview", systemImage: "arrow.left.arrow.right.circle.fill")
-                .font(.app(.headline))
+                .font(Theme.Typography.sectionTitle)
 
             detailRow(icon: "person.fill", label: "Debtor", person: settlement.from)
             detailRow(icon: "creditcard.fill", label: "Creditor", person: settlement.to)
@@ -656,27 +681,27 @@ struct SettleView: View {
     private var recordCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             Label("Record a Payment", systemImage: "square.and.pencil")
-                .font(.app(.headline))
+                .font(Theme.Typography.sectionTitle)
 
             HStack(spacing: 2) {
                 Text(currencySymbol(currencyCode)).foregroundStyle(.secondary)
                 TextField("0.00", text: $amountText)
                     .keyboardType(.decimalPad)
             }
-            .font(.app(.title3, .semibold))
+            .font(Theme.Typography.amount)
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
             .background(.secondary.opacity(0.12), in: .rect(cornerRadius: 12))
 
             TextField("Add a note (optional)", text: $note, axis: .vertical)
                 .lineLimit(1...3)
-                .font(.app(.subheadline))
+                .font(Theme.Typography.secondary)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
                 .background(.secondary.opacity(0.12), in: .rect(cornerRadius: 12))
 
             Text("Payment method")
-                .font(.app(.subheadline, .semibold))
+                .font(Theme.Typography.rowTitle)
                 .foregroundStyle(.secondary)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
@@ -688,16 +713,13 @@ struct SettleView: View {
                                 Image(systemName: option.icon)
                                 Text(LocalizedStringKey(option.rawValue))
                             }
-                            .font(.app(.subheadline, .semibold))
+                            .font(Theme.Typography.rowTitle)
                             .foregroundStyle(method == option ? AnyShapeStyle(Theme.onAccent) : AnyShapeStyle(.primary))
                             .padding(.horizontal, 14)
                             .padding(.vertical, 9)
                         }
                         .buttonStyle(.plain)
-                        .glassEffect(
-                            method == option ? .regular.tint(Theme.accent).interactive() : .regular.interactive(),
-                            in: .capsule
-                        )
+                        .controlSurface(tint: method == option ? Theme.accent : nil, in: .capsule)
                     }
                 }
             }
@@ -722,11 +744,11 @@ struct SettleView: View {
     private var historyCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             Label("Settlement History", systemImage: "clock.arrow.circlepath")
-                .font(.app(.headline))
+                .font(Theme.Typography.sectionTitle)
 
             if history.isEmpty {
                 Text("No settlement history found for this debt.")
-                    .font(.app(.subheadline))
+                    .font(Theme.Typography.secondary)
                     .italic()
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
@@ -740,7 +762,7 @@ struct SettleView: View {
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular, in: .rect(cornerRadius: 24))
+        .readableSurface(cornerRadius: Theme.cardRadius)
     }
 
     // MARK: Reusable pieces
@@ -751,17 +773,17 @@ struct SettleView: View {
                 .font(.app(size: 14, weight: .semibold))
                 .foregroundStyle(Theme.accent)
                 .frame(width: 22)
-            Text(label).font(.app(.subheadline)).foregroundStyle(.secondary)
+            Text(label).font(Theme.Typography.secondary).foregroundStyle(.secondary)
             Spacer()
             avatar(person)
             Text(person.name.isEmpty ? "—" : person.name)
-                .font(.app(.subheadline, .semibold))
+                .font(Theme.Typography.rowTitle)
         }
     }
 
     private func amountColumn(title: LocalizedStringKey, value: Double, color: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.app(.caption)).foregroundStyle(.secondary)
+            Text(title).font(Theme.Typography.metadata).foregroundStyle(.secondary)
             Text(currency(value)).font(.app(.title3, .bold)).foregroundStyle(color)
         }
     }
@@ -771,13 +793,13 @@ struct SettleView: View {
     ) -> some View {
         Button(action: action) {
             Label(title, systemImage: icon)
-                .font(.app(.subheadline, .semibold))
-                .foregroundStyle(.white)
+                .font(Theme.Typography.rowTitle)
+                .foregroundStyle(Theme.onAccent)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
         }
         .buttonStyle(.plain)
-        .glassEffect(.regular.tint(tint).interactive(), in: .capsule)
+        .actionFill(tint: Theme.accent)
         .disabled(!enabled)
         .opacity(enabled ? 1 : 0.5)
     }
@@ -788,24 +810,30 @@ struct SettleView: View {
                 Image(systemName: entry.method.icon)
                     .foregroundStyle(Theme.accent)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(currency(entry.amount)).font(.app(.subheadline, .semibold))
+                    Text(currency(entry.amount)).font(Theme.Typography.rowTitle)
                     Text("\(entry.method.rawValue) • \(entry.date.formatted(date: .abbreviated, time: .omitted))")
-                        .font(.app(.caption))
+                        .font(Theme.Typography.metadata)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                statusBadge(entry.status)
+                statusBadge(entry)
             }
             if !entry.note.isEmpty {
-                Text(entry.note).font(.app(.caption)).foregroundStyle(.secondary)
+                Text(entry.note).font(Theme.Typography.metadata).foregroundStyle(.secondary)
             }
             if entry.status == .pending {
-                HStack(spacing: 10) {
-                    actionPill(title: "Approve", icon: "checkmark", tint: Color(hex: 0x10B981)) {
-                        update(entry, to: .confirmed)
+                if canModeratePendingPayments {
+                    HStack(spacing: 10) {
+                        actionPill(title: "Approve", icon: "checkmark", tint: Theme.accent) {
+                            update(entry, to: .confirmed)
+                        }
+                        actionPill(title: "Decline", icon: "xmark", tint: Theme.negative) {
+                            update(entry, to: .rejected)
+                        }
                     }
-                    actionPill(title: "Decline", icon: "xmark", tint: Color(hex: 0xEF4444)) {
-                        update(entry, to: .rejected)
+                } else if canSelfApprovePendingPayments {
+                    actionPill(title: "Self-Approve", icon: "person.crop.circle.badge.checkmark", tint: Theme.warning) {
+                        pendingSelfApproval = entry
                     }
                 }
             }
@@ -817,17 +845,18 @@ struct SettleView: View {
         Button(action: action) {
             Label(title, systemImage: icon)
                 .font(.app(.caption, .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(tint)
                 .padding(.horizontal, 12)
-                .padding(.vertical, 6)
+                .frame(minHeight: 44)
         }
         .buttonStyle(.plain)
-        .glassEffect(.regular.tint(tint).interactive(), in: .capsule)
+        .controlSurface(tint: tint.opacity(0.10))
     }
 
-    private func statusBadge(_ status: SettlementStatus) -> some View {
-        let (text, color): (String, Color) = switch status {
+    private func statusBadge(_ entry: SettlementRecord) -> some View {
+        let (text, color): (String, Color) = switch entry.status {
         case .pending: ("Pending", Theme.warning)
+        case .confirmed where entry.selfApproved: ("Self-approved", Theme.warning)
         case .confirmed: ("Confirmed", Theme.positive)
         case .rejected: ("Declined", Theme.negative)
         }
@@ -870,9 +899,14 @@ struct SettleView: View {
         note = ""
     }
 
-    private func update(_ entry: SettlementRecord, to status: SettlementStatus) {
+    private func update(
+        _ entry: SettlementRecord,
+        to status: SettlementStatus,
+        selfApproved: Bool = false
+    ) {
         guard let index = history.firstIndex(where: { $0.id == entry.id }) else { return }
         history[index].status = status
+        history[index].selfApproved = selfApproved
     }
 }
 

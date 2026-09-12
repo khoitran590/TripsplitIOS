@@ -55,11 +55,14 @@ nonisolated struct SettlementRecord: Identifiable, Codable, Equatable {
     var method: PaymentMethod
     var note: String
     var status: SettlementStatus
+    /// True when the debtor confirmed the payment on behalf of an unavailable creditor
+    /// after acknowledging the in-app group-agreement notice.
+    var selfApproved: Bool
     let date: Date
 
     init(
         id: UUID = UUID(), amount: Double, method: PaymentMethod, note: String,
-        status: SettlementStatus, date: Date
+        status: SettlementStatus, date: Date, selfApproved: Bool = false
     ) {
         self.id = id
         self.amount = amount
@@ -67,9 +70,12 @@ nonisolated struct SettlementRecord: Identifiable, Codable, Equatable {
         self.note = note
         self.status = status
         self.date = date
+        self.selfApproved = selfApproved
     }
 
-    private enum CodingKeys: String, CodingKey { case id, amount, method, note, status, date }
+    private enum CodingKeys: String, CodingKey {
+        case id, amount, method, note, status, date, selfApproved
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -78,6 +84,7 @@ nonisolated struct SettlementRecord: Identifiable, Codable, Equatable {
         method = try c.decodeIfPresent(PaymentMethod.self, forKey: .method) ?? .cash
         note = try c.decodeIfPresent(String.self, forKey: .note) ?? ""
         status = try c.decodeIfPresent(SettlementStatus.self, forKey: .status) ?? .pending
+        selfApproved = try c.decodeIfPresent(Bool.self, forKey: .selfApproved) ?? false
         date = try c.decodeIfPresent(Date.self, forKey: .date) ?? Date()
     }
 }

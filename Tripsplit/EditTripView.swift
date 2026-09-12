@@ -47,7 +47,7 @@ struct EditTripView: View {
                     .ignoresSafeArea()
 
                 ScrollView {
-                    VStack(spacing: 18) {
+                    VStack(spacing: Theme.Space.section) {
                         coverCard
                         detailsCard
                         datesCard
@@ -55,7 +55,7 @@ struct EditTripView: View {
                         permissionsCard
                         if let errorMessage {
                             Text(errorMessage)
-                                .font(.app(.caption))
+                                .font(Theme.Typography.metadata)
                                 .foregroundStyle(Theme.negative)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -122,13 +122,13 @@ struct EditTripView: View {
 
             PhotosPicker(selection: $coverPick, matching: .images) {
                 Label("Change Photo", systemImage: "photo.on.rectangle.angled")
-                    .font(.app(.subheadline, .semibold))
+                    .font(Theme.Typography.rowTitle)
                     .foregroundStyle(Theme.onAccent)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 11)
             }
             .buttonStyle(.plain)
-            .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+            .actionFill(tint: Theme.accent)
 
             if coverImage != nil || trip?.coverImageURL?.isEmpty == false {
                 Button { adjustCurrentCover() } label: {
@@ -136,12 +136,12 @@ struct EditTripView: View {
                         if isLoadingCurrentCover { ProgressView().controlSize(.small) }
                         Label("Resize or reposition", systemImage: "crop")
                     }
-                    .font(.app(.subheadline, .semibold))
+                    .font(Theme.Typography.rowTitle)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 11)
                 }
                 .buttonStyle(.plain)
-                .glassEffect(.regular.interactive(), in: .capsule)
+                .controlSurface(in: .capsule)
                 .disabled(isLoadingCurrentCover)
             }
         }
@@ -167,14 +167,14 @@ struct EditTripView: View {
     private var detailsCard: some View {
         TripCard(title: "Trip details", icon: "suitcase.fill") {
             TextField("Trip name", text: $name)
-                .font(.app(.title3, .semibold))
+                .font(Theme.Typography.amount)
                 .padding(.horizontal, 14).padding(.vertical, 12)
                 .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
 
             LocationField(text: $location)
 
             HStack {
-                Text("Currency").font(.app(.subheadline)).foregroundStyle(.secondary)
+                Text("Currency").font(Theme.Typography.secondary).foregroundStyle(.secondary)
                 Spacer()
                 Menu {
                     Picker("Currency", selection: $currency) {
@@ -182,7 +182,7 @@ struct EditTripView: View {
                     }
                 } label: {
                     HStack(spacing: 4) {
-                        Text(currency).font(.app(.subheadline, .semibold))
+                        Text(currency).font(Theme.Typography.rowTitle)
                         Image(systemName: "chevron.down").font(.app(.caption2, .bold))
                     }
                     .padding(.horizontal, 12).padding(.vertical, 8)
@@ -192,7 +192,7 @@ struct EditTripView: View {
 
             if currency != originalCurrency {
                 Label("Existing expenses and budgets will be converted to \(currency) at today's rate.", systemImage: "arrow.left.arrow.right")
-                    .font(.app(.caption))
+                    .font(Theme.Typography.metadata)
                     .foregroundStyle(.secondary)
             }
         }
@@ -204,9 +204,9 @@ struct EditTripView: View {
                 .font(.app(.subheadline, .medium))
             if hasDates {
                 DatePicker("Start", selection: $startDate, displayedComponents: .date)
-                    .font(.app(.subheadline))
+                    .font(Theme.Typography.secondary)
                 DatePicker("End", selection: $endDate, in: startDate..., displayedComponents: .date)
-                    .font(.app(.subheadline))
+                    .font(Theme.Typography.secondary)
             }
         }
     }
@@ -219,7 +219,7 @@ struct EditTripView: View {
                 Text(currencySymbol(currency)).foregroundStyle(.secondary)
                 TextField("0.00", text: $budgetText).keyboardType(.decimalPad)
             }
-            .font(.app(.title3, .semibold))
+            .font(Theme.Typography.amount)
             .padding(.horizontal, 14).padding(.vertical, 12)
             .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
         }
@@ -232,7 +232,7 @@ struct EditTripView: View {
                     Text("Members can pay for others")
                         .font(.app(.subheadline, .medium))
                     Text("Let invited members record an expense paid by someone else. You can always do this.")
-                        .font(.app(.caption))
+                        .font(Theme.Typography.metadata)
                         .foregroundStyle(.secondary)
                 }
             }

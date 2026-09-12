@@ -35,7 +35,7 @@ struct ExpenseDetailView: View {
             .ignoresSafeArea()
 
             ScrollView {
-                VStack(spacing: 18) {
+                VStack(spacing: Theme.Space.section) {
                     summaryCard
                     receiptItemsCard
                     if let trip { participantsCard(trip) }
@@ -68,9 +68,9 @@ struct ExpenseDetailView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(money(exp.amount, trip?.currencyCode ?? "USD"))
-                        .font(.app(size: 28, weight: .bold))
+                        .font(Theme.Typography.amount)
                     Text(exp.date.formatted(date: .long, time: .omitted))
-                        .font(.app(.subheadline))
+                        .font(Theme.Typography.secondary)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -83,9 +83,9 @@ struct ExpenseDetailView: View {
                     avatar(payer, size: 30)
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Paid by").font(.app(.caption)).foregroundStyle(.secondary)
+                    Text("Paid by").font(Theme.Typography.metadata).foregroundStyle(.secondary)
                     Text(LocalizedStringKey(payer.map { $0.id == me ? "You" : $0.name } ?? "—"))
-                        .font(.app(.subheadline, .semibold))
+                        .font(Theme.Typography.rowTitle)
                 }
                 Spacer()
             }
@@ -118,7 +118,7 @@ struct ExpenseDetailView: View {
                 ForEach(exp.items) { item in
                     HStack(spacing: 10) {
                         Text(item.name)
-                            .font(.app(.subheadline))
+                            .font(Theme.Typography.secondary)
                             .lineLimit(1)
                         Spacer(minLength: 8)
                         Text(money(item.price, currency))
@@ -167,7 +167,7 @@ struct ExpenseDetailView: View {
                             .font(.app(.subheadline, .medium))
                         Spacer()
                         Text(money(share, trip.currencyCode))
-                            .font(.app(.subheadline, .semibold))
+                            .font(Theme.Typography.rowTitle)
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -179,7 +179,7 @@ struct ExpenseDetailView: View {
         TripCard(title: "Comments (\(comments.count))", icon: "bubble.left.and.bubble.right.fill") {
             if comments.isEmpty {
                 Text("No comments yet")
-                    .font(.app(.subheadline))
+                    .font(Theme.Typography.secondary)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 8)
@@ -197,7 +197,7 @@ struct ExpenseDetailView: View {
             HStack(spacing: 10) {
                 TextField("Add a comment…", text: $commentText, axis: .vertical)
                     .lineLimit(1...4)
-                    .font(.app(.subheadline))
+                    .font(Theme.Typography.secondary)
                     .focused($commentFieldFocused)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
@@ -244,7 +244,7 @@ struct ExpenseDetailView: View {
             }
 
             Text(comment.text)
-                .font(.app(.subheadline))
+                .font(Theme.Typography.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.vertical, 4)

@@ -155,7 +155,7 @@ final class TripStore {
               await AuthService.shared.isSessionAccepted(accessToken: token) else {
             return "Your session isn't reaching the server. Please sign out and sign in again."
         }
-        return nil
+        return authError.message
     }
 
     /// IDs of trips deleted locally whose cloud delete hasn't succeeded yet (e.g. the

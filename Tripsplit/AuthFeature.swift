@@ -889,7 +889,7 @@ struct AuthView: View {
         }
         .padding(24)
         .frame(maxWidth: .infinity)
-        .glassEffect(.regular, in: .rect(cornerRadius: 28))
+        .readableSurface(cornerRadius: Theme.cardRadius)
     }
 
     private var subtitle: String {
@@ -930,7 +930,7 @@ struct AuthView: View {
             .padding(.vertical, 15)
         }
         .buttonStyle(.plain)
-        .glassEffect(.regular.tint(Theme.accent).interactive(), in: .rect(cornerRadius: 14))
+        .actionFill(tint: Theme.accent, in: .rect(cornerRadius: 14))
         .disabled(!canSubmit || isWorking)
         .opacity(canSubmit && !isWorking ? 1 : 0.5)
     }

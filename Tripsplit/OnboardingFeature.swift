@@ -238,7 +238,7 @@ struct WelcomeView: View {
                     .frame(maxWidth: .infinity, minHeight: 54)
             }
             .buttonStyle(.plain)
-            .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+            .actionFill(tint: Theme.accent)
 
             Button { onFinish(.browse) } label: {
                 Text("Browse without an account")
@@ -301,7 +301,7 @@ struct WelcomeBackToast: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .glassEffect(.regular, in: .capsule)
+        .controlSurface(in: .capsule)
         .accessibilityElement(children: .combine)
     }
 }
@@ -535,7 +535,7 @@ struct ProfileSetupView: View {
                     .padding(.vertical, 15)
                 }
                 .buttonStyle(.plain)
-                .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+                .actionFill(tint: Theme.accent)
                 .disabled(trimmedName.isEmpty || isSaving)
                 .opacity(trimmedName.isEmpty || isSaving ? 0.5 : 1)
             }

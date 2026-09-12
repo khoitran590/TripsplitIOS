@@ -253,6 +253,26 @@ final class TripsplitAppTests: XCTestCase {
         XCTAssertEqual(trip.remainingOwed(to: alice.id), 16)
     }
 
+    func testSettlementSelfApprovalRoundTrips() throws {
+        let original = SettlementRecord(
+            amount: 12,
+            method: .venmo,
+            note: "Agreed with the group",
+            status: .confirmed,
+            date: Date(timeIntervalSince1970: 1_788_000_000),
+            selfApproved: true
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        let decoded = try decoder.decode(SettlementRecord.self, from: encoder.encode(original))
+
+        XCTAssertEqual(decoded, original)
+        XCTAssertTrue(decoded.selfApproved)
+    }
+
     func testSettlementIdentitySurvivesRecalculationAndAmountChanges() {
         let first = SplitEngine.settleUp(net: [alice.id: 10, bob.id: -10], people: [alice, bob])
         let updated = SplitEngine.settleUp(net: [alice.id: 20, bob.id: -20], people: [alice, bob])

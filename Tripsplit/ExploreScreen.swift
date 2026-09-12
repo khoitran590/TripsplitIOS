@@ -342,7 +342,7 @@ struct RecScreen: View {
                 // browse screen whose whole point is the imagery. The search field is not
                 // permanent chrome at all now: it's summoned by the toolbar's magnifying
                 // glass, and steps aside once the user leaves search.
-                LazyVStack(alignment: .leading, spacing: Theme.isRuled ? 0 : 24) {
+                LazyVStack(alignment: .leading, spacing: Theme.Space.section) {
                     // The tab opens on personal content — the greeting, then the user's
                     // own trips. The search field and filter chips are the *browse* tools;
                     // they used to sit at the very top, so the first impression was a slab
@@ -693,7 +693,7 @@ struct RecScreen: View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(verbatim: greeting)
-                    .font(.app(.subheadline))
+                    .font(Theme.Typography.secondary)
                     .foregroundStyle(.secondary)
 
                 Text("Where to next?")
@@ -975,7 +975,7 @@ struct RecScreen: View {
                          : "No curated guide fits all \(activeFilterCount) of your filters. Remove one above to widen the search.")
                 } actions: {
                     Button("Clear all filters", action: resetFilters)
-                        .font(.app(.subheadline, .semibold))
+                        .font(Theme.Typography.rowTitle)
                         .foregroundStyle(Theme.accent)
                 }
                 .frame(maxWidth: .infinity)
@@ -1026,7 +1026,7 @@ struct RecScreen: View {
                                     .foregroundStyle(isOn ? Theme.surface.opacity(0.7) : .secondary)
                                     .monospacedDigit()
                             }
-                            .font(.app(.subheadline, .semibold))
+                            .font(Theme.Typography.rowTitle)
                             .foregroundStyle(isOn ? Theme.surface : .primary)
                             .padding(.horizontal, 14)
                             .frame(height: 34)
@@ -1066,7 +1066,7 @@ struct RecScreen: View {
                         // "Browse by destination", and at the same title2/bold they
                         // read as top-level sections in their own right.
                         Text(LocalizedStringKey(section.continent))
-                            .font(.app(.title3, .semibold))
+                            .font(Theme.Typography.amount)
                         Text("\(section.destinations.count)")
                             .font(.app(.subheadline, .bold))
                             .foregroundStyle(.secondary)
@@ -1205,10 +1205,7 @@ struct RecScreen: View {
                             .frame(minHeight: 44)
                     }
                     .buttonStyle(.plain)
-                    .glassEffect(
-                        isOn ? .regular.tint(Theme.accent).interactive() : .regular.interactive(),
-                        in: .capsule
-                    )
+                    .controlSurface(tint: isOn ? Theme.accent : nil, in: .capsule)
                     .accessibilityAddTraits(isOn ? [.isSelected] : [])
                 }
             }
@@ -1298,7 +1295,7 @@ struct RecScreen: View {
     private var ruledSearchBar: some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
-                .font(.app(.subheadline))
+                .font(Theme.Typography.secondary)
                 .foregroundStyle(isSearchFocused ? Color.primary : Theme.textSecondary)
 
             TextField("Tokyo, beaches, ramen…", text: $searchText)
@@ -1393,7 +1390,7 @@ struct RecScreen: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 13)
             .background(Theme.surface.opacity(0.76), in: .capsule)
-            .glassEffect(.regular.interactive(), in: .capsule)
+            .controlSurface(in: .capsule)
             .overlay {
                 Capsule().strokeBorder(Theme.separator.opacity(0.9), lineWidth: 1)
             }
@@ -1408,7 +1405,7 @@ struct RecScreen: View {
                     searchText = ""
                     isSearchFocused = false
                 }
-                .font(.app(.subheadline, .semibold))
+                .font(Theme.Typography.rowTitle)
                 .foregroundStyle(Theme.accent)
                 .buttonStyle(.plain)
                 .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -1428,16 +1425,13 @@ struct RecScreen: View {
             showFilterSheet = true
         } label: {
             Image(systemName: "line.3.horizontal.decrease")
-                .font(.app(.subheadline, .semibold))
+                .font(Theme.Typography.rowTitle)
                 .foregroundStyle(activeFilterCount > 0 ? Theme.onAccent : .primary)
                 .frame(width: 48, height: 48)
                 .contentShape(.circle)
         }
         .buttonStyle(.plain)
-        .glassEffect(
-            activeFilterCount > 0 ? .regular.tint(Theme.accent).interactive() : .regular.interactive(),
-            in: .circle
-        )
+        .controlSurface(tint: activeFilterCount > 0 ? Theme.accent : nil, in: .circle)
         // The count sits on the disc instead of in a label next to it.
         .overlay(alignment: .topTrailing) {
             if activeFilterCount > 0 {
@@ -1461,12 +1455,12 @@ struct RecScreen: View {
         return VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text(isHistory ? "Recent searches" : "Try searching for")
-                    .font(.app(.subheadline, .semibold))
+                    .font(Theme.Typography.rowTitle)
                     .foregroundStyle(.secondary)
                 Spacer()
                 if isHistory {
                     Button("Clear") { recentSearchesRaw = "" }
-                        .font(.app(.subheadline, .semibold))
+                        .font(Theme.Typography.rowTitle)
                         .foregroundStyle(Theme.accent)
                         .buttonStyle(.plain)
                 }
@@ -1480,7 +1474,7 @@ struct RecScreen: View {
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: isHistory ? "clock.arrow.circlepath" : "magnifyingglass")
-                                .font(.app(.caption))
+                                .font(Theme.Typography.metadata)
                                 .foregroundStyle(.secondary)
                             // Queries are user text or place names — never keys.
                             Text(verbatim: query)
@@ -1518,7 +1512,7 @@ struct RecScreen: View {
             } actions: {
                 if isFiltering {
                     Button("Search without filters", action: resetFilters)
-                        .font(.app(.subheadline, .semibold))
+                        .font(Theme.Typography.rowTitle)
                         .foregroundStyle(Theme.accent)
                 } else {
                     // A search with no curated match is the highest-intent moment on
@@ -1529,7 +1523,7 @@ struct RecScreen: View {
                         requireAccount(.createItinerary(prefill: searchQuery))
                     } label: {
                         Label("Plan a trip to \(searchQuery)", systemImage: "plus")
-                            .font(.app(.subheadline, .semibold))
+                            .font(Theme.Typography.rowTitle)
                             .foregroundStyle(Theme.onAccent)
                             .padding(.horizontal, 18)
                             .frame(minHeight: 44)
@@ -1591,7 +1585,7 @@ struct RecScreen: View {
         // Tracked caps on every heading was the coldest thing on the page, and these are
         // the page's real titles — the short labels around them keep the inscription.
         if Theme.isRuled {
-            Text(title).font(.app(.headline))
+            Text(title).font(Theme.Typography.sectionTitle)
         } else {
             Text(title).font(.app(.title2, .bold))
         }
@@ -1610,7 +1604,7 @@ struct RecScreen: View {
             VStack(alignment: .leading, spacing: 6) {
                 sectionHeader(title)
                 Text(subtitle)
-                    .font(.app(.subheadline))
+                    .font(Theme.Typography.secondary)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1621,7 +1615,7 @@ struct RecScreen: View {
                 Spacer(minLength: 8)
                 if let trailing {
                     Text(verbatim: trailing)
-                        .font(.app(.subheadline, .semibold))
+                        .font(Theme.Typography.rowTitle)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
@@ -1830,7 +1824,7 @@ struct ExploreSignInSheet: View {
                         .font(.app(.title2, .bold))
                         .multilineTextAlignment(.center)
                     Text(action.message)
-                        .font(.app(.subheadline))
+                        .font(Theme.Typography.secondary)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1888,7 +1882,7 @@ struct ExploreFilterSheet: View {
                 VStack(alignment: .leading, spacing: 24) {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Trip length")
-                            .font(.app(.headline))
+                            .font(Theme.Typography.sectionTitle)
                         Picker("Trip length", selection: $tripLength) {
                             ForEach(TripLengthFilter.allCases) { length in
                                 Text(length.label).tag(length)
@@ -1902,7 +1896,7 @@ struct ExploreFilterSheet: View {
                     // sheet never showed.
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Travel style")
-                            .font(.app(.headline))
+                            .font(Theme.Typography.sectionTitle)
                         HStack(spacing: 8) {
                             ForEach(ExploreStyle.allCases) { style in
                                 let isOn = selectedStyle == style
@@ -1927,17 +1921,17 @@ struct ExploreFilterSheet: View {
 
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Continent")
-                            .font(.app(.headline))
+                            .font(Theme.Typography.sectionTitle)
                         FlowingContinentPicker(selectedContinent: $selectedContinent)
                     }
 
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
                             Text("Total budget")
-                                .font(.app(.headline))
+                                .font(Theme.Typography.sectionTitle)
                             Spacer()
                             Text(maxBudget >= budgetCap ? "No limit" : "Up to $\(Int(maxBudget))")
-                                .font(.app(.subheadline, .semibold))
+                                .font(Theme.Typography.rowTitle)
                                 .foregroundStyle(Theme.accent)
                                 .monospacedDigit()
                         }
@@ -1946,15 +1940,15 @@ struct ExploreFilterSheet: View {
                         Slider(value: $maxBudget, in: budgetFloor...budgetCap, step: 100)
                             .tint(Theme.accent)
                         HStack {
-                            Text("$\(Int(budgetFloor))").font(.app(.caption)).foregroundStyle(.secondary)
+                            Text("$\(Int(budgetFloor))").font(Theme.Typography.metadata).foregroundStyle(.secondary)
                             Spacer()
-                            Text("No limit").font(.app(.caption)).foregroundStyle(.secondary)
+                            Text("No limit").font(Theme.Typography.metadata).foregroundStyle(.secondary)
                         }
                     }
 
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Sort by")
-                            .font(.app(.headline))
+                            .font(Theme.Typography.sectionTitle)
                         Picker("Sort by", selection: $sortOrder) {
                             ForEach(ExploreSort.allCases) { order in
                                 Text(order.label).tag(order)
@@ -2304,7 +2298,7 @@ struct NextTripHeroCard: View {
 
             if let range = trip.dateRangeText {
                 Text(verbatim: range)
-                    .font(.app(.body))
+                    .font(Theme.Typography.body)
                     .foregroundStyle(Theme.textSecondary)
                     .padding(.top, 3)
             }
@@ -2405,14 +2399,14 @@ struct UpcomingTripCard: View {
                 .padding(.top, 10)
 
             Text(verbatim: trip.name)
-                .font(.app(.subheadline, .semibold))
+                .font(Theme.Typography.rowTitle)
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 .padding(.top, 4)
 
             if let range = trip.dateRangeText {
                 Text(verbatim: range)
-                    .font(.app(.caption))
+                    .font(Theme.Typography.metadata)
                     .foregroundStyle(Theme.textSecondary)
                     .lineLimit(1)
                     .padding(.top, 2)
@@ -2479,7 +2473,7 @@ struct AdventureCard: View {
                 .padding(.top, 16)
 
             Text(LocalizedStringKey(destination.country))
-                .font(.app(.body))
+                .font(Theme.Typography.body)
                 .foregroundStyle(Theme.textSecondary)
                 .lineLimit(1)
                 .padding(.top, 3)
@@ -2493,7 +2487,7 @@ struct AdventureCard: View {
 
             if let stopPreview {
                 Text(verbatim: stopPreview)
-                    .font(.app(.caption))
+                    .font(Theme.Typography.metadata)
                     .foregroundStyle(Theme.accentSecondary)
                     .lineLimit(1)
                     .padding(.top, 8)
@@ -2552,7 +2546,7 @@ struct AdventureCard: View {
                 // styles used to disagree, so a country localized in one list and not
                 // in the other.
                 Text(verbatim: destination.city)
-                    .font(.app(.largeTitle, .bold))
+                    .font(Theme.Typography.pageTitle)
                     .foregroundStyle(.white)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
@@ -2645,12 +2639,12 @@ struct CountryTripCard: View {
             HStack(alignment: .top, spacing: 4) {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(verbatim: destination.city)
-                        .font(.app(.headline))
+                        .font(Theme.Typography.sectionTitle)
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                     Text(LocalizedStringKey(destination.country))
-                        .font(.app(.caption))
+                        .font(Theme.Typography.metadata)
                         .foregroundStyle(Theme.textSecondary)
                         .lineLimit(1)
                 }
@@ -2702,12 +2696,12 @@ struct CountryTripCard: View {
                     // City is a proper noun; the country goes through the catalog, the
                     // way the grid tiles already do it.
                     Text(verbatim: destination.city)
-                        .font(.app(.headline))
+                        .font(Theme.Typography.sectionTitle)
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                     Text(LocalizedStringKey(destination.country))
-                        .font(.app(.caption))
+                        .font(Theme.Typography.metadata)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -2822,11 +2816,11 @@ struct DestinationRow: View {
                     .font(.app(.body, .semibold))
                     .foregroundStyle(.primary)
                 Text("\(destination.tags.joined(separator: " · ")) · \(destination.price)")
-                    .font(.app(.caption))
+                    .font(Theme.Typography.metadata)
                     .foregroundStyle(Theme.textSecondary)
                 if let matchedStop {
                     Label("Includes \(matchedStop)", systemImage: "mappin")
-                        .font(.app(.caption))
+                        .font(Theme.Typography.metadata)
                         .foregroundStyle(Theme.accentSecondary)
                         .lineLimit(1)
                 }
@@ -2858,11 +2852,11 @@ struct DestinationRow: View {
                     .font(.app(.body, .semibold))
                     .foregroundStyle(.primary)
                 Text("\(destination.tags.joined(separator: " · ")) · \(destination.price)")
-                    .font(.app(.caption))
+                    .font(Theme.Typography.metadata)
                     .foregroundStyle(.secondary)
                 if let matchedStop {
                     Label("Includes \(matchedStop)", systemImage: "mappin")
-                        .font(.app(.caption))
+                        .font(Theme.Typography.metadata)
                         .foregroundStyle(.tint)
                         .lineLimit(1)
                 }
@@ -2932,12 +2926,12 @@ struct DestinationIndexRow: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(verbatim: destination.city)
-                    .font(.app(.headline))
+                    .font(Theme.Typography.sectionTitle)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
                 Text(LocalizedStringKey(destination.country))
-                    .font(.app(.caption))
+                    .font(Theme.Typography.metadata)
                     .foregroundStyle(Theme.textSecondary)
                     .lineLimit(1)
             }
@@ -2975,7 +2969,7 @@ private extension View {
         if Theme.isRuled {
             background(tint, in: .rect(cornerRadius: Theme.RuledRadius.well))
         } else {
-            glassEffect(.regular.tint(tint).interactive(), in: .capsule)
+            actionFill(tint: tint)
         }
     }
 }
@@ -3072,7 +3066,7 @@ private struct DestinationStopsMap: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Label("Where you'll be", systemImage: "map.fill")
-                    .font(.app(.headline))
+                    .font(Theme.Typography.sectionTitle)
                 if loader.isLoading {
                     ProgressView().controlSize(.small)
                 }
@@ -3099,7 +3093,7 @@ private struct DestinationStopsMap: View {
                         .frame(minHeight: 36)
                 }
                 .buttonStyle(.plain)
-                .glassEffect(.regular.interactive(), in: .capsule)
+                .controlSurface(in: .capsule)
                 .padding(10)
             }
             .task { await loader.load(destination) }
@@ -3210,7 +3204,7 @@ struct DestinationDetailView: View {
                     } label: {
                         VStack(spacing: 8) {
                             Text(LocalizedStringKey(option.rawValue))
-                                .font(.app(.headline))
+                                .font(Theme.Typography.sectionTitle)
                                 .foregroundStyle(tab == option ? .primary : .secondary)
                             Capsule()
                                 .fill(tab == option ? Color.primary : .clear)
@@ -3257,10 +3251,10 @@ struct DestinationDetailView: View {
     private var overviewSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(destination.title)
-                .font(.app(.largeTitle, .bold))
+                .font(Theme.Typography.pageTitle)
 
             Text(destination.blurb)
-                .font(.app(.body))
+                .font(Theme.Typography.body)
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 12) {
@@ -3277,14 +3271,14 @@ struct DestinationDetailView: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 Label("Planned by \(destination.planner)", systemImage: "person.circle.fill")
-                    .font(.app(.subheadline, .semibold))
+                    .font(Theme.Typography.rowTitle)
                 Text(destination.plannerNote)
-                    .font(.app(.subheadline))
+                    .font(Theme.Typography.secondary)
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)
-            .glassEffect(.regular, in: .rect(cornerRadius: 18))
+            .readableSurface(cornerRadius: Theme.cardRadius)
 
             planningEssentials
         }
@@ -3297,13 +3291,13 @@ struct DestinationDetailView: View {
             showUseAsPlanConfirm = true
         } label: {
             Label("Use as my starting plan", systemImage: "wand.and.stars")
-                .font(.app(.headline))
+                .font(Theme.Typography.sectionTitle)
                 .foregroundStyle(Theme.onAccent)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
         }
         .buttonStyle(.plain)
-        .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+        .actionFill(tint: Theme.accent)
         // A sheet rather than a confirmation dialog: dialogs can't host a date picker,
         // and the copied plan used to land with no dates at all — a set of unanchored
         // days the user then had to date by hand in the planner.
@@ -3321,8 +3315,8 @@ struct DestinationDetailView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    Text("Copies this trip's spots into an editable \(destination.days)-day plan with a \(destination.price) budget — nothing is set in stone.")
-                        .font(.app(.subheadline))
+                    Text("\(destination.days)-day plan · \(destination.price) budget. Edit after adding.")
+                        .font(Theme.Typography.secondary)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
 
@@ -3332,12 +3326,12 @@ struct DestinationDetailView: View {
 
                     if hasStartDate {
                         DatePicker("Starts", selection: $startDate, displayedComponents: .date)
-                            .font(.app(.subheadline))
+                            .font(Theme.Typography.secondary)
                         Label(
                             "Your \(destination.days) days will be scheduled from here.",
                             systemImage: "calendar"
                         )
-                        .font(.app(.caption))
+                        .font(Theme.Typography.metadata)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     }
@@ -3359,13 +3353,13 @@ struct DestinationDetailView: View {
                     onUseAsPlan(hasStartDate ? startDate : nil)
                 } label: {
                     Label("Create my itinerary", systemImage: "wand.and.stars")
-                        .font(.app(.headline))
+                        .font(Theme.Typography.sectionTitle)
                         .foregroundStyle(Theme.onAccent)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 15)
                 }
                 .buttonStyle(.plain)
-                .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+                .actionFill(tint: Theme.accent)
                 .padding(.horizontal, 20)
                 .padding(.bottom, 12)
             }
@@ -3382,7 +3376,7 @@ struct DestinationDetailView: View {
                 }
             } label: {
                 Label("Map", systemImage: "map.fill")
-                    .font(.app(.subheadline, .semibold))
+                    .font(Theme.Typography.rowTitle)
                     .frame(minWidth: 76, minHeight: 50)
                     .contentShape(.capsule)
             }
@@ -3404,7 +3398,7 @@ struct DestinationDetailView: View {
         let guide = destination.practicalGuide
         return VStack(alignment: .leading, spacing: 12) {
             Label("Plan it like a local", systemImage: "map.fill")
-                .font(.app(.headline))
+                .font(Theme.Typography.sectionTitle)
 
             guideRow(icon: "bed.double.fill", title: "Best base", detail: guide.base)
             guideRow(icon: "tram.fill", title: "Getting around", detail: guide.transport)
@@ -3412,13 +3406,13 @@ struct DestinationDetailView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .glassEffect(.regular, in: .rect(cornerRadius: 18))
+        .readableSurface(cornerRadius: Theme.cardRadius)
     }
 
     private func guideRow(icon: String, title: String, detail: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: icon)
-                .font(.app(.subheadline, .semibold))
+                .font(Theme.Typography.rowTitle)
                 .foregroundStyle(.tint)
                 .frame(width: 18)
             VStack(alignment: .leading, spacing: 2) {
@@ -3426,7 +3420,7 @@ struct DestinationDetailView: View {
                     .font(.app(.caption, .bold))
                     .foregroundStyle(.secondary)
                 Text(detail)
-                    .font(.app(.subheadline))
+                    .font(Theme.Typography.secondary)
             }
         }
     }
@@ -3438,12 +3432,12 @@ struct DestinationDetailView: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
             Text(label)
-                .font(.app(.caption))
+                .font(Theme.Typography.metadata)
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 12)
-        .glassEffect(.regular, in: .rect(cornerRadius: 14))
+        .readableSurface(cornerRadius: Theme.cardRadius)
     }
 
     /// A numbered TripAdvisor-style list of places or restaurants. Tapping a row
@@ -3451,7 +3445,7 @@ struct DestinationDetailView: View {
     private func planList(_ items: [TravelPlanItem], isRestaurant: Bool) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Label("Tap a spot to see it on the map", systemImage: "mappin.and.ellipse")
-                .font(.app(.caption))
+                .font(Theme.Typography.metadata)
                 .foregroundStyle(.secondary)
 
             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
@@ -3471,7 +3465,7 @@ struct DestinationDetailView: View {
         HStack(alignment: .top, spacing: 14) {
             ZStack {
                 LinearGradient(colors: destination.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
-                Text("\(index + 1)").font(.app(.headline)).foregroundStyle(.white)
+                Text("\(index + 1)").font(Theme.Typography.sectionTitle).foregroundStyle(.white)
             }
             .frame(width: 44, height: 44)
             .clipShape(.rect(cornerRadius: 12))
@@ -3485,16 +3479,16 @@ struct DestinationDetailView: View {
                         .background(.secondary.opacity(0.12), in: .capsule)
                 }
                 Text(item.detail)
-                    .font(.app(.subheadline)).foregroundStyle(.secondary)
+                    .font(Theme.Typography.secondary).foregroundStyle(.secondary)
                     .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
                 Label(item.visitAdvice(isRestaurant: isRestaurant), systemImage: "checkmark.circle")
-                    .font(.app(.caption)).foregroundStyle(.secondary)
+                    .font(Theme.Typography.metadata).foregroundStyle(.secondary)
                     .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
             Image(systemName: "map").font(.app(.callout, .semibold)).foregroundStyle(.tint)
         }
         .padding(14)
-        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
+        .readableSurface(cornerRadius: Theme.cardRadius)
     }
 }

@@ -11,10 +11,10 @@ struct AppLoadingStateView: View {
     var body: some View {
         VStack(spacing: 10) {
             ProgressView()
-            Text(title).font(.app(.subheadline, .semibold))
+            Text(title).font(Theme.Typography.rowTitle)
             if let message {
                 Text(message)
-                    .font(.app(.caption))
+                    .font(Theme.Typography.metadata)
                     .foregroundStyle(Theme.textSecondary)
                     .multilineTextAlignment(.center)
             }
@@ -35,14 +35,14 @@ struct AppErrorStateView: View {
         VStack(spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(Theme.negative)
-            Text(title).font(.app(.subheadline, .semibold))
+            Text(title).font(Theme.Typography.rowTitle)
             Text(verbatim: message)
-                .font(.app(.caption))
+                .font(Theme.Typography.metadata)
                 .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)
             if let retry {
                 Button("Try again", action: retry)
-                    .font(.app(.subheadline, .semibold))
+                    .font(Theme.Typography.rowTitle)
                     .frame(minHeight: 44)
             }
         }
@@ -187,7 +187,7 @@ struct SwipeActionsRow<Content: View>: View {
                     trigger(action)
                 } label: {
                     Image(systemName: action.icon)
-                        .font(.app(.subheadline, .semibold))
+                        .font(Theme.Typography.rowTitle)
                         .foregroundStyle(.white)
                         .frame(width: width)
                         .frame(maxHeight: .infinity)
@@ -272,17 +272,23 @@ struct TripCard<Content: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Theme.Space.content) {
             if Theme.isRuled {
                 // No icon, no card: on ruled themes the heading is an inscription and
                 // the section's own rule does the bounding the card outline used to.
                 Text(title).inscription().foregroundStyle(Theme.textSecondary)
             } else {
-                Label(title, systemImage: icon).font(.app(.headline))
+                Label {
+                    Text(title)
+                        .font(Theme.Typography.sectionTitle)
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: icon).font(.system(size: 18, weight: .semibold))
+                }
             }
             content
         }
-        .panelPadding(horizontal: 18, vertical: 18)
+        .panelPadding(horizontal: Theme.Space.card, vertical: Theme.Space.card)
         .frame(maxWidth: .infinity, alignment: .leading)
         .homePanel(cornerRadius: Theme.cardRadius)
     }
@@ -440,4 +446,26 @@ func money(_ value: Double, _ code: String) -> String {
 
     return formatter.string(from: NSNumber(value: value))
         ?? "\(currencySymbol(code))\(value.formatted(.number.precision(.fractionLength(0...2))))"
+}
+
+/// Optional guidance stays beside its control, with the explanation available on demand.
+struct ContextHelp: View {
+    let title: LocalizedStringKey
+    let detail: LocalizedStringKey
+
+    var body: some View {
+        DisclosureGroup {
+            Text(detail)
+                .font(Theme.Typography.secondary)
+                .foregroundStyle(Theme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, Theme.Space.compact)
+        } label: {
+            Label(title, systemImage: "info.circle")
+                .font(Theme.Typography.metadata)
+                .foregroundStyle(Theme.textSecondary)
+                .frame(minHeight: 44)
+        }
+        .tint(Theme.accent)
+    }
 }

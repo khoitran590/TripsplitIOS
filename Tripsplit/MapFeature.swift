@@ -2425,7 +2425,7 @@ struct ExpenseMapCard: View {
             .glassEffect(.regular.tint(.orange).interactive(), in: .capsule)
         }
         .padding(14)
-        .glassEffect(.regular, in: .rect(cornerRadius: 24))
+        .readableSurface(cornerRadius: Theme.cardRadius)
     }
 }
 
@@ -2459,7 +2459,7 @@ struct FeedMapCard: View {
                 .font(.app(.caption2)).foregroundStyle(.tertiary)
         }
         .padding(14)
-        .glassEffect(.regular, in: .rect(cornerRadius: 24))
+        .readableSurface(cornerRadius: Theme.cardRadius)
     }
 }
 
@@ -2761,7 +2761,7 @@ struct PlaceCard: View {
             }
         }
         .padding(12)
-        .glassEffect(.regular, in: .rect(cornerRadius: 24))
+        .readableSurface(cornerRadius: Theme.cardRadius)
         .overlay(alignment: .topTrailing) {
             Button(action: onClose) {
                 Image(systemName: "xmark.circle.fill")
@@ -2986,7 +2986,7 @@ struct FocusPlaceCard: View {
             actions
         }
         .padding(12)
-        .glassEffect(.regular, in: .rect(cornerRadius: 24))
+        .readableSurface(cornerRadius: Theme.cardRadius)
         .overlay(alignment: .topTrailing) {
             Button(action: onClose) {
                 Image(systemName: "xmark.circle.fill")
@@ -3180,7 +3180,7 @@ struct FocusDetailSheet: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .glassEffect(.regular, in: .rect(cornerRadius: 18))
+        .readableSurface(cornerRadius: Theme.cardRadius)
     }
 
     /// Address / phone / website resolved by the POI search, with a progress row
@@ -3295,7 +3295,7 @@ struct FocusDetailSheet: View {
                     .foregroundStyle(.tertiary)
             }
             .padding(12)
-            .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 16))
+            .readableSurface(cornerRadius: Theme.cardRadius)
         }
         .buttonStyle(.plain)
     }

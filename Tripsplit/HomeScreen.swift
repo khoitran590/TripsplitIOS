@@ -46,7 +46,7 @@ struct HomeScreen: View {
             ScrollView {
                 // Ruled themes get their rhythm from each section's own rule and padding,
                 // so the stack itself stops adding gaps between them.
-                VStack(alignment: .leading, spacing: Theme.isRuled ? 0 : 20) {
+                VStack(alignment: .leading, spacing: Theme.Space.section) {
                     syncBanner
                         .transition(.move(edge: .top).combined(with: .opacity))
                         .animation(.snappy, value: store.syncState)
@@ -173,14 +173,14 @@ struct HomeScreen: View {
                         requestAddTrip()
                     } label: {
                         Label("Add Trip", systemImage: "plus")
-                            .font(.app(.subheadline, .semibold))
+                            .font(Theme.Typography.rowTitle)
                             .foregroundStyle(Theme.onAccent)
                             .padding(.horizontal, 14)
                             .frame(minHeight: 44)
                             .contentShape(.capsule)
                     }
                     .buttonStyle(.plain)
-                    .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+                    .actionFill(tint: Theme.accent)
                 }
             }
 
@@ -207,6 +207,7 @@ struct HomeScreen: View {
                                     .frame(width: 300)
                             }
                             .buttonStyle(.plain)
+                            .accessibilityIdentifier("trip-card-\(trip.id.uuidString)")
                             .contentShape(.contextMenuPreview, .rect(cornerRadius: Theme.isRuled ? 0 : 24))
                             .contextMenu {
                                 Button {
@@ -240,10 +241,10 @@ struct HomeScreen: View {
                 Button { showArchivedTrips = true } label: {
                     HStack(spacing: 10) {
                         Image(systemName: "archivebox")
-                            .font(.app(.subheadline, .semibold))
+                            .font(Theme.Typography.rowTitle)
                             .foregroundStyle(.secondary)
                         Text("Archived")
-                            .font(.app(.subheadline, .semibold))
+                            .font(Theme.Typography.rowTitle)
                         Text(verbatim: "\(store.archivedTrips.count)")
                             .font(.app(.caption, .bold))
                             .foregroundStyle(.secondary)
@@ -273,7 +274,7 @@ struct HomeScreen: View {
             Text("No trips yet")
                 .font(.app(.subheadline, .medium))
             Text("Start with a guide or create an empty trip when you already know where you're going.")
-                .font(.app(.caption))
+                .font(Theme.Typography.metadata)
                 .foregroundStyle(highContrastInk)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 12)
@@ -284,14 +285,14 @@ struct HomeScreen: View {
                     onBrowseIdeas()
                 } label: {
                     Label("Browse trip ideas", systemImage: "sparkles")
-                        .font(.app(.subheadline, .semibold))
+                        .font(Theme.Typography.rowTitle)
                         .foregroundStyle(Theme.onAccent)
                         .padding(.horizontal, 18)
                         .frame(minHeight: 44)
                         .contentShape(.capsule)
                 }
                 .buttonStyle(.plain)
-                .glassEffect(.regular.tint(Theme.accent).interactive(), in: .capsule)
+                .actionFill(tint: Theme.accent)
             }
             .padding(.top, 4)
 
@@ -299,7 +300,7 @@ struct HomeScreen: View {
                 requestAddTrip()
             } label: {
                 Label("Create empty trip", systemImage: "plus")
-                    .font(.app(.subheadline, .semibold))
+                    .font(Theme.Typography.rowTitle)
                     .foregroundStyle(highContrastInk)
                     .padding(.horizontal, 12)
                     .frame(minHeight: 48)
@@ -319,9 +320,9 @@ struct HomeScreen: View {
                 .foregroundStyle(Theme.negative)
             VStack(alignment: .leading, spacing: 3) {
                 Text("Couldn't refresh trips")
-                    .font(.app(.subheadline, .semibold))
+                    .font(Theme.Typography.rowTitle)
                 Text(verbatim: message)
-                    .font(.app(.caption))
+                    .font(Theme.Typography.metadata)
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
@@ -357,32 +358,25 @@ struct HomeScreen: View {
     }
 
     private var quickActions: some View {
-        // No section header: two labeled buttons explain themselves, and dropping
-        // the header keeps the balance card + actions + trips above the fold.
-        HStack(spacing: Theme.isRuled ? 0 : 12) {
-            QuickActionButton(
-                title: "Split",
-                icon: "divide",
-                tint: [Theme.accent, Theme.accentSecondary]
-            ) { startQuickAction(.split) }
-
-            // Ruled style divides the two actions with a hairline instead of a gap,
-            // since neither button carries a capsule of its own.
-            if Theme.isRuled {
-                Rectangle()
-                    .fill(Theme.ruleColor(colorSchemeContrast))
-                    .frame(width: Theme.ruleWidth(colorSchemeContrast), height: 26)
-            }
-
-            QuickActionButton(
-                title: "Expense",
-                icon: "plus",
-                tint: [Color(hex: 0x16A34A), Color(hex: 0x34C468)]
-            ) { startQuickAction(.addExpense) }
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) { expenseActions }
+            VStack(spacing: 10) { expenseActions }
         }
-        // A hairline keeps this strip attached to the budget block it acts on, rather
-        // than making it a third chapter of equal weight.
-        .ruledSection(weight: .hairline)
+    }
+
+    @ViewBuilder
+    private var expenseActions: some View {
+        Button { startQuickAction(.addExpense) } label: {
+            Label("Add expense", systemImage: "plus")
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .buttonStyle(AppActionStyle())
+
+        Button { startQuickAction(.split) } label: {
+            Label("Split expense", systemImage: "divide")
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .buttonStyle(AppActionStyle(primary: false))
     }
 
     /// Collapsed groups need only totals, count, and their latest date. Only expanded
@@ -437,7 +431,7 @@ struct HomeScreen: View {
                             selectedTransactionIDs = Set(visibleDeletableTransactions.map(\.id))
                         }
                     }
-                    .font(.app(.subheadline, .semibold))
+                    .font(Theme.Typography.rowTitle)
                     .foregroundStyle(Theme.accent)
                     .buttonStyle(.plain)
                     .frame(minHeight: 44)
@@ -447,7 +441,7 @@ struct HomeScreen: View {
                         isSelectingTransactions = false
                         selectedTransactionIDs.removeAll()
                     }
-                    .font(.app(.subheadline, .semibold))
+                    .font(Theme.Typography.rowTitle)
                     .foregroundStyle(.secondary)
                     .buttonStyle(.plain)
                     .frame(minHeight: 44)
@@ -457,7 +451,7 @@ struct HomeScreen: View {
                     Button("Select") {
                         isSelectingTransactions = true
                     }
-                    .font(.app(.subheadline, .semibold))
+                    .font(Theme.Typography.rowTitle)
                     .foregroundStyle(Theme.accent)
                     .buttonStyle(.plain)
                     .frame(minHeight: 44)
@@ -474,7 +468,7 @@ struct HomeScreen: View {
                     Text("No transactions yet")
                         .font(.app(.subheadline, .medium))
                     Text("Add an expense to a trip to see it here.")
-                        .font(.app(.caption))
+                        .font(Theme.Typography.metadata)
                         .foregroundStyle(highContrastInk)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 12)
@@ -504,7 +498,7 @@ struct HomeScreen: View {
                             .filter { selectedTransactionIDs.contains($0.id) }
                     } label: {
                         Text("Delete\(selectedTransactionIDs.isEmpty ? "" : " (\(selectedTransactionIDs.count))")")
-                            .font(.app(.subheadline, .semibold))
+                            .font(Theme.Typography.rowTitle)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 10)
                     }
@@ -593,15 +587,15 @@ struct HomeScreen: View {
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(verbatim: group.name)
-                            .font(.app(.subheadline, .semibold))
+                            .font(Theme.Typography.rowTitle)
                             .lineLimit(1)
                         Text("\(group.expenseCount) expense\(group.expenseCount == 1 ? "" : "s") • \(group.latestDate.formatted(date: .abbreviated, time: .omitted))")
-                            .font(.app(.caption))
+                            .font(Theme.Typography.metadata)
                             .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 8)
                     Text(money(group.total, group.currencyCode))
-                        .font(.app(.subheadline, .semibold))
+                        .font(Theme.Typography.rowTitle)
                         .monospacedDigit()
                     Image(systemName: "chevron.down")
                         .font(.app(.caption, .bold))
@@ -769,9 +763,9 @@ struct BalanceCard: View {
         let isOver = hasConvertedBudget && totals.spent > totals.budget
         let isNear = hasConvertedBudget && !isOver && fraction >= 0.8
         // Budget health uses one semantic palette across the home summary and trip rows.
-        let statusColor = isOver ? Color(hex: 0xDC2626)
-            : isNear ? Color(hex: 0xD97706)
-            : Color(hex: 0x16A34A)
+        let statusColor = isOver ? Theme.negative
+            : isNear ? Theme.warning
+            : Theme.positive
         let heroValue = hasBudget && !hasConvertedBudget
             ? "—"
             : hasBudget
@@ -784,7 +778,9 @@ struct BalanceCard: View {
         let unbudgetedCount = totals.totalTripCount - totals.budgetedTripCount
 
         return VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 10) {
+            (dynamicTypeSize.isAccessibilitySize
+             ? AnyLayout(VStackLayout(alignment: .leading, spacing: Theme.Space.compact))
+             : AnyLayout(HStackLayout(spacing: Theme.Space.compact))) {
                 Group {
                     if hasBudget {
                         Text("Your budget")
@@ -792,57 +788,58 @@ struct BalanceCard: View {
                         Text("Spending")
                     }
                 }
-                .font(.app(.subheadline, .semibold))
-                Spacer()
-
-                Menu {
-                    Picker("Home currency", selection: $displayCurrency) {
-                        ForEach(supportedCurrencies, id: \.self) { code in
-                            Text(verbatim: code).tag(code)
+                .font(Theme.Typography.rowTitle)
+                if !dynamicTypeSize.isAccessibilitySize { Spacer() }
+                HStack(spacing: Theme.Space.compact) {
+                    Menu {
+                        Picker("Home currency", selection: $displayCurrency) {
+                            ForEach(supportedCurrencies, id: \.self) { code in
+                                Text(verbatim: code).tag(code)
+                            }
                         }
-                    }
-                } label: {
-                    HStack(spacing: 5) {
-                        Text(verbatim: displayCurrency)
-                        Image(systemName: "chevron.down")
-                            .font(.app(.caption2, .bold))
-                    }
-                    .font(.app(.caption, .semibold))
-                    // No pill on ruled themes: the code and its chevron are the control.
-                    .padding(.horizontal, Theme.isRuled ? 0 : 11)
-                    .frame(minHeight: 36)
-                    .background {
-                        if !Theme.isRuled {
-                            Capsule().fill(Color.primary.opacity(0.07))
+                    } label: {
+                        HStack(spacing: 5) {
+                            Text(verbatim: displayCurrency).fixedSize()
+                            Image(systemName: "chevron.down")
+                                .font(.app(.caption2, .bold))
                         }
+                        .font(.app(.caption, .semibold))
+                        // No pill on ruled themes: the code and its chevron are the control.
+                        .padding(.horizontal, Theme.isRuled ? 0 : 11)
+                        .frame(minHeight: 36)
+                        .background {
+                            if !Theme.isRuled {
+                                Capsule().fill(Color.primary.opacity(0.07))
+                            }
+                        }
+                        .contentShape(Theme.isRuled ? AnyShape(Rectangle()) : AnyShape(Capsule()))
                     }
-                    .contentShape(Theme.isRuled ? AnyShape(Rectangle()) : AnyShape(Capsule()))
-                }
-                .accessibilityLabel("Home currency")
+                    .accessibilityLabel("Home currency")
 
-                Menu {
-                    Button {
-                        showConverter = true
+                    Menu {
+                        Button {
+                            showConverter = true
+                        } label: {
+                            Label("Convert currencies", systemImage: "arrow.left.arrow.right")
+                        }
+                        Button {
+                            showBudgetInfo = true
+                        } label: {
+                            Label("How totals work", systemImage: "info.circle")
+                        }
                     } label: {
-                        Label("Convert currencies", systemImage: "arrow.left.arrow.right")
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .frame(width: 40, height: 40)
+                            .contentShape(.circle)
                     }
-                    Button {
-                        showBudgetInfo = true
-                    } label: {
-                        Label("How totals work", systemImage: "info.circle")
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("More budget options")
+                    .popover(isPresented: $showBudgetInfo) {
+                        budgetInfoPopover
+                            .presentationCompactAdaptation(.popover)
                     }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.app(.subheadline, .semibold))
-                        .foregroundStyle(.primary)
-                        .frame(width: 40, height: 40)
-                        .contentShape(.circle)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("More budget options")
-                .popover(isPresented: $showBudgetInfo) {
-                    budgetInfoPopover
-                        .presentationCompactAdaptation(.popover)
                 }
             }
 
@@ -870,19 +867,17 @@ struct BalanceCard: View {
                                     .frame(width: 44, height: 2)
                                     .padding(.bottom, 2)
                             }
-                            HStack(spacing: 5) {
-                                Text(LocalizedStringKey(heroLabel))
-                                Text(verbatim: "·")
+                            Group {
                                 if hasConvertedBudget {
-                                    Text("of")
-                                    Text(verbatim: summaryMoney(totals.budget, displayCurrency, compact: true))
+                                    Text("\(Text(LocalizedStringKey(heroLabel))) · \(summaryMoney(totals.budget, displayCurrency, compact: true)) budget")
                                 } else if totals.budgetedTripCount == totals.totalTripCount {
-                                    Text("\(totals.totalTripCount) trips budgeted")
+                                    Text("\(Text(LocalizedStringKey(heroLabel))) · \(totals.totalTripCount) trips budgeted")
                                 } else {
-                                    Text("\(totals.budgetedTripCount) of \(totals.totalTripCount) trips budgeted")
+                                    Text("\(Text(LocalizedStringKey(heroLabel))) · \(totals.budgetedTripCount) of \(totals.totalTripCount) trips budgeted")
                                 }
                             }
-                            .font(.app(.subheadline))
+                            .fixedSize(horizontal: false, vertical: true)
+                            .font(Theme.Typography.secondary)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.leading)
                         }
@@ -915,7 +910,7 @@ struct BalanceCard: View {
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)
                         Text("Updating rates…")
-                            .font(.app(.caption))
+                            .font(Theme.Typography.metadata)
                             .foregroundStyle(.secondary)
                     }
                     .frame(minHeight: 44)
@@ -977,7 +972,7 @@ struct BalanceCard: View {
     private func tripSegments(_ totals: TripStore.HomeTotals, isOver: Bool, isNear: Bool) -> some View {
         let trips = totals.budgetTrips.filter { ($0.convertedSpent ?? 0) > 0 }
         let scale = max(totals.budget, totals.spent, 0.01)
-        let statusColor = isOver ? Color(hex: 0xDC2626) : isNear ? Color(hex: 0xD97706) : Theme.accent
+        let statusColor = isOver ? Theme.negative : isNear ? Theme.warning : Theme.accent
 
         return VStack(alignment: .leading, spacing: 10) {
             GeometryReader { geo in
@@ -1029,9 +1024,9 @@ struct BalanceCard: View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Plan spending before the trip")
-                    .font(.app(.subheadline, .semibold))
+                    .font(Theme.Typography.rowTitle)
                 Text("Budgets are personal and set per trip.")
-                    .font(.app(.caption))
+                    .font(Theme.Typography.metadata)
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
@@ -1088,7 +1083,7 @@ struct BalanceCard: View {
                 .font(.app(.caption, .semibold))
                 .foregroundStyle(Theme.accent)
         }
-        .font(.app(.caption))
+        .font(Theme.Typography.metadata)
         .calloutBlock(tint: Color.primary.opacity(0.035))
     }
 
@@ -1218,7 +1213,7 @@ private struct BudgetByTripSheet: View {
                                 Text("\(missingCount) trips have no personal budget")
                             }
                         }
-                        .font(.app(.caption))
+                        .font(Theme.Typography.metadata)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 4)
@@ -1242,17 +1237,17 @@ private struct BudgetByTripSheet: View {
         let fraction = trip.spent / trip.budget
         let isOver = trip.spent > trip.budget
         let isNear = !isOver && fraction >= 0.8
-        let color = isOver ? Color(hex: 0xDC2626)
-            : isNear ? Color(hex: 0xD97706)
-            : Color(hex: 0x16A34A)
-        let colors = isOver ? [Color(hex: 0xF87171), Color(hex: 0xDC2626)]
-            : isNear ? [Color(hex: 0xFBBF24), Color(hex: 0xD97706)]
-            : [Color(hex: 0x4ADE80), Color(hex: 0x16A34A)]
+        let color = isOver ? Theme.negative
+            : isNear ? Theme.warning
+            : Theme.positive
+        let colors = isOver ? [Theme.negative]
+            : isNear ? [Theme.warning]
+            : [Theme.positive]
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Text(verbatim: trip.name)
-                    .font(.app(.subheadline, .semibold))
+                    .font(Theme.Typography.rowTitle)
                     .lineLimit(1)
                 Spacer()
                 if isOver {
@@ -1277,7 +1272,7 @@ private struct BudgetByTripSheet: View {
                 Spacer()
                 Text(verbatim: "\(Int((fraction * 100).rounded()))%")
             }
-            .font(.app(.caption))
+            .font(Theme.Typography.metadata)
             .foregroundStyle(.secondary)
         }
         .panelPadding(horizontal: 14, vertical: 14)
@@ -1324,11 +1319,11 @@ struct TripRow: View {
     }
 
     private var accent: Color {
-        isOver ? Color(hex: 0xDC2626) : isNear ? Color(hex: 0xD97706) : Color(hex: 0x16A34A)
+        isOver ? Theme.negative : isNear ? Theme.warning : Theme.positive
     }
     private var progressColors: [Color] {
-        isOver ? [Color(hex: 0xF87171), Color(hex: 0xDC2626)]
-            : isNear ? [Color(hex: 0xFBBF24), Color(hex: 0xD97706)]
+        isOver ? [Theme.negative]
+            : isNear ? [Theme.warning]
             : [Theme.accent, Theme.accentSecondary]
     }
 
@@ -1411,7 +1406,7 @@ struct TripRow: View {
                                 .font(.app(.title3, .bold))
                                 .lineLimit(1)
                             Text(trip.dateRangeText ?? "\(trip.expenses.count) expense\(trip.expenses.count == 1 ? "" : "s")")
-                                .font(.app(.caption))
+                                .font(Theme.Typography.metadata)
                                 .opacity(0.85)
                         }
                         Spacer(minLength: 8)
@@ -1521,9 +1516,9 @@ struct TripRow: View {
 
     private var dateRow: some View {
         HStack(spacing: 6) {
-            Image(systemName: "calendar").font(.app(.caption))
+            Image(systemName: "calendar").font(Theme.Typography.metadata)
             Text(trip.dateRangeText ?? "\(trip.expenses.count) expense\(trip.expenses.count == 1 ? "" : "s")")
-                .font(.app(.caption))
+                .font(Theme.Typography.metadata)
         }
         .foregroundStyle(.secondary)
     }
@@ -1532,7 +1527,7 @@ struct TripRow: View {
         VStack(spacing: 6) {
             HStack {
                 Text(hasBudget ? (isOver ? "Over by" : "Remaining") : "No budget set")
-                    .font(.app(.caption)).foregroundStyle(.secondary)
+                    .font(Theme.Typography.metadata).foregroundStyle(.secondary)
                 Spacer()
                 if hasBudget {
                     Text(money(abs(remaining), trip.currencyCode))
@@ -1594,7 +1589,7 @@ struct CurrencyConverterCard: View {
 
                     Button(action: swapCurrencies) {
                         Image(systemName: "arrow.up.arrow.down")
-                            .font(.app(.subheadline, .semibold))
+                            .font(Theme.Typography.rowTitle)
                             .foregroundStyle(Theme.accent)
                             .frame(width: 44, height: 44)
                             .contentShape(.circle)
@@ -1632,7 +1627,7 @@ struct CurrencyConverterCard: View {
                             }
                         }
                     }
-                    .font(.app(.caption))
+                    .font(Theme.Typography.metadata)
                     .foregroundStyle(.secondary)
                 }
                 .padding(20)
@@ -1685,7 +1680,7 @@ struct CurrencyConverterCard: View {
             }
         } label: {
             HStack(spacing: 4) {
-                Text(verbatim: selection.wrappedValue).font(.app(.subheadline, .semibold))
+                Text(verbatim: selection.wrappedValue).font(Theme.Typography.rowTitle)
                 Image(systemName: "chevron.down").font(.app(.caption2, .bold))
             }
             .padding(.horizontal, 12)
@@ -1820,7 +1815,7 @@ struct TripPickerSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(prompt)
-                        .font(.app(.subheadline))
+                        .font(Theme.Typography.secondary)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 4)
                         .padding(.bottom, 2)
@@ -1851,10 +1846,10 @@ struct TripPickerSheet: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(verbatim: trip.name)
-                    .font(.app(.subheadline, .semibold))
+                    .font(Theme.Typography.rowTitle)
                     .lineLimit(1)
                 Text(trip.dateRangeText ?? "\(trip.expenses.count) expense\(trip.expenses.count == 1 ? "" : "s")")
-                    .font(.app(.caption))
+                    .font(Theme.Typography.metadata)
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
@@ -1865,7 +1860,7 @@ struct TripPickerSheet: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(.rect(cornerRadius: 18))
-        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
+        .readableSurface(cornerRadius: Theme.cardRadius)
     }
 }
 
@@ -1964,10 +1959,10 @@ struct ArchivedTripsSheet: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(verbatim: trip.name)
-                    .font(.app(.subheadline, .semibold))
+                    .font(Theme.Typography.rowTitle)
                     .lineLimit(1)
                 Text(trip.dateRangeText ?? "\(trip.expenses.count) expense\(trip.expenses.count == 1 ? "" : "s")")
-                    .font(.app(.caption))
+                    .font(Theme.Typography.metadata)
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
@@ -1985,7 +1980,7 @@ struct ArchivedTripsSheet: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(.rect(cornerRadius: 18))
-        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
+        .readableSurface(cornerRadius: Theme.cardRadius)
     }
 }
 
@@ -2052,7 +2047,7 @@ struct TransactionRow: View {
                 .background(transaction.color, in: .circle)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(transaction.name).font(.app(.subheadline, .semibold))
+                Text(transaction.name).font(Theme.Typography.rowTitle)
                 // Payer as a colour dot rather than "Paid by …"; VoiceOver still
                 // gets the words.
                 HStack(spacing: 6) {
@@ -2060,7 +2055,7 @@ struct TransactionRow: View {
                         .fill(transaction.color)
                         .frame(width: 8, height: 8)
                     Text(verbatim: transaction.date)
-                        .font(.app(.caption))
+                        .font(Theme.Typography.metadata)
                         .foregroundStyle(.secondary)
                 }
                 .accessibilityElement(children: .ignore)
@@ -2068,7 +2063,7 @@ struct TransactionRow: View {
             }
             Spacer()
             Text(money(transaction.amount, transaction.currencyCode))
-                .font(.app(.subheadline, .semibold))
+                .font(Theme.Typography.rowTitle)
                 .monospacedDigit()
                 .foregroundStyle(.primary)
         }
