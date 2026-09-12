@@ -417,13 +417,7 @@ enum AppTheme: String, CaseIterable, Identifiable {
 
 // MARK: - Palette overrides
 
-/// All palettes use the same card layout. Legacy ruled helpers remain available
-/// while existing call sites migrate; no user-selectable palette activates them.
 extension AppTheme {
-    enum SurfaceStyle { case card, ruled }
-
-    // Palettes customize color only; navigation and component geometry stay stable.
-    var surfaceStyle: SurfaceStyle { .card }
 
     /// Hairline color for this theme; `nil` uses the shared cool-neutral separator.
     /// The shared one reads blue against travertine, which is the whole reason this exists.
@@ -564,12 +558,6 @@ enum Theme {
         ThemeManager.shared.selection.fieldOverride ?? Color(light: 0xE9EEF3, dark: 0x2C2C2E)
     }
 
-    /// Opaque-enough surfaces for content that must remain readable over the themed
-    /// backdrop. Liquid Glass can still sit above these, but pale themes no longer
-    /// wash cards and adjacent sections into one continuous field.
-    ///
-    /// `surface` and `separator` resolve through the theme so a warm palette isn't
-    /// ruled in cool grey; themes that don't override them get the shared neutrals.
     static var surface: Color {
         ThemeManager.shared.selection.surfaceOverride ?? Color(light: 0xFFFFFF, dark: 0x202124)
     }
@@ -611,439 +599,97 @@ enum Theme {
     static let onWarningFill = Color(light: 0x3B1D04, dark: 0x3B1D04)
 
     /// True when the active theme bounds content with rules instead of cards.
-    static var isRuled: Bool { ThemeManager.shared.selection.surfaceStyle == .ruled }
-
-    /// The ruled style's content margin — wider than the default, which is what gives
-    /// its full-bleed hairlines something to run past.
-    static let ruledInset: CGFloat = 26
-
-    /// The ruled style's corner scale. It used to square every shape it drew, which read
-    /// as brutalist next to the rest of the app. Every value here is deliberately well
-    /// under `cardRadius`, so a rounded ruled theme still reads apart from the card
-    /// family rather than becoming a ninth member of it.
-    enum RuledRadius {
-        /// The one large image on a screen — Explore's plate.
-        static let plate: CGFloat = 16
-        /// A filled well: search fields and the blocks a primary action fills.
-        static let well: CGFloat = 14
-        /// Chips, filter tokens, and thumbnail imagery.
-        static let element: CGFloat = 12
-        /// The avatar, as a rounded square rather than a circle.
-        static let avatar: CGFloat = 9
-    }
-
-    /// Horizontal inset for the home screen's content column. `nil` on card themes so
-    /// they keep SwiftUI's default padding rather than a hard-coded stand-in for it.
     static var contentInset: CGFloat? { Space.page }
-
-    /// How strong a break a rule marks. A ruled page takes its structure from the
-    /// *contrast* between these — one repeated hairline gives a screen no hierarchy at
-    /// all, which is the difference between a ruled page and a bordered list.
-    ///
-    /// The intervals are deliberately not a linear ramp: negative space reads as
-    /// deliberate only when the steps between its sizes are obvious.
-    enum RuleWeight {
-        /// Between rows inside one section.
-        case hairline
-        /// Bounding a section — the default, and what every existing rule was.
-        case section
-        /// Closing a title block. The screen's one strong rule; use it once.
-        case chapter
-        /// Opens a screen: chapter air, no rule. The first block has nothing above it
-        /// to separate from — the navigation title already does that — so a rule there
-        /// reads as an underline on the title instead of as a boundary.
-        case opening
-
-        /// Padding a block bearing this rule takes above and below itself.
-        var space: CGFloat {
-            switch self {
-            case .hairline: 8
-            case .section: 14
-            case .chapter, .opening: 26
-            }
-        }
-
-        /// Whether this weight draws a rule at all.
-        var drawsRule: Bool { self != .opening }
-    }
-
-    /// Hairline weight and color, doubled and opaque under Increased Contrast to match
-    /// what `readableSurface` already does to its border.
-    static func ruleWidth(_ contrast: ColorSchemeContrast, _ weight: RuleWeight = .section) -> CGFloat {
-        guard weight.drawsRule else { return 0 }
-        let base: CGFloat = weight == .chapter ? 1.5 : 1
-        return contrast == .increased ? base * 2 : base
-    }
-
-    static func ruleColor(_ contrast: ColorSchemeContrast, _ weight: RuleWeight = .section) -> Color {
-        switch weight {
-        // Ink rather than the separator — but held back: at full strength a chapter rule
-        // read as a bar drawn across the page instead of as the end of a title block.
-        // Increased Contrast still gets the solid one.
-        case .chapter: Color.primary.opacity(contrast == .increased ? 1 : 0.4)
-        case .section: separator.opacity(contrast == .increased ? 1 : 0.8)
-        case .hairline: separator.opacity(contrast == .increased ? 1 : 0.45)
-        case .opening: .clear
-        }
-    }
 }
 
-// MARK: - Ruled layout
+// MARK: - Shared card layout
 
 extension View {
-    /// Panel treatment for the home screen: a readable card on card themes, bare
-    /// content under a full-bleed rule on ruled ones. `weight` sets how strong a break
-    /// the rule marks and how much air the block takes; it is ignored on card themes,
-    /// where the cards themselves do the separating.
-    @ViewBuilder
-    func homePanel(
-        cornerRadius: CGFloat = 20,
-        elevated: Bool = false,
-        weight: Theme.RuleWeight = .section
-    ) -> some View {
-        if Theme.isRuled {
-            modifier(RuledSectionModifier(weight: weight))
-        } else {
-            readableSurface(cornerRadius: cornerRadius, elevated: elevated)
-        }
+    func homePanel(cornerRadius: CGFloat = 20, elevated: Bool = false) -> some View {
+        readableSurface(cornerRadius: cornerRadius, elevated: elevated)
     }
 
-    /// Compatibility entry point: content panels now share the opaque card surface.
-    @ViewBuilder
-    func homeGlassPanel(cornerRadius: CGFloat = 20, weight: Theme.RuleWeight = .section) -> some View {
-        if Theme.isRuled {
-            modifier(RuledSectionModifier(weight: weight))
-        } else {
-            readableSurface(cornerRadius: cornerRadius)
-        }
+    func homeGlassPanel(cornerRadius: CGFloat = 20) -> some View {
+        readableSurface(cornerRadius: cornerRadius)
     }
 
-    /// Compatibility entry point for standalone content rows.
-    @ViewBuilder
     func cardOnlyGlass(cornerRadius: CGFloat) -> some View {
-        if Theme.isRuled {
-            self
-        } else {
-            readableSurface(cornerRadius: cornerRadius)
-        }
+        readableSurface(cornerRadius: cornerRadius)
     }
 
-    /// A ruled boundary for content that has no card form at all (the quick actions).
-    /// Identity on card themes, where the cards themselves separate the sections.
-    @ViewBuilder
-    func ruledSection(weight: Theme.RuleWeight = .section) -> some View {
-        if Theme.isRuled {
-            modifier(RuledSectionModifier(weight: weight))
-        } else {
-            self
-        }
-    }
-
-    /// Padding a panel applies for itself on card themes. The ruled style takes its
-    /// horizontal margin from the content column and its rhythm from the rules, so it
-    /// drops the panel's own inset rather than nesting one inside the other.
     func panelPadding(horizontal: CGFloat, vertical: CGFloat) -> some View {
-        padding(.horizontal, Theme.isRuled ? 0 : horizontal)
-            .padding(.vertical, Theme.isRuled ? 0 : vertical)
-    }
-}
-
-/// Bounds content with a hairline that bleeds past the content column to the screen
-/// edges — what makes the ruled style read as ruled rather than as a bordered list.
-private struct RuledSectionModifier: ViewModifier {
-    var weight: Theme.RuleWeight = .section
-    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
-
-    func body(content: Content) -> some View {
-        content
-            .padding(.vertical, weight.space)
-            .overlay(alignment: .top) {
-                if weight.drawsRule {
-                    Rectangle()
-                        .fill(Theme.ruleColor(colorSchemeContrast, weight))
-                        .frame(height: Theme.ruleWidth(colorSchemeContrast, weight))
-                        // Negative inset cancels the content column's margin exactly, so
-                        // the rule spans the full width wherever the panel sits.
-                        .padding(.horizontal, -Theme.ruledInset)
-                }
-            }
-    }
-}
-
-extension View {
-    /// Small-label styling. Ruled themes set it inscriptionally — tracked caps, the
-    /// look Colonnade is built on; card themes keep the tighter track they already had.
-    func inscription() -> some View { modifier(InscriptionModifier()) }
-
-    /// An inscription on ruled themes, `font` on card themes. For labels the ruled
-    /// screens set inscriptionally without disturbing the style the other eight have.
-    /// Note the font must be applied here, not before: `inscription()` sets its own,
-    /// and a font applied closer to the text would win over it.
-    @ViewBuilder
-    func inscription(orFont font: Font) -> some View {
-        if Theme.isRuled { inscription() } else { self.font(font) }
+        padding(.horizontal, horizontal).padding(.vertical, vertical)
     }
 
-    /// Home section heading: an inscription on ruled themes, the existing headline
-    /// everywhere else.
-    @ViewBuilder
     func homeSectionHeading() -> some View {
-        if Theme.isRuled {
-            inscription().foregroundStyle(Theme.textSecondary)
-        } else {
-            font(.app(.headline))
-                .foregroundStyle(Color(light: 0x111827, dark: 0xF9FAFB))
-                .background(Theme.surfaceSubtle, in: .rect(cornerRadius: 4))
-        }
+        font(.app(.headline))
+            .foregroundStyle(Color(light: 0x111827, dark: 0xF9FAFB))
+            .background(Theme.surfaceSubtle, in: .rect(cornerRadius: 4))
     }
 }
 
-private struct InscriptionModifier: ViewModifier {
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @Environment(\.locale) private var locale
-
-    /// Uppercasing does nothing for CJK and wide tracking only breaks its spacing, so
-    /// those locales keep the label's own case and the tighter track.
-    private var isCJK: Bool {
-        ["zh", "ja", "ko"].contains(locale.language.languageCode?.identifier ?? "")
-    }
-
-    func body(content: Content) -> some View {
-        let inscribed = Theme.isRuled && !isCJK
-        // `tracking` is absolute — it does not grow with the type — so the spacing that
-        // reads as air at default sizes reads as gaps at accessibility ones.
-        let tracking: CGFloat = inscribed
-            ? (dynamicTypeSize.isAccessibilitySize ? 1.0 : 1.5)
-            : 0.5
-        content
-            .font(.app(.caption2, .semibold))
-            .textCase(inscribed ? .uppercase : nil)
-            .tracking(tracking)
-    }
-}
-
-/// A hairline that runs past the content column to the screen edges, for the places a
-/// ruled screen needs a rule of its own: between list rows, or bounding a control strip
-/// where there is no panel for `homePanel()` to rule. Only ruled themes render it — card
-/// themes bound the same content with the card itself.
-struct RuledDivider: View {
-    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
-    /// How far the rule runs past the content column on each side. The default cancels
-    /// the ruled content inset exactly; a narrower column passes its own.
-    var bleed: CGFloat = Theme.ruledInset
-    /// Defaults to `.hairline`: a bare `RuledDivider` is nearly always separating rows
-    /// *inside* a section, and the section's own boundary is drawn by `ruledSection`.
-    var weight: Theme.RuleWeight = .hairline
-
-    var body: some View {
-        Rectangle()
-            .fill(Theme.ruleColor(colorSchemeContrast, weight))
-            .frame(height: Theme.ruleWidth(colorSchemeContrast, weight))
-            .padding(.horizontal, -bleed)
-    }
-}
-
-/// The divider inside a section: the system `Divider` on card themes, a full-bleed rule
-/// on ruled ones, so a section's internal breaks match the rules bounding it.
 struct SectionDivider: View {
-    @ViewBuilder
-    var body: some View {
-        if Theme.isRuled {
-            RuledDivider()
-        } else {
-            Divider()
-        }
-    }
+    var body: some View { Divider() }
 }
 
-/// A ruled segmented control: tracked-caps labels on a row bounded top and bottom by
-/// rules, the active one underlined. Used where card themes draw a capsule or chip
-/// picker; the caller keeps its own selection state either way.
-struct RuledSegmentedRow<Item: Hashable>: View {
-    let items: [Item]
-    @Binding var selection: Item
-    let title: (Item) -> LocalizedStringKey
-
-    var body: some View {
-        VStack(spacing: 0) {
-            // Section weight, not the hairline default: this strip switches the whole
-            // screen beneath it, so its boundaries have to read as a real break.
-            RuledDivider(weight: .section)
-            HStack(spacing: 0) {
-                ForEach(items, id: \.self) { item in
-                    Button {
-                        withAnimation(.snappy) { selection = item }
-                    } label: {
-                        Text(title(item))
-                            .inscription()
-                            .foregroundStyle(selection == item ? Color.primary : Theme.textSecondary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
-                            .frame(maxWidth: .infinity)
-                            // 46pt is the mockup's row height, and clears the 44pt
-                            // minimum target the tighter visual rhythm would miss.
-                            .frame(minHeight: 46)
-                            .contentShape(.rect)
-                            .overlay(alignment: .bottom) {
-                                if selection == item {
-                                    Rectangle().fill(Color.primary).frame(height: 2)
-                                }
-                            }
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            RuledDivider(weight: .section)
-        }
-    }
-}
-
-/// A screen's primary action. On ruled themes this is the one place accent fills a
-/// shape — a flat, unrounded band — while card themes keep the tinted glass capsule
-/// they already had, so call sites don't branch per theme.
-struct RuledPrimaryButton: View {
-    let title: LocalizedStringKey
-    let action: () -> Void
-
-    @ViewBuilder
-    var body: some View {
-        if Theme.isRuled {
-            Button(action: action) {
-                Text(title)
-                    .inscription()
-                    .foregroundStyle(Theme.onAccent)
-                    .frame(maxWidth: .infinity, minHeight: 52)
-                    .background(Theme.accent)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-        } else {
-            Button(action: action) {
-                Text(title)
-                    .font(.app(.subheadline, .semibold))
-                    .foregroundStyle(Theme.onAccent)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .contentShape(.capsule)
-            }
-            .buttonStyle(.plain)
-            .actionFill(tint: Theme.accent)
-        }
-    }
-}
-
-/// A secondary action in a header or callout: a tracked-caps label on ruled themes,
-/// the pill the call site already drew everywhere else. Ruled screens carry no filled
-/// pills — an action is marked by its inscription, the way the trip detail hero
-/// actions already are.
-struct RuledInlineButton<CardLabel: View>: View {
-    let title: LocalizedStringKey
-    var tint: Color = .primary
-    let action: () -> Void
-    @ViewBuilder let cardLabel: () -> CardLabel
-
-    @ViewBuilder
-    var body: some View {
-        if Theme.isRuled {
-            Button(action: action) {
-                Text(title)
-                    .inscription()
-                    .foregroundStyle(tint)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-                    .frame(minHeight: 44)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-        } else {
-            cardLabel()
-        }
-    }
-}
-
-/// A budget meter. Card themes keep the rounded, two-stop bar they have always drawn;
-/// ruled themes draw a square-ended rule in one flat colour over a hairline track — a
-/// gradient capsule is card-era ornament, not this theme's vocabulary.
+/// A rounded budget meter using the supplied progress colors and track.
 struct MeterBar: View {
     let fraction: Double
-    /// Card themes render these leading-to-trailing as a gradient; ruled themes take
-    /// the last stop, the darker and truer single colour of the pair.
     let colors: [Color]
-    /// The unfilled remainder on card themes; ruled themes always use the hairline.
     var track: Color = Color.primary.opacity(0.08)
     var height: CGFloat = 8
 
-    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
     var body: some View {
         let clamped = min(1, max(0, fraction))
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                shape.fill(Theme.isRuled ? Theme.ruleColor(colorSchemeContrast) : track)
+                shape.fill(track)
                 shape.fill(fill).frame(width: geo.size.width * clamped)
             }
         }
         // Thin enough to read as a rule rather than as a bar, which is the point.
-        .frame(height: Theme.isRuled ? 3 : height)
+        .frame(height: height)
     }
 
     private var shape: AnyShape {
-        Theme.isRuled ? AnyShape(Rectangle()) : AnyShape(Capsule())
+        AnyShape(Capsule())
     }
 
     private var fill: AnyShapeStyle {
-        Theme.isRuled
-            ? AnyShapeStyle(colors.last ?? Theme.accent)
-            : AnyShapeStyle(LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing))
+        AnyShapeStyle(LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing))
     }
 }
 
 extension View {
-    /// A small tinted pill — badges, inline chips. Card themes fill a capsule; ruled
-    /// themes let the label's own colour carry the status and drop both the fill and
-    /// the inset that went with it, the same trade `calloutBlock` makes at block scale.
     func pillTint(_ tint: Color, horizontal: CGFloat = 9, vertical: CGFloat = 4) -> some View {
-        padding(.horizontal, Theme.isRuled ? 0 : horizontal)
+        padding(.horizontal, horizontal)
             .padding(.vertical, vertical)
             .background {
-                if !Theme.isRuled {
-                    Capsule().fill(tint)
-                }
+                Capsule().fill(tint)
             }
     }
 
-    /// A text-field fill. Ruled themes square every filled shape; the fill colour
-    /// itself already resolves through the theme via `Theme.fieldBackground`.
     func fieldFill(cornerRadius: CGFloat = Theme.Radius.field) -> some View {
-        background(Theme.fieldBackground, in: .rect(cornerRadius: Theme.isRuled ? 0 : cornerRadius))
+        background(Theme.fieldBackground, in: .rect(cornerRadius: cornerRadius))
     }
 
     /// A solid fill for primary actions; floating map controls use glass directly.
     @ViewBuilder
     func actionFill(tint: Color, in shape: some Shape = .capsule) -> some View {
-        if Theme.isRuled {
-            background(tint)
-        } else {
-            background(tint, in: shape)
-        }
+        background(tint, in: shape)
     }
 
-    /// A tinted callout block — stat tiles, status bands, warnings. Card themes fill a
-    /// rounded rectangle; ruled themes drop the fill and the inset that went with it and
-    /// let the copy's own colour carry the status, exactly as `budgetTile` already does.
-    /// The vertical padding stays either way: it is the block's rhythm, not its box.
     func calloutBlock(
         tint: Color,
         cornerRadius: CGFloat = 14,
         horizontal: CGFloat = 12,
         vertical: CGFloat = 10
     ) -> some View {
-        padding(.horizontal, Theme.isRuled ? 0 : horizontal)
+        padding(.horizontal, horizontal)
             .padding(.vertical, vertical)
             .background {
-                if !Theme.isRuled {
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).fill(tint)
-                }
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).fill(tint)
             }
     }
 }

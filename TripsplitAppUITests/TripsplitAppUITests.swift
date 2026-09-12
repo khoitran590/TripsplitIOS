@@ -58,6 +58,46 @@ final class TripsplitAppUITests: XCTestCase {
         app.buttons["Cancel"].tap()
     }
 
+    func testExpenseDraftCanCreateAndEditFromTripOverview() throws {
+        launchDemoTrip(theme: "classic")
+        app.buttons["trip-add-expense"].tap()
+        let amount = app.textFields["expense-amount"]
+        XCTAssertTrue(amount.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["save-expense"].isEnabled)
+        amount.tap()
+        amount.typeText("12.50")
+        let title = app.textFields["expense-title"]
+        title.tap()
+        title.typeText("Draft regression coffee")
+        app.buttons["Done"].tap()
+        XCTAssertTrue(app.buttons["save-expense"].isEnabled)
+        app.buttons["save-expense"].tap()
+        XCTAssertTrue(app.buttons["trip-add-expense"].waitForExistence(timeout: 5))
+
+        tapAfterScrolling(app.buttons["trip-expense-history"])
+        let search = app.textFields["Search expenses"]
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        search.tap()
+        search.typeText("Draft regression coffee")
+        let saved = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Draft regression coffee")).firstMatch
+        XCTAssertTrue(saved.waitForExistence(timeout: 5))
+        saved.tap()
+        app.buttons["Edit"].tap()
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        XCTAssertEqual(title.value as? String, "Draft regression coffee")
+        XCTAssertEqual(Double(amount.value as? String ?? ""), 12.5)
+        title.tap()
+        title.typeText(" updated")
+        app.buttons["Done"].tap()
+        app.buttons["save-expense"].tap()
+        XCTAssertTrue(app.buttons["Edit"].waitForExistence(timeout: 5))
+        app.buttons["Edit"].tap()
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        XCTAssertEqual(title.value as? String, "Draft regression coffee updated")
+        XCTAssertEqual(Double(amount.value as? String ?? ""), 12.5)
+        app.buttons["Cancel"].tap()
+    }
+
     func testTripOverviewUsesSameDestinationsWithLargeTextAndColonnade() throws {
         launchDemoTrip(theme: "colonnade", largeText: true)
         tapAfterScrolling(app.buttons["trip-all-balances"])

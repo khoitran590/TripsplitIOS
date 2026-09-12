@@ -1,7 +1,5 @@
 import SwiftUI
 
-
-
 // MARK: - Split View
 
 /// The expense-splitting screen reached from the home "Split" button.
@@ -22,9 +20,6 @@ struct SplitView: View {
     @State private var settlementHistory: [String: [SettlementRecord]] = [:]
     /// The settlement currently presented in the settle-up sheet.
     @State private var activeSettlement: Settlement?
-    /// The ruled total. Tied to `.largeTitle` so it still answers Dynamic Type.
-    @ScaledMetric(relativeTo: .largeTitle) private var ruledAmountSize: CGFloat = 56
-    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
     /// Currency code used to format amounts; defaults to USD for a standalone split.
     private let currencyCode: String
@@ -60,8 +55,6 @@ struct SplitView: View {
                 .ignoresSafeArea()
 
                 ScrollView {
-                    // Ruled themes bound each section with a rule, so the stack stops
-                    // adding gaps between them.
                     VStack(spacing: Theme.Space.section) {
                         amountCard
                         payerCard
@@ -90,35 +83,17 @@ struct SplitView: View {
     // MARK: Cards
 
     private var amountCard: some View {
-        VStack(spacing: Theme.isRuled ? 10 : 6) {
-            if Theme.isRuled {
-                // The label carries the currency, so the numeral row is nothing but
-                // the numeral and a long total has the whole column to grow into.
-                HStack(spacing: 6) {
-                    Text("Total Amount")
-                    Text(verbatim: "·")
-                    Text(verbatim: currencyCode)
-                }
-                .inscription()
-                .foregroundStyle(Theme.textSecondary)
-
+        VStack(spacing: 6) {
+            Text("Total Amount")
+                .font(.app(.subheadline, .medium))
+                .foregroundStyle(.secondary)
+            HStack(spacing: 2) {
+                Text(currencySymbol(currencyCode)).font(.app(.title, .semibold)).foregroundStyle(.secondary)
                 TextField("0.00", text: $amountText)
-                    .font(.app(size: ruledAmountSize, weight: .medium))
+                    .font(Theme.Typography.heroAmount)
                     .keyboardType(.decimalPad)
                     .multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity)
-            } else {
-                Text("Total Amount")
-                    .font(.app(.subheadline, .medium))
-                    .foregroundStyle(.secondary)
-                HStack(spacing: 2) {
-                    Text(currencySymbol(currencyCode)).font(.app(.title, .semibold)).foregroundStyle(.secondary)
-                    TextField("0.00", text: $amountText)
-                        .font(Theme.Typography.heroAmount)
-                        .keyboardType(.decimalPad)
-                        .multilineTextAlignment(.center)
-                        .fixedSize()
-                }
+                    .fixedSize()
             }
         }
         .frame(maxWidth: .infinity)
@@ -142,31 +117,23 @@ struct SplitView: View {
 
     private var methodCard: some View {
         cardSection(title: "Split method", icon: "slider.horizontal.3") {
-            if Theme.isRuled {
-                // The chips become the underlined segmented row the trip detail's
-                // tabs use, so both screens pick a mode the same way.
-                RuledSegmentedRow(items: SplitMethod.allCases, selection: $method) {
-                    LocalizedStringKey($0.shortLabel)
-                }
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        ForEach(SplitMethod.allCases) { option in
-                            Button {
-                                withAnimation(.snappy) { method = option }
-                            } label: {
-                                HStack(spacing: 6) {
-                                    Image(systemName: option.icon)
-                                    Text(LocalizedStringKey(option.shortLabel))
-                                }
-                                .font(Theme.Typography.rowTitle)
-                                .foregroundStyle(method == option ? AnyShapeStyle(Theme.onAccent) : AnyShapeStyle(.primary))
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 9)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(SplitMethod.allCases) { option in
+                        Button {
+                            withAnimation(.snappy) { method = option }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: option.icon)
+                                Text(LocalizedStringKey(option.shortLabel))
                             }
-                            .buttonStyle(.plain)
-                            .controlSurface(tint: method == option ? Theme.accent : nil, in: .capsule)
+                            .font(Theme.Typography.rowTitle)
+                            .foregroundStyle(method == option ? AnyShapeStyle(Theme.onAccent) : AnyShapeStyle(.primary))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 9)
                         }
+                        .buttonStyle(.plain)
+                        .controlSurface(tint: method == option ? Theme.accent : nil, in: .capsule)
                     }
                 }
             }
@@ -240,31 +207,19 @@ struct SplitView: View {
     @ViewBuilder
     private var reviewCard: some View {
         let content = VStack(alignment: .leading, spacing: 14) {
-            if Theme.isRuled {
-                Text("Split Review").inscription().foregroundStyle(Theme.textSecondary)
-                if let each = equalShare {
-                    // The figure the whole screen reduces to when everyone owes the
-                    // same — the ruled review leads with it.
-                    Text("\(currency(each)) each")
-                        .font(.app(size: 28, weight: .medium))
-                }
-            } else {
-                Label("Split Review", systemImage: "list.bullet.rectangle.fill")
-                    .font(Theme.Typography.sectionTitle)
-            }
+            Label("Split Review", systemImage: "list.bullet.rectangle.fill")
+                .font(Theme.Typography.sectionTitle)
 
             if let message = result.message, !result.isValid {
                 Label(message, systemImage: "exclamationmark.triangle.fill")
                     .font(.app(.footnote, .medium))
                     .foregroundStyle(Theme.negative)
-                    .padding(.horizontal, Theme.isRuled ? 0 : 10)
+                    .padding(.horizontal, 10)
                     .padding(.vertical, 10)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background {
-                        if !Theme.isRuled {
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(Theme.negative.opacity(0.12))
-                        }
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Theme.negative.opacity(0.12))
                     }
             }
 
@@ -284,7 +239,7 @@ struct SplitView: View {
             let settlements = SplitEngine.settleUp(net: result.net, people: people)
             if result.isValid && !settlements.isEmpty {
                 Text("Payments")
-                    .inscription(orFont: .app(.subheadline, .semibold))
+                    .font(.app(.subheadline, .semibold))
                     .foregroundStyle(.secondary)
                 ForEach(settlements) { settlement in
                     Button {
@@ -324,37 +279,17 @@ struct SplitView: View {
         .panelPadding(horizontal: Theme.Space.card, vertical: Theme.Space.card)
         .frame(maxWidth: .infinity, alignment: .leading)
 
-        if Theme.isRuled {
-            content.ruledSection()
-        } else {
-            content.readableSurface(cornerRadius: Theme.cardRadius)
-        }
-    }
-
-    /// The one figure an equal split reduces to, for the ruled review's summary line.
-    /// `nil` when the shares differ, or when the split isn't valid yet.
-    private var equalShare: Double? {
-        let owed = people.compactMap { result.owed[$0.id] }.filter { $0 > 0.005 }
-        guard result.isValid, owed.count > 1, let first = owed.first,
-              owed.allSatisfy({ abs($0 - first) < 0.005 }) else { return nil }
-        return first
+        content.readableSurface(cornerRadius: Theme.cardRadius)
     }
 
     // MARK: Reusable pieces
 
-    /// Every section on this screen goes through here, so branching it once converts
-    /// all five: ruled themes get an inscription heading and bare content bounded by a
-    /// rule, card themes keep the glass panel unchanged.
     private func cardSection<Content: View>(
         title: LocalizedStringKey, icon: String, @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            if Theme.isRuled {
-                Text(title).inscription().foregroundStyle(Theme.textSecondary)
-            } else {
-                Label(title, systemImage: icon)
-                    .font(Theme.Typography.sectionTitle)
-            }
+            Label(title, systemImage: icon)
+                .font(Theme.Typography.sectionTitle)
             content()
         }
         .panelPadding(horizontal: Theme.Space.card, vertical: Theme.Space.card)
@@ -364,34 +299,15 @@ struct SplitView: View {
 
     @ViewBuilder
     private func chip(_ title: String, selected: Bool, color: Color, action: @escaping () -> Void) -> some View {
-        if Theme.isRuled {
-            // An outlined tag, not a filled capsule: the border carries the selection.
-            Button(action: action) {
-                Text(title)
-                    .inscription()
-                    .foregroundStyle(selected ? Theme.accent : .primary)
-                    .padding(.horizontal, 14)
-                    .frame(minHeight: 44)
-                    .overlay {
-                        Rectangle().strokeBorder(
-                            selected ? Theme.accent : Theme.separator,
-                            lineWidth: Theme.ruleWidth(colorSchemeContrast)
-                        )
-                    }
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-        } else {
-            Button(action: action) {
-                Text(title)
-                    .font(Theme.Typography.rowTitle)
-                    .foregroundStyle(selected ? AnyShapeStyle(Theme.onAccent) : AnyShapeStyle(.primary))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 9)
-            }
-            .buttonStyle(.plain)
-            .controlSurface(tint: selected ? Theme.accent : nil, in: .capsule)
+        Button(action: action) {
+            Text(title)
+                .font(Theme.Typography.rowTitle)
+                .foregroundStyle(selected ? AnyShapeStyle(Theme.onAccent) : AnyShapeStyle(.primary))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
         }
+        .buttonStyle(.plain)
+        .controlSurface(tint: selected ? Theme.accent : nil, in: .capsule)
     }
 
     private func personRow(
@@ -401,40 +317,18 @@ struct SplitView: View {
         trailing: String
     ) -> some View {
         HStack(spacing: 12) {
-            if Theme.isRuled {
-                avatar(person, included: included)
-            } else {
-                if let leadingSystemImage {
-                    Image(systemName: leadingSystemImage)
-                        .font(.app(size: 18))
-                        .foregroundStyle(Theme.accent)
-                }
-                avatar(person)
+            if let leadingSystemImage {
+                Image(systemName: leadingSystemImage)
+                    .font(.app(size: 18))
+                    .foregroundStyle(Theme.accent)
             }
+            avatar(person)
             Text(person.name).font(.app(.subheadline, .medium))
             Spacer()
             Text(trailing).font(Theme.Typography.rowTitle).foregroundStyle(.secondary)
-            // The ruled row carries its include state as a mark on the right, where
-            // the card row carries it as a checkbox on the left.
-            if Theme.isRuled, leadingSystemImage != nil {
-                includeMark(included)
-            }
-        }
-        .frame(minHeight: Theme.isRuled ? 46 : 0)
-    }
 
-    private func includeMark(_ included: Bool) -> some View {
-        Image(systemName: "checkmark")
-            .font(.app(.caption2, .bold))
-            .foregroundStyle(included ? Theme.onAccent : .clear)
-            .frame(width: 18, height: 18)
-            .background {
-                if included {
-                    Rectangle().fill(Theme.accent)
-                } else {
-                    Rectangle().strokeBorder(Theme.separator, lineWidth: Theme.ruleWidth(colorSchemeContrast))
-                }
-            }
+        }
+        .frame(minHeight: 0)
     }
 
     private func inputRow(_ person: Person, suffix: String, binding: Binding<String>) -> some View {
@@ -453,8 +347,7 @@ struct SplitView: View {
             .font(Theme.Typography.rowTitle)
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
-            // A filled input keeps its fill on every theme; ruled squares it.
-            .background(.secondary.opacity(0.12), in: .rect(cornerRadius: Theme.isRuled ? 0 : 10))
+            .background(.secondary.opacity(0.12), in: .rect(cornerRadius: 10))
         }
     }
 
@@ -470,22 +363,7 @@ struct SplitView: View {
 
     @ViewBuilder
     private func avatar(_ person: Person, included: Bool = true) -> some View {
-        if Theme.isRuled {
-            // A ruled monogram instead of a tinted disc: the square's border carries
-            // whether this member is in the split.
-            Text(person.initials)
-                .font(.app(size: 13, weight: .semibold))
-                .foregroundStyle(included ? Theme.accent : Theme.textSecondary)
-                .frame(width: 32, height: 32)
-                .overlay {
-                    Rectangle().strokeBorder(
-                        included ? Theme.accent : Theme.separator,
-                        lineWidth: Theme.ruleWidth(colorSchemeContrast)
-                    )
-                }
-        } else {
-            InitialsAvatar(person: person, size: 32)
-        }
+        InitialsAvatar(person: person, size: 32)
     }
 
     private func currency(_ value: Double) -> String {
@@ -662,7 +540,7 @@ struct SettleView: View {
             detailRow(icon: "person.fill", label: "Debtor", person: settlement.from)
             detailRow(icon: "creditcard.fill", label: "Creditor", person: settlement.to)
 
-            Divider()
+           Divider()
 
             HStack(alignment: .top) {
                 amountColumn(title: "Total Owed", value: settlement.amount, color: .primary)

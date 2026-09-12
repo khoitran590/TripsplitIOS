@@ -273,18 +273,12 @@ struct TripCard<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.content) {
-            if Theme.isRuled {
-                // No icon, no card: on ruled themes the heading is an inscription and
-                // the section's own rule does the bounding the card outline used to.
-                Text(title).inscription().foregroundStyle(Theme.textSecondary)
-            } else {
-                Label {
-                    Text(title)
-                        .font(Theme.Typography.sectionTitle)
-                        .fixedSize(horizontal: false, vertical: true)
-                } icon: {
-                    Image(systemName: icon).font(.system(size: 18, weight: .semibold))
-                }
+            Label {
+                Text(title)
+                    .font(Theme.Typography.sectionTitle)
+                    .fixedSize(horizontal: false, vertical: true)
+            } icon: {
+                Image(systemName: icon).font(.system(size: 18, weight: .semibold))
             }
             content
         }

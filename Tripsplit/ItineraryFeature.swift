@@ -482,7 +482,7 @@ struct ItineraryTripCard: View {
             ZStack(alignment: .topTrailing) {
                 TripCoverView(trip: trip)
                     .frame(height: 150)
-                    .clipShape(.rect(cornerRadius: Theme.isRuled ? Theme.RuledRadius.element : 16))
+                    .clipShape(.rect(cornerRadius: 16))
                 Text("\(dayCount) day\(dayCount == 1 ? "" : "s")")
                     .font(.app(.caption2, .bold))
                     .foregroundStyle(.white)
@@ -509,24 +509,18 @@ struct ItineraryTripCard: View {
                         .lineLimit(1)
                 }
             }
-            .padding(.horizontal, Theme.isRuled ? 0 : 4)
+            .padding(.horizontal, 4)
         }
-        // Ruled themes carry no card around a rail entry — the cover and its caption sit
-        // on the page's own ground, the way Explore's guide entries do.
-        .padding(Theme.isRuled ? 0 : 8)
-        .frame(width: Theme.isRuled ? 220 : 260)
+        .padding(8)
+        .frame(width: 260)
         .background {
-            if !Theme.isRuled {
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(Theme.surface.opacity(0.82))
-            }
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(Theme.surface.opacity(0.82))
         }
         .cardOnlyGlass(cornerRadius: 22)
         .overlay {
-            if !Theme.isRuled {
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .strokeBorder(Theme.separator.opacity(0.9), lineWidth: 1)
-            }
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .strokeBorder(Theme.separator.opacity(0.9), lineWidth: 1)
         }
     }
 }
@@ -865,13 +859,8 @@ struct ItineraryDetailView: View {
     @State private var showAllSuggestionDays = false
 
     // Tripmates card state, mirroring TripDetailView's invite flow.
-    @State private var manualMemberName = ""
-    @State private var inviteEmail = ""
-    @State private var inviteMessage: String?
-    @State private var isInviting = false
-    @State private var inviteLink: URL?
-    @State private var isGeneratingLink = false
     /// Whether the invite fields under the tripmates are unfolded.
+    @State private var invitations = TripInvitationState()
     @State private var showInviteFields = false
 
     var body: some View {
@@ -921,7 +910,7 @@ struct ItineraryDetailView: View {
                     } label: {
                         Label("Edit Budget", systemImage: "pencil")
                     }
-                    Divider()
+                   Divider()
                     Button(role: .destructive) {
                         showRemoveConfirm = true
                     } label: {
@@ -2058,137 +2047,10 @@ struct ItineraryDetailView: View {
             }
             .scrollClipDisabled()
 
-            if isCreator, showInviteFields || inviteLink != nil {
-                Divider()
-
-                HStack(spacing: 10) {
-                    TextField("Add friend's name", text: $manualMemberName)
-                        .font(Theme.Typography.secondary)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
-                    Button {
-                        store.addManualMember(name: manualMemberName, to: trip.id)
-                        manualMemberName = ""
-                    } label: {
-                        Image(systemName: "plus")
-                            .font(.app(.subheadline, .bold))
-                            .foregroundStyle(Theme.onAccent)
-                            .frame(width: 40, height: 40)
-                    }
-                    .buttonStyle(.plain)
-                    .actionFill(tint: Theme.accent, in: .circle)
-                    .disabled(manualMemberName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-
-                HStack(spacing: 10) {
-                    TextField("Invite by email", text: $inviteEmail)
-                        .textInputAutocapitalization(.never)
-                        .keyboardType(.emailAddress)
-                        .autocorrectionDisabled()
-                        .font(Theme.Typography.secondary)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
-                    Button { invite(trip) } label: {
-                        Group {
-                            if isInviting {
-                                ProgressView().tint(Theme.onAccent)
-                            } else {
-                                Image(systemName: "paperplane.fill")
-                                    .font(.app(.subheadline, .bold))
-                            }
-                        }
-                        .foregroundStyle(Theme.onAccent)
-                        .frame(width: 40, height: 40)
-                    }
-                    .buttonStyle(.plain)
-                    .actionFill(tint: Theme.accent, in: .circle)
-                    .disabled(inviteEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isInviting)
-                    .opacity(inviteEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isInviting ? 0.55 : 1)
-                    .accessibilityLabel("Invite Member")
-                }
-
-                Button { generateInviteLink(trip) } label: {
-                    HStack(spacing: 8) {
-                        if isGeneratingLink { ProgressView().tint(Theme.onAccent) }
-                        Label("Invitation link", systemImage: "link")
-                    }
-                    .font(Theme.Typography.rowTitle)
-                    .foregroundStyle(Theme.onAccent)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                }
-                .buttonStyle(.plain)
-                .actionFill(tint: Theme.accent)
-                .disabled(isGeneratingLink)
-
-                if let inviteLink {
-                    HStack(spacing: 8) {
-                        Text(verbatim: inviteLink.absoluteString)
-                            .font(Theme.Typography.metadata)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Button {
-                            UIPasteboard.general.string = inviteLink.absoluteString
-                            inviteMessage = String(localized: "Invitation link copied.")
-                        } label: {
-                            Image(systemName: "doc.on.doc")
-                                .font(.app(.caption, .bold))
-                                .frame(width: 38, height: 38)
-                                .contentShape(.rect)
-                        }
-                        .buttonStyle(.plain)
-                        ShareLink(item: inviteLink) {
-                            Image(systemName: "square.and.arrow.up")
-                                .font(.app(.caption, .bold))
-                                .frame(width: 38, height: 38)
-                                .contentShape(.rect)
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
-                }
-
-                if let inviteMessage {
-                    Text(verbatim: inviteMessage)
-                        .font(Theme.Typography.metadata)
-                        .foregroundStyle(inviteMessage.localizedCaseInsensitiveContains("invited") || inviteMessage.localizedCaseInsensitiveContains("copied") || inviteMessage.localizedCaseInsensitiveContains("ready") ? Theme.positive : Theme.negative)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+            if isCreator, showInviteFields || invitations.link != nil {
+               Divider()
+                TripInvitationControls(tripID: trip.id, state: invitations)
             }
-        }
-    }
-
-    private func invite(_ trip: Trip) {
-        inviteMessage = nil
-        isInviting = true
-        let email = inviteEmail
-        Task {
-            do {
-                try await store.inviteMember(email: email, displayName: "", to: trip.id)
-                inviteEmail = ""
-                inviteMessage = String(localized: "Invitation pending. Membership starts only after the recipient accepts.")
-            } catch {
-                inviteMessage = (error as? AuthError)?.message ?? error.localizedDescription
-            }
-            isInviting = false
-        }
-    }
-
-    private func generateInviteLink(_ trip: Trip) {
-        inviteMessage = nil
-        isGeneratingLink = true
-        Task {
-            do {
-                inviteLink = try await store.createInvitationLink(for: trip.id)
-                inviteMessage = String(localized: "Invitation link ready to share.")
-            } catch {
-                inviteMessage = (error as? AuthError)?.message ?? error.localizedDescription
-            }
-            isGeneratingLink = false
         }
     }
 

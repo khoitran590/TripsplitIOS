@@ -18,15 +18,10 @@ struct TripDetailView: View {
     @State private var activeSettlement: Settlement?
     @State private var settlementToConfirm: Settlement?
     @State private var showSettleInfo = false
-    @State private var manualMemberName = ""
-    @State private var inviteEmail = ""
-    @State private var inviteMessage: String?
-    @State private var inviteLink: URL?
-    @State private var isInviting = false
-    @State private var isGeneratingLink = false
     @State private var memberToRemove: Person?
     @State private var showLeaveTripConfirmation = false
-    @State private var membershipMessage: String?
+    @State private var invitations = TripInvitationState()
+    @State private var membershipMessage: ActionFeedback?
     @State private var membershipActionBusy = false
     @State private var pendingInvitations: [TripsRepository.PendingInvitation] = []
     @State private var invitationToRevoke: TripsRepository.PendingInvitation?
@@ -50,7 +45,6 @@ struct TripDetailView: View {
     @State private var expenseParticipantID: Person.ID?
     @State private var expenseReceiptOnly = false
     @State private var expenseDateWindow: ExpenseDateWindow = .all
-    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
     private enum TripDetailTab: String, CaseIterable {
         case overview, feed
@@ -115,22 +109,18 @@ struct TripDetailView: View {
                                 .padding(.top, 20)
                                 .padding(.bottom, 40)
                                 .background {
-                                    // The ruled hero is typographic, not a photo, so
-                                    // there is no cover edge for a card to tuck under.
-                                    if !Theme.isRuled {
-                                        LinearGradient(
-                                            colors: Theme.sheetGradient,
-                                            startPoint: .top, endPoint: .bottom
-                                        )
-                                        .clipShape(.rect(topLeadingRadius: 28, topTrailingRadius: 28))
-                                    }
+                                    LinearGradient(
+                                        colors: Theme.sheetGradient,
+                                        startPoint: .top, endPoint: .bottom
+                                    )
+                                    .clipShape(.rect(topLeadingRadius: 28, topTrailingRadius: 28))
                                 }
                                 // Pull the content sheet up over the photo's bottom so the
                                 // cover fades under a rounded card edge instead of a hard cut.
-                                .padding(.top, Theme.isRuled ? 0 : -28)
+                                .padding(.top, -28)
                             }
                         }
-                        .ignoresSafeArea(edges: Theme.isRuled ? [] : .top)
+                        .ignoresSafeArea(edges: .top)
                         .onChange(of: scrollToSettle) { _, shouldScroll in
                             guard shouldScroll else { return }
                             detailTab = .overview
@@ -241,100 +231,7 @@ struct TripDetailView: View {
 
     @ViewBuilder
     private func heroHeader(_ trip: Trip) -> some View {
-        if Theme.isRuled {
-            ruledHeader(trip)
-        } else {
-            photoHeroHeader(trip)
-        }
-    }
-
-    /// The ruled hero: the cover as a plain full-bleed plate, then the eyebrow, the
-    /// Display title and the screen's one near-black rule. No scrim, no glass chrome —
-    /// the actions are tracked-caps labels under the rule.
-    private func ruledHeader(_ trip: Trip) -> some View {
-        let eyebrow = [trip.location, trip.dateRangeText]
-            .compactMap { ($0?.isEmpty == false) ? $0 : nil }
-            .joined(separator: " · ")
-        return VStack(alignment: .leading, spacing: 12) {
-            TripCoverView(trip: trip)
-                .frame(height: 220)
-                .frame(maxWidth: .infinity)
-                .clipped()
-
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Group {
-                    if eyebrow.isEmpty {
-                        Text("NOW EXPLORING")
-                    } else {
-                        Text(verbatim: eyebrow)
-                    }
-                }
-                .inscription()
-                .foregroundStyle(Theme.textSecondary)
-                Spacer(minLength: 0)
-                Button { dismiss() } label: {
-                    Image(systemName: "xmark")
-                        .font(Theme.Typography.rowTitle)
-                        .foregroundStyle(Theme.textSecondary)
-                        .frame(width: 44, height: 44)
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Close")
-            }
-            .padding(.horizontal, Theme.ruledInset)
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text(trip.name)
-                    .font(.app(size: 36, weight: .medium))
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.7)
-                Text("\(trip.members.count) traveler\(trip.members.count == 1 ? "" : "s")")
-                    .inscription()
-                    .foregroundStyle(Theme.textSecondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, Theme.ruledInset)
-
-            // The one near-black rule on the screen; it closes the title block.
-            Rectangle()
-                .fill(Theme.ruleColor(colorSchemeContrast, .chapter))
-                .frame(height: Theme.ruleWidth(colorSchemeContrast, .chapter))
-
-            ruledHeroActions(trip)
-                .padding(.horizontal, Theme.ruledInset)
-        }
-        .padding(.top, 8)
-    }
-
-    private func ruledHeroActions(_ trip: Trip) -> some View {
-        HStack(spacing: 12) {
-            ruledHeroButton("Add Expense") { requireAuthentication(for: .addExpense) }
-            if store.isCreator(of: trip) {
-                ruledHeroButton("Edit Trip") { requireAuthentication(for: .editTrip) }
-            }
-            ruledHeroButton("Record Payment") { scrollToSettle = true }
-            ShareLink(item: TripExport.text(trip)) {
-                Image(systemName: "square.and.arrow.up")
-                    .font(.app(.caption, .semibold))
-                    .frame(width: 44, height: 46)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Share trip summary")
-        }
-    }
-
-    private func ruledHeroButton(_ title: LocalizedStringKey, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .inscription()
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-                .frame(minHeight: 46)
-                .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
+        photoHeroHeader(trip)
     }
 
     /// The photo hero: location and date as chips, the title, and the members as an
@@ -572,17 +469,11 @@ struct TripDetailView: View {
 
     @ViewBuilder
     private var detailTabPicker: some View {
-        if Theme.isRuled {
-            // Not a segmented control on ruled themes: labels on a ruled row, the
-            // active one underlined. Same tabs, same binding.
-            RuledSegmentedRow(items: TripDetailTab.allCases, selection: $detailTab) { $0.title }
-        } else {
-            (dynamicTypeSize.isAccessibilitySize
-             ? AnyLayout(VStackLayout(spacing: Theme.Space.compact))
-             : AnyLayout(HStackLayout(spacing: Theme.Space.compact))) {
-                detailTabButton(.overview, title: "Overview", icon: "list.bullet.rectangle")
-                detailTabButton(.feed, title: "Feed", icon: "photo.on.rectangle.angled")
-            }
+        (dynamicTypeSize.isAccessibilitySize
+         ? AnyLayout(VStackLayout(spacing: Theme.Space.compact))
+         : AnyLayout(HStackLayout(spacing: Theme.Space.compact))) {
+            detailTabButton(.overview, title: "Overview", icon: "list.bullet.rectangle")
+            detailTabButton(.feed, title: "Feed", icon: "photo.on.rectangle.angled")
         }
     }
 
@@ -705,17 +596,13 @@ struct TripDetailView: View {
         let visible = preview ? Array(personal.prefix(3)) : settlements
         return VStack(alignment: .leading, spacing: 12) {
             HStack {
-                if Theme.isRuled {
-                    Text("Balances").inscription().foregroundStyle(Theme.textSecondary)
-                } else {
-                    Label {
-                        Text(preview ? "Your balances" : "Balances")
-                            .font(Theme.Typography.sectionTitle)
-                            .fixedSize(horizontal: false, vertical: true)
-                    } icon: {
-                        Image(systemName: "arrow.left.arrow.right.circle.fill")
-                            .font(.system(size: 18, weight: .semibold))
-                    }
+                Label {
+                    Text(preview ? "Your balances" : "Balances")
+                        .font(Theme.Typography.sectionTitle)
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: "arrow.left.arrow.right.circle.fill")
+                        .font(.system(size: 18, weight: .semibold))
                 }
                 Spacer()
                 Button {
@@ -762,7 +649,7 @@ struct TripDetailView: View {
 
     @ViewBuilder
     private var rowDivider: some View {
-        if Theme.isRuled { RuledDivider() } else { Divider() }
+        Divider()
     }
 
     private func balanceRow(_ trip: Trip, _ settlement: Settlement) -> some View {
@@ -829,7 +716,7 @@ struct TripDetailView: View {
                 .foregroundStyle(foreground)
                 .padding(.horizontal, 12)
                 .frame(minHeight: 32)
-                .background(tint, in: Theme.isRuled ? AnyShape(Rectangle()) : AnyShape(Capsule()))
+                .background(tint, in: AnyShape(Capsule()))
                 .frame(minHeight: 44)
                 .contentShape(.rect)
         }
@@ -928,103 +815,14 @@ struct TripDetailView: View {
             }
 
             if store.isCreator(of: trip) {
-                Divider()
+               Divider()
                 VStack(spacing: 10) {
-                    HStack(spacing: 10) {
-                        TextField("Add manual member", text: $manualMemberName)
-                            .font(Theme.Typography.secondary)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .fieldFill()
-                        Button { addManualMember(trip) } label: {
-                            Image(systemName: "plus")
-                                .font(.app(.subheadline, .bold))
-                                .foregroundStyle(Theme.onAccent)
-                                .frame(width: 40, height: 40)
-                        }
-                        .buttonStyle(.plain)
-                        .actionFill(tint: Theme.accent, in: .circle)
-                        .disabled(manualMemberName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    }
-
-                    TextField("Invite by email", text: $inviteEmail)
-                        .textInputAutocapitalization(.never)
-                        .keyboardType(.emailAddress)
-                        .autocorrectionDisabled()
-                        .font(Theme.Typography.secondary)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .fieldFill()
-
-                    Button { invite(trip) } label: {
-                        HStack(spacing: 8) {
-                            if isInviting { ProgressView().tint(Theme.onAccent) }
-                            Label("Invite Member", systemImage: "person.badge.plus")
-                        }
-                        .font(Theme.Typography.rowTitle)
-                        .foregroundStyle(Theme.onAccent)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                    }
-                    .buttonStyle(.plain)
-                    .actionFill(tint: Theme.accent)
-                    .disabled(inviteEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isInviting)
-                    .opacity(inviteEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isInviting ? 0.55 : 1)
-
-                    if let inviteMessage {
-                        Text(inviteMessage)
-                            .font(Theme.Typography.metadata)
-                            .foregroundStyle(inviteMessage.localizedCaseInsensitiveContains("invited") || inviteMessage.localizedCaseInsensitiveContains("copied") ? Theme.positive : Theme.negative)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-
-                    Divider()
-
-                    Button { generateInviteLink(trip) } label: {
-                        HStack(spacing: 8) {
-                            if isGeneratingLink { ProgressView().tint(Theme.onAccent) }
-                            Label("Generate Invitation Link", systemImage: "link")
-                        }
-                        .font(Theme.Typography.rowTitle)
-                        .foregroundStyle(Theme.onAccent)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                    }
-                    .buttonStyle(.plain)
-                    .actionFill(tint: Theme.accent)
-                    .disabled(isGeneratingLink)
-
-                    if let inviteLink {
-                        HStack(spacing: 8) {
-                            Text(inviteLink.absoluteString)
-                                .font(Theme.Typography.metadata)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            Button {
-                                UIPasteboard.general.string = inviteLink.absoluteString
-                                inviteMessage = String(localized: "Invitation link copied.")
-                            } label: {
-                                Image(systemName: "doc.on.doc")
-                                    .font(.app(.caption, .bold))
-                                    .frame(width: 38, height: 38)
-                                    .contentShape(.rect)
-                            }
-                            .buttonStyle(.plain)
-                            ShareLink(item: inviteLink) {
-                                Image(systemName: "square.and.arrow.up")
-                                    .font(.app(.caption, .bold))
-                                    .frame(width: 38, height: 38)
-                                    .contentShape(.rect)
-                            }
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .fieldFill()
+                    TripInvitationControls(tripID: trip.id, state: invitations) {
+                        await loadPendingInvitations()
                     }
 
                     if !pendingInvitations.isEmpty {
-                        Divider()
+                       Divider()
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Pending Invitations")
                                 .font(Theme.Typography.rowTitle)
@@ -1051,7 +849,7 @@ struct TripDetailView: View {
                     }
                 }
             } else {
-                Divider()
+               Divider()
                 Button(role: .destructive) { showLeaveTripConfirmation = true } label: {
                     Label("Leave Trip", systemImage: "rectangle.portrait.and.arrow.right")
                         .font(Theme.Typography.rowTitle)
@@ -1063,14 +861,7 @@ struct TripDetailView: View {
             }
 
             if let membershipMessage {
-                Text(verbatim: membershipMessage)
-                    .font(Theme.Typography.metadata)
-                    .foregroundStyle(
-                        membershipMessage.localizedCaseInsensitiveContains("removed")
-                        || membershipMessage.localizedCaseInsensitiveContains("revoked")
-                            ? Theme.positive : Theme.negative
-                    )
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                ActionFeedbackView(feedback: membershipMessage)
             }
         }
         .task(id: trip.id) {
@@ -1085,9 +876,9 @@ struct TripDetailView: View {
         Task {
             do {
                 try await store.removeMemberAccess(member.id, from: tripID)
-                membershipMessage = "Access removed. Historical balances are unchanged."
+                membershipMessage = .success(String(localized: "Access removed. Historical balances are unchanged."))
             } catch {
-                membershipMessage = (error as? AuthError)?.message ?? "Member access could not be removed."
+                membershipMessage = .failure((error as? AuthError)?.message ?? String(localized: "Member access could not be removed."))
             }
             membershipActionBusy = false
         }
@@ -1102,7 +893,7 @@ struct TripDetailView: View {
                 try await store.leaveTrip(tripID)
                 dismiss()
             } catch {
-                membershipMessage = (error as? AuthError)?.message ?? "The trip could not be left."
+                membershipMessage = .failure((error as? AuthError)?.message ?? String(localized: "The trip could not be left."))
                 membershipActionBusy = false
             }
         }
@@ -1122,47 +913,10 @@ struct TripDetailView: View {
             do {
                 try await store.revokeInvitation(invitation.id)
                 pendingInvitations.removeAll { $0.id == invitation.id }
-                membershipMessage = "Invitation revoked."
+                membershipMessage = .success(String(localized: "Invitation revoked."))
             } catch {
-                membershipMessage = (error as? AuthError)?.message ?? "The invitation could not be revoked."
+                membershipMessage = .failure((error as? AuthError)?.message ?? String(localized: "The invitation could not be revoked."))
             }
-        }
-    }
-
-    private func addManualMember(_ trip: Trip) {
-        store.addManualMember(name: manualMemberName, to: trip.id)
-        manualMemberName = ""
-    }
-
-    private func invite(_ trip: Trip) {
-        inviteMessage = nil
-        isInviting = true
-        let email = inviteEmail
-        Task {
-            do {
-                try await store.inviteMember(email: email, displayName: "", to: trip.id)
-                inviteEmail = ""
-                inviteMessage = String(localized: "Invitation pending. Membership starts only after the recipient accepts.")
-                await loadPendingInvitations()
-            } catch {
-                inviteMessage = (error as? AuthError)?.message ?? error.localizedDescription
-            }
-            isInviting = false
-        }
-    }
-
-    private func generateInviteLink(_ trip: Trip) {
-        inviteMessage = nil
-        isGeneratingLink = true
-        Task {
-            do {
-                inviteLink = try await store.createInvitationLink(for: trip.id)
-                inviteMessage = String(localized: "Invitation link ready to share.")
-                await loadPendingInvitations()
-            } catch {
-                inviteMessage = (error as? AuthError)?.message ?? error.localizedDescription
-            }
-            isGeneratingLink = false
         }
     }
 
@@ -1250,7 +1004,7 @@ struct TripDetailView: View {
                     // Dynamic Type, and a fixed radius would stop tracking its height.
                     .background(
                         Theme.fieldBackground,
-                        in: Theme.isRuled ? AnyShape(Rectangle()) : AnyShape(Capsule())
+                        in: AnyShape(Capsule())
                     )
 
                     Menu {
@@ -1286,9 +1040,9 @@ struct TripDetailView: View {
                     .font(Theme.Typography.rowTitle).foregroundStyle(.secondary)
                 // Eager (not Lazy) on purpose: a LazyVStack here re-measured rows as
                 // they scrolled back into view, hitching the scroll-up out of this card.
-                VStack(spacing: Theme.isRuled ? 0 : 8) {
+                VStack(spacing: 8) {
                     ForEach(filtered) { expense in
-                        if Theme.isRuled { RuledDivider() }
+
                         let link = NavigationLink {
                             ExpenseDetailView(tripID: tripID, expense: expense)
                         } label: {
@@ -1316,7 +1070,7 @@ struct TripDetailView: View {
             if !settled.isEmpty {
                 SectionDivider()
                 Text("Settled payments")
-                    .inscription(orFont: .app(.subheadline, .semibold))
+                    .font(.app(.subheadline, .semibold))
                     .foregroundStyle(.secondary)
                 ForEach(settled) { settlement in
                     Button {
@@ -1450,20 +1204,11 @@ struct TripDetailView: View {
                 ? AnyLayout(VStackLayout(alignment: .leading, spacing: Theme.Space.compact))
                 : AnyLayout(HStackLayout(alignment: .top, spacing: Theme.Space.content))) {
             if let payer {
-                if Theme.isRuled {
-                    // A monogram, not a disc: the ruled style has no filled shapes
-                    // besides the primary action.
-                    Text(payer.initials)
-                        .font(.app(size: 13, weight: .semibold))
-                        .foregroundStyle(payer.id == me ? Theme.accent : Theme.accentSecondary)
-                        .frame(width: 24, height: 24)
-                } else {
-                    AvatarView(
-                        person: payer,
-                        imageData: payer.id == me ? store.profileImageData : nil,
-                        size: 34
-                    )
-                }
+                AvatarView(
+                    person: payer,
+                    imageData: payer.id == me ? store.profileImageData : nil,
+                    size: 34
+                )
             }
             VStack(alignment: .leading, spacing: 3) {
                 Text(expense.title)
@@ -1515,7 +1260,7 @@ struct TripDetailView: View {
         .accessibilityElement(children: .combine)
         .accessibilityValue(Text("Total \(money(expense.amount, trip.currencyCode)), \(trip.currencyCode). Paid by \(payer.map { $0.id == me ? String(localized: "you") : $0.name } ?? "—")"))
         .padding(.vertical, 12)
-        .padding(.horizontal, Theme.isRuled ? 0 : 12)
+        .padding(.horizontal, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(.rect)
         .background(Theme.surface)

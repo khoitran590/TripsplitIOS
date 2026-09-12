@@ -8,7 +8,6 @@ struct HomeScreen: View {
     @Environment(TripStore.self) private var store
     @Environment(AuthStore.self) private var auth
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @State private var showAddTrip = false
     @State private var showSignInAlert = false
     @State private var resumeAddTripAfterSignIn = false
@@ -44,8 +43,6 @@ struct HomeScreen: View {
     private var homeContent: some View {
         NavigationStack {
             ScrollView {
-                // Ruled themes get their rhythm from each section's own rule and padding,
-                // so the stack itself stops adding gaps between them.
                 VStack(alignment: .leading, spacing: Theme.Space.section) {
                     syncBanner
                         .transition(.move(edge: .top).combined(with: .opacity))
@@ -166,22 +163,21 @@ struct HomeScreen: View {
             HStack {
                 Text("Trips")
                     .homeSectionHeading()
-                    .padding(.leading, Theme.isRuled ? 0 : 4)
+                    .padding(.leading, 4)
                 Spacer()
-                RuledInlineButton(title: "Add Trip", tint: Theme.accent, action: requestAddTrip) {
-                    Button {
-                        requestAddTrip()
-                    } label: {
-                        Label("Add Trip", systemImage: "plus")
-                            .font(Theme.Typography.rowTitle)
-                            .foregroundStyle(Theme.onAccent)
-                            .padding(.horizontal, 14)
-                            .frame(minHeight: 44)
-                            .contentShape(.capsule)
-                    }
-                    .buttonStyle(.plain)
-                    .actionFill(tint: Theme.accent)
+                Button {
+                    requestAddTrip()
+                } label: {
+                    Label("Add Trip", systemImage: "plus")
+                        .font(Theme.Typography.rowTitle)
+                        .foregroundStyle(Theme.onAccent)
+                        .padding(.horizontal, 14)
+                        .frame(minHeight: 44)
+                        .contentShape(.capsule)
                 }
+                .buttonStyle(.plain)
+                .actionFill(tint: Theme.accent)
+
             }
 
             if store.myTrips.isEmpty {
@@ -208,7 +204,7 @@ struct HomeScreen: View {
                             }
                             .buttonStyle(.plain)
                             .accessibilityIdentifier("trip-card-\(trip.id.uuidString)")
-                            .contentShape(.contextMenuPreview, .rect(cornerRadius: Theme.isRuled ? 0 : 24))
+                            .contentShape(.contextMenuPreview, .rect(cornerRadius: 24))
                             .contextMenu {
                                 Button {
                                     withAnimation(.snappy) {
@@ -235,9 +231,7 @@ struct HomeScreen: View {
             }
 
             if !store.archivedTrips.isEmpty {
-                // Ruled themes bound this row with a rule of its own; the glass rect it
-                // sits in on card themes is what separates it there.
-                if Theme.isRuled { RuledDivider() }
+
                 Button { showArchivedTrips = true } label: {
                     HStack(spacing: 10) {
                         Image(systemName: "archivebox")
@@ -254,15 +248,15 @@ struct HomeScreen: View {
                             .font(.app(.caption, .bold))
                             .foregroundStyle(.secondary)
                     }
-                    .padding(.horizontal, Theme.isRuled ? 0 : 14)
+                    .padding(.horizontal, 14)
                     .frame(minHeight: 48)
-                    .contentShape(.rect(cornerRadius: Theme.isRuled ? 0 : 16))
+                    .contentShape(.rect(cornerRadius: 16))
                 }
                 .buttonStyle(.plain)
                 .cardOnlyGlass(cornerRadius: 16)
             }
         }
-        .ruledSection()
+
     }
 
     private var emptyTripsCard: some View {
@@ -280,20 +274,19 @@ struct HomeScreen: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(highContrastSurface, in: .rect(cornerRadius: 12))
-            RuledInlineButton(title: "Browse trip ideas", tint: Theme.accent, action: onBrowseIdeas) {
-                Button {
-                    onBrowseIdeas()
-                } label: {
-                    Label("Browse trip ideas", systemImage: "sparkles")
-                        .font(Theme.Typography.rowTitle)
-                        .foregroundStyle(Theme.onAccent)
-                        .padding(.horizontal, 18)
-                        .frame(minHeight: 44)
-                        .contentShape(.capsule)
-                }
-                .buttonStyle(.plain)
-                .actionFill(tint: Theme.accent)
+            Button {
+                onBrowseIdeas()
+            } label: {
+                Label("Browse trip ideas", systemImage: "sparkles")
+                    .font(Theme.Typography.rowTitle)
+                    .foregroundStyle(Theme.onAccent)
+                    .padding(.horizontal, 18)
+                    .frame(minHeight: 44)
+                    .contentShape(.capsule)
             }
+            .buttonStyle(.plain)
+            .actionFill(tint: Theme.accent)
+
             .padding(.top, 4)
 
             Button {
@@ -310,7 +303,7 @@ struct HomeScreen: View {
             .buttonStyle(.plain)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, Theme.isRuled ? 14 : 28)
+        .padding(.vertical, 28)
         .homePanel()
     }
 
@@ -421,7 +414,7 @@ struct HomeScreen: View {
             HStack {
                 Text("Recent")
                     .homeSectionHeading()
-                    .padding(.leading, Theme.isRuled ? 0 : 4)
+                    .padding(.leading, 4)
                 Spacer()
                 if isSelectingTransactions {
                     Button(selectedTransactionIDs.count == visibleDeletableTransactions.count ? "Deselect All" : "Select All") {
@@ -479,12 +472,12 @@ struct HomeScreen: View {
                 // Keep the instruction above iOS's bottom scroll-edge fade and the
                 // floating dock. At the old height the system faded the last line,
                 // reducing its rendered contrast even over an opaque card.
-                .padding(.vertical, Theme.isRuled ? 14 : 12)
+                .padding(.vertical, 12)
                 .homePanel()
             } else {
                 GlassEffectContainer(spacing: 12) {
                     // Lazy so expanding a large trip only builds the rows scrolled into view.
-                    LazyVStack(spacing: Theme.isRuled ? 0 : 12) {
+                    LazyVStack(spacing: 12) {
                         ForEach(groups) { group in
                             tripGroupCard(group)
                         }
@@ -510,7 +503,7 @@ struct HomeScreen: View {
             }
         }
         // Bounds the chapter itself; the trip groups inside carry hairlines.
-        .ruledSection()
+
         .confirmationDialog(
             "Delete transaction\(transactionsPendingDelete.map { $0.count == 1 ? "" : "s" } ?? "")?",
             isPresented: Binding(
@@ -556,20 +549,12 @@ struct HomeScreen: View {
         }
         // Trip groups are peers within the transactions chapter, not chapters of their
         // own — a stack of section rules would flatten the hierarchy again.
-        .homeGlassPanel(weight: .hairline)
+        .homeGlassPanel()
     }
 
-    /// Separator between an expanded trip's rows. The stock `Divider` is the system
-    /// separator, which is the cool grey the ruled style exists to avoid.
     @ViewBuilder
     private var rowDivider: some View {
-        if Theme.isRuled {
-            Rectangle()
-                .fill(Theme.ruleColor(colorSchemeContrast, .hairline))
-                .frame(height: Theme.ruleWidth(colorSchemeContrast, .hairline))
-        } else {
-            Divider().padding(.leading, 14)
-        }
+        Divider().padding(.leading, 14)
     }
 
     private func groupHeaderButton(_ group: TripTransactionGroup, isExpanded: Bool) -> some View {
@@ -602,7 +587,7 @@ struct HomeScreen: View {
                         .foregroundStyle(.secondary)
                         .rotationEffect(.degrees(isExpanded ? 180 : 0))
                 }
-                .padding(.horizontal, Theme.isRuled ? 0 : 14)
+                .padding(.horizontal, 14)
                 .padding(.vertical, 14)
                 .contentShape(.rect)
             }
@@ -671,16 +656,14 @@ struct SyncFailureBanner: View {
             Button { store.retrySync() } label: {
                 Text("Retry").font(.app(.caption, .bold)).foregroundStyle(Color(hex: 0xDC2626))
                     .padding(.horizontal, 12).padding(.vertical, 6)
-                    // A failure banner keeps its fill on every theme — it has to stay
-                    // loud. Ruled themes only square its corners.
-                    .background(.white, in: Theme.isRuled ? AnyShape(Rectangle()) : AnyShape(Capsule()))
+                    .background(.white, in: AnyShape(Capsule()))
                     .frame(minWidth: 44, minHeight: 44)
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
-        .background(Color(hex: 0xDC2626), in: .rect(cornerRadius: Theme.isRuled ? 0 : 14))
+        .background(Color(hex: 0xDC2626), in: .rect(cornerRadius: 14))
     }
 }
 
@@ -698,21 +681,14 @@ struct BalanceCard: View {
     @State private var selectedTrip: Trip?
     @State private var editTrip: Trip?
     @State private var isRefreshingRates = false
-    /// The ruled style prints one large, light numeral instead of a bold largeTitle.
-    /// Scaled rather than fixed so the screen's most important figure still tracks
-    /// Dynamic Type.
-    @ScaledMetric(relativeTo: .largeTitle) private var ruledHeroSize: CGFloat = 56
 
-    private enum PickerPurpose {
-        case budget, settle
-    }
+    private enum PickerPurpose { case budget, settle }
 
     var body: some View {
         Group {
             if !store.myTrips.isEmpty {
                 budgetFace
-                    // No card, no shadow: the ruled style is flat by construction.
-                    .shadow(color: .black.opacity(Theme.isRuled ? 0 : 0.15), radius: 8, y: 4)
+                    .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
             }
         }
         .sheet(isPresented: $showConverter) {
@@ -804,15 +780,12 @@ struct BalanceCard: View {
                                 .font(.app(.caption2, .bold))
                         }
                         .font(.app(.caption, .semibold))
-                        // No pill on ruled themes: the code and its chevron are the control.
-                        .padding(.horizontal, Theme.isRuled ? 0 : 11)
+                        .padding(.horizontal, 11)
                         .frame(minHeight: 36)
                         .background {
-                            if !Theme.isRuled {
-                                Capsule().fill(Color.primary.opacity(0.07))
-                            }
+                            Capsule().fill(Color.primary.opacity(0.07))
                         }
-                        .contentShape(Theme.isRuled ? AnyShape(Rectangle()) : AnyShape(Capsule()))
+                        .contentShape(AnyShape(Capsule()))
                     }
                     .accessibilityLabel("Home currency")
 
@@ -853,20 +826,11 @@ struct BalanceCard: View {
                     heroLayout {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(verbatim: heroValue)
-                                .font(Theme.isRuled
-                                    ? .app(size: ruledHeroSize, weight: .medium)
-                                    : .app(.largeTitle, .bold))
+                                .font(.app(.largeTitle, .bold))
                                 .foregroundStyle(isOver ? statusColor : .primary)
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.72)
-                            if Theme.isRuled {
-                                // The one saturated element on a ruled screen — a plain
-                                // fill, so it reads as ink on stone rather than as a glow.
-                                Rectangle()
-                                    .fill(Theme.accent)
-                                    .frame(width: 44, height: 2)
-                                    .padding(.bottom, 2)
-                            }
+
                             Group {
                                 if hasConvertedBudget {
                                     Text("\(Text(LocalizedStringKey(heroLabel))) · \(summaryMoney(totals.budget, displayCurrency, compact: true)) budget")
@@ -890,7 +854,7 @@ struct BalanceCard: View {
                                 .font(.app(.body, .bold))
                                 .foregroundStyle(statusColor)
                                 .frame(width: 44, height: 44)
-                                .background(statusColor.opacity(Theme.isRuled ? 0 : 0.12), in: .circle)
+                                .background(statusColor.opacity(0.12), in: .circle)
                                 .accessibilityLabel(LocalizedStringKey(statusText))
                         }
                     }
@@ -955,7 +919,7 @@ struct BalanceCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         // Opens the screen: chapter air, no rule. Under the large navigation title a
         // rule here reads as an underline on the title, not as a boundary.
-        .homePanel(cornerRadius: 24, elevated: true, weight: .opening)
+        .homePanel(cornerRadius: 24, elevated: true)
     }
 
     /// The hero figure and its status label side by side, stacking at accessibility
@@ -994,7 +958,7 @@ struct BalanceCard: View {
             }
             .frame(height: 10)
             .background(Color.primary.opacity(0.08))
-            .clipShape(.rect(cornerRadius: Theme.isRuled ? 0 : 5))
+            .clipShape(.rect(cornerRadius: 5))
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 14) {
@@ -1005,7 +969,7 @@ struct BalanceCard: View {
                                 startPoint: .topLeading, endPoint: .bottomTrailing
                             )
                             .frame(width: 22, height: 22)
-                            .clipShape(.rect(cornerRadius: Theme.isRuled ? 0 : 7))
+                            .clipShape(.rect(cornerRadius: 7))
                             Text(verbatim: summaryMoney(trip.convertedSpent ?? 0, displayCurrency, compact: true))
                                 .font(.app(.caption, .semibold))
                                 .foregroundStyle(.secondary)
@@ -1030,12 +994,11 @@ struct BalanceCard: View {
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
-            RuledInlineButton(title: "Set a budget", tint: Theme.accent, action: startBudgetFlow) {
-                Button("Set a budget", action: startBudgetFlow)
-                    .font(.app(.caption, .semibold))
-                    .buttonStyle(.borderedProminent)
-                    .tint(Theme.accent)
-            }
+            Button("Set a budget", action: startBudgetFlow)
+                .font(.app(.caption, .semibold))
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.accent)
+
         }
         .calloutBlock(tint: Theme.accent.opacity(0.08), horizontal: 12, vertical: 12)
     }
@@ -1056,12 +1019,11 @@ struct BalanceCard: View {
                     .foregroundStyle(Theme.positive)
             }
             Spacer(minLength: 6)
-            RuledInlineButton(title: "Record payment", tint: Theme.accent, action: startSettleFlow) {
-                Button("Record payment", action: startSettleFlow)
-                    .font(.app(.caption, .semibold))
-                    .buttonStyle(.bordered)
-                    .tint(Theme.accent)
-            }
+            Button("Record payment", action: startSettleFlow)
+                .font(.app(.caption, .semibold))
+                .buttonStyle(.bordered)
+                .tint(Theme.accent)
+
         }
         .font(.app(.caption, .semibold))
         .lineLimit(1)
@@ -1277,7 +1239,7 @@ private struct BudgetByTripSheet: View {
         }
         .panelPadding(horizontal: 14, vertical: 14)
         .homePanel(cornerRadius: 16)
-        .contentShape(.rect(cornerRadius: Theme.isRuled ? 0 : 16))
+        .contentShape(.rect(cornerRadius: 16))
     }
 }
 
@@ -1291,7 +1253,6 @@ private struct BudgetByTripSheet: View {
 struct TripRow: View {
     let trip: Trip
     let currentUserID: Person.ID
-    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
     // Budget health (per the signed-in user's own budget on this trip). Computed once at
     // init: `spent(for:)` walks every expense, and the card reads these values from half a
@@ -1329,34 +1290,17 @@ struct TripRow: View {
 
     var body: some View {
         Group {
-            if Theme.isRuled {
-                VStack(alignment: .leading, spacing: 0) {
-                    cover
-                    VStack(alignment: .leading, spacing: 12) {
-                        ruledEyebrow
-                        titleRow
-                        dateRow
-                        progress
-                    }
-                    .padding(16)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    // The ruled style has no material anywhere, which also makes it
-                    // Reduce Transparency-correct without a second code path.
-                    .background(Theme.surface)
-                }
-            } else {
-                photoCard
-            }
+            photoCard
         }
-        .clipShape(.rect(cornerRadius: Theme.isRuled ? 0 : 24))
+        .clipShape(.rect(cornerRadius: 24))
         .overlay(
-            RoundedRectangle(cornerRadius: Theme.isRuled ? 0 : 24)
+            RoundedRectangle(cornerRadius: 24)
                 .strokeBorder(
-                    Theme.isRuled ? Theme.ruleColor(colorSchemeContrast) : .white.opacity(0.12),
-                    lineWidth: Theme.isRuled ? Theme.ruleWidth(colorSchemeContrast) : 0.5
+                    .white.opacity(0.12),
+                    lineWidth: 0.5
                 )
         )
-        .shadow(color: .black.opacity(Theme.isRuled ? 0 : 0.18), radius: 10, y: 5)
+        .shadow(color: .black.opacity(0.18), radius: 10, y: 5)
     }
 
     // MARK: Photo card (card themes)
@@ -1460,32 +1404,6 @@ struct TripRow: View {
         .accessibilityLabel("\(trip.members.count) members")
     }
 
-    // MARK: Cover (ruled themes)
-
-    private var cover: some View {
-        TripCoverView(trip: trip)
-            // A framed band rather than the card's hero photo.
-            .frame(height: 112)
-            .frame(maxWidth: .infinity)
-            .clipped()
-            .overlay(alignment: .topTrailing) {
-                if isOver || isNear { healthBadge.padding(12) }
-            }
-    }
-
-    /// The location as an eyebrow above the title, for ruled themes — where the cover
-    /// carries no caption of its own. Omitted when there is no location, since the
-    /// overlay's fallback (the trip name) would only repeat the title beneath it.
-    @ViewBuilder
-    private var ruledEyebrow: some View {
-        if Theme.isRuled, let location = trip.location, !location.isEmpty {
-            Text(verbatim: location)
-                .inscription()
-                .foregroundStyle(Theme.textSecondary)
-                .lineLimit(1)
-        }
-    }
-
     private var healthBadge: some View {
         HStack(spacing: 4) {
             Image(systemName: isOver ? "exclamationmark.triangle.fill" : "gauge.high")
@@ -1495,53 +1413,11 @@ struct TripRow: View {
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 9).padding(.vertical, 5)
-        // The badge sits on a photo, so it keeps its fill on every theme for
-        // legibility — ruled themes only square it.
-        .background(accent, in: Theme.isRuled ? AnyShape(Rectangle()) : AnyShape(Capsule()))
+        .background(accent, in: AnyShape(Capsule()))
     }
 
     // MARK: Body content
 
-    private var titleRow: some View {
-        HStack(spacing: 8) {
-            Text(trip.name).font(.app(.headline, .bold)).lineLimit(1)
-            Spacer(minLength: 6)
-            HStack(spacing: 4) {
-                Image(systemName: "person.2.fill").font(.app(.caption2))
-                Text("\(trip.members.count)").font(.app(.caption, .semibold))
-            }
-            .foregroundStyle(.secondary)
-        }
-    }
-
-    private var dateRow: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "calendar").font(Theme.Typography.metadata)
-            Text(trip.dateRangeText ?? "\(trip.expenses.count) expense\(trip.expenses.count == 1 ? "" : "s")")
-                .font(Theme.Typography.metadata)
-        }
-        .foregroundStyle(.secondary)
-    }
-
-    private var progress: some View {
-        VStack(spacing: 6) {
-            HStack {
-                Text(hasBudget ? (isOver ? "Over by" : "Remaining") : "No budget set")
-                    .font(Theme.Typography.metadata).foregroundStyle(.secondary)
-                Spacer()
-                if hasBudget {
-                    Text(money(abs(remaining), trip.currencyCode))
-                        .font(.app(.caption, .semibold))
-                        .foregroundStyle(isOver || isNear ? accent : .primary)
-                }
-            }
-            MeterBar(
-                fraction: percent / 100,
-                colors: progressColors,
-                track: .primary.opacity(0.1)
-            )
-        }
-    }
 }
 
 // MARK: - Currency Converter
@@ -1752,51 +1628,38 @@ struct QuickActionButton: View {
 
     @ViewBuilder
     var body: some View {
-        if Theme.isRuled {
-            // No disc, no capsule: a tracked-caps row, sized to the mockup's 46pt —
-            // which also clears the 44pt minimum target.
-            Button(action: action) {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.app(.body, .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 44, height: 44)
+                    .background(
+                        LinearGradient(colors: tint, startPoint: .topLeading, endPoint: .bottomTrailing),
+                        in: .circle
+                    )
+                    // The title labels the whole button.
+                    .accessibilityHidden(true)
                 Text(title)
-                    .inscription()
-                    .frame(maxWidth: .infinity)
-                    .frame(minHeight: 46)
-                    .contentShape(.rect)
+                    .font(.app(.body, .bold))
+                    .foregroundStyle(highContrastInk)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                Spacer(minLength: 0)
             }
-            .buttonStyle(.plain)
-        } else {
-            Button(action: action) {
-                HStack(spacing: 12) {
-                    Image(systemName: icon)
-                        .font(.app(.body, .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 44, height: 44)
-                        .background(
-                            LinearGradient(colors: tint, startPoint: .topLeading, endPoint: .bottomTrailing),
-                            in: .circle
-                        )
-                        // The title labels the whole button.
-                        .accessibilityHidden(true)
-                    Text(title)
-                        .font(.app(.body, .bold))
-                        .foregroundStyle(highContrastInk)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                    Spacer(minLength: 0)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                // The label has transparent gaps (spacer, padding); without an explicit
-                // shape only the icon and text hit-test, leaving dead zones mid-button.
-                .contentShape(.rect(cornerRadius: 20))
-            }
-            .buttonStyle(.plain)
-            .background(highContrastSurface, in: .rect(cornerRadius: 20))
-            .overlay {
-                RoundedRectangle(cornerRadius: 20).strokeBorder(Theme.separator, lineWidth: 0.5)
-            }
-            .shadow(color: Theme.elevatedShadow, radius: 8, y: 3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            // The label has transparent gaps (spacer, padding); without an explicit
+            // shape only the icon and text hit-test, leaving dead zones mid-button.
+            .contentShape(.rect(cornerRadius: 20))
         }
+        .buttonStyle(.plain)
+        .background(highContrastSurface, in: .rect(cornerRadius: 20))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20).strokeBorder(Theme.separator, lineWidth: 0.5)
+        }
+        .shadow(color: Theme.elevatedShadow, radius: 8, y: 3)
     }
 }
 
