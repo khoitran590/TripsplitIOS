@@ -23,6 +23,9 @@ struct FloatingDock: View {
 
     private var highContrastInk: Color { colorScheme == .dark ? .white : .black }
 
+    /// Wabi-Sabi lifts the dock out of the ground and presses the active tab into it.
+    private var softElevation: Bool { ThemeManager.shared.selection.usesSoftElevation }
+
     var body: some View {
         Group {
             if dynamicTypeSize.isAccessibilitySize {
@@ -37,8 +40,15 @@ struct FloatingDock: View {
         }
         .padding(6)
         .background {
-            Capsule()
-                .fill(Theme.surface.opacity(backgroundVisibility))
+            if softElevation {
+                // Composited first so the transparency slider fades the shadows with the fill.
+                SoftSurface(shape: Capsule(), depth: 10)
+                    .compositingGroup()
+                    .opacity(backgroundVisibility)
+            } else {
+                Capsule()
+                    .fill(Theme.surface.opacity(backgroundVisibility))
+            }
         }
         .background {
             Capsule()
@@ -47,9 +57,12 @@ struct FloatingDock: View {
         }
         .overlay {
             Capsule()
-                .strokeBorder(Theme.separator.opacity(0.95 * backgroundVisibility), lineWidth: 1)
+                .strokeBorder(
+                    Theme.separator.opacity(softElevation && colorSchemeContrast != .increased ? 0 : 0.95 * backgroundVisibility),
+                    lineWidth: 1
+                )
         }
-        .shadow(color: .black.opacity(0.14 * backgroundVisibility), radius: 14, y: 6)
+        .shadow(color: .black.opacity(softElevation ? 0 : 0.14 * backgroundVisibility), radius: 14, y: 6)
         .frame(maxWidth: .infinity)
         .animation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(response: 0.38, dampingFraction: 0.82), value: selectedTab)
         .animation(.snappy, value: navbarTransparency)
@@ -84,6 +97,9 @@ struct FloatingDock: View {
                     VStack(spacing: 2) {
                         Image(systemName: tab.systemImage)
                             .font(.app(.body, .semibold))
+                            // The pressed well isn't accent-filled, so a sage glyph keeps its contrast.
+                            .foregroundStyle(softElevation && isActive && colorSchemeContrast != .increased
+                                             ? Theme.accent : highContrastInk)
                         Text(LocalizedStringKey(tab.rawValue))
                             .font(.app(.caption2, isActive ? .bold : .medium))
                             .multilineTextAlignment(.center)
@@ -110,7 +126,12 @@ struct FloatingDock: View {
                             .fill(Theme.surface.opacity(backgroundVisibility))
                             .overlay {
                                 if isActive {
-                                    Capsule().fill(Theme.accent.opacity(0.13))
+                                    if softElevation {
+                                        SoftSurface(shape: Capsule(), fill: Theme.background, depth: 3, pressed: true)
+                                            .opacity(backgroundVisibility)
+                                    } else {
+                                        Capsule().fill(Theme.accent.opacity(0.13))
+                                    }
                                 }
                             }
                     }

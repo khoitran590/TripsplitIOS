@@ -31,8 +31,15 @@ struct AppearanceSettingsView: View {
                                 .fill(LinearGradient(colors: [theme.accent, theme.accentSecondary],
                                                      startPoint: .topLeading, endPoint: .bottomTrailing))
                                 .frame(width: 36, height: 36)
-                            Text(verbatim: theme.label)
-                                .foregroundStyle(.primary)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(verbatim: theme.label)
+                                    .foregroundStyle(.primary)
+                                if let detail = theme.detail {
+                                    Text(detail)
+                                        .font(.app(.caption))
+                                        .foregroundStyle(Theme.textSecondary)
+                                }
+                            }
                             Spacer()
                             if themeManager.selection == theme {
                                 Image(systemName: "checkmark.circle.fill")

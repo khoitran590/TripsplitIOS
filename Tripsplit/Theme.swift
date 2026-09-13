@@ -259,7 +259,7 @@ extension Font {
 /// home-screen backdrop for *both* light and dark appearances, so switching the
 /// system scheme never changes the chosen theme — only how bright it renders.
 enum AppTheme: String, CaseIterable, Identifiable {
-    case classic, matcha, butter, chocolate, gothic, y2k, paper, pop, colonnade, clay
+    case classic, matcha, butter, chocolate, gothic, y2k, paper, pop, colonnade, clay, wabiSabi
 
     var id: Self { self }
 
@@ -276,8 +276,21 @@ enum AppTheme: String, CaseIterable, Identifiable {
         case .pop: "Pop"
         case .colonnade: "Colonnade"
         case .clay: "Clay"
+        case .wabiSabi: "Wabi-Sabi"
         }
     }
+
+    /// Optional one-line description shown under the name in the theme picker.
+    var detail: LocalizedStringKey? {
+        switch self {
+        case .wabiSabi: "Soft clay, sage and faded indigo · calm, tactile"
+        default: nil
+        }
+    }
+
+    /// Wabi-Sabi's neumorphic material: surfaces are lifted out of or pressed into
+    /// the ground with paired shadows instead of being bounded by fills and borders.
+    var usesSoftElevation: Bool { self == .wabiSabi }
 
     /// Primary accent used for buttons, badges, and the healthy budget ring.
     /// Deliberately desaturated so tinted glass materials stay legible over it.
@@ -306,6 +319,10 @@ enum AppTheme: String, CaseIterable, Identifiable {
         // 3:1 bar for large text on white, not the 4.5:1 this app holds accents
         // to — small labels and icons sit on the accent here too.
         case .clay: Color(light: 0xB35333, dark: 0xD97757)
+        // Wabi-Sabi: the mock's sage (#6B7C5C / #A3B392). Light mode is taken from
+        // 42% to 36% lightness, hue and saturation unchanged — the mock value sits
+        // at 3.5:1 on the clay ground, under the 4.5:1 accents are held to here.
+        case .wabiSabi: Color(light: 0x5A684D, dark: 0xA3B392)
         }
     }
 
@@ -330,6 +347,8 @@ enum AppTheme: String, CaseIterable, Identifiable {
         // A taupe companion would have made this a second Paper; the lavender is
         // the one hue in the reference set that isn't a warm neutral.
         case .clay: Color(light: 0x7A5FE0, dark: 0x9C87F5)
+        // Faded indigo, deepened a touch in light mode for the same reason as sage.
+        case .wabiSabi: Color(light: 0x5C6477, dark: 0xA8B0C6)
         }
     }
 
@@ -411,6 +430,14 @@ enum AppTheme: String, CaseIterable, Identifiable {
                 Color(light: 0xF7F5F0, dark: 0x262624),
                 Color(light: 0xFAF9F5, dark: 0x1F1E1D),
             ]
+        case .wabiSabi:
+            // One clay-toned ground with no wash: every surface is the same material,
+            // so a gradient would read as the cards changing colour down the page.
+            [
+                Color(light: 0xE7E1D6, dark: 0x2B2825),
+                Color(light: 0xE7E1D6, dark: 0x2B2825),
+                Color(light: 0xE7E1D6, dark: 0x2B2825),
+            ]
         }
     }
 }
@@ -425,6 +452,7 @@ extension AppTheme {
         switch self {
         case .colonnade: Color(light: 0xD3CDC0, dark: 0x37342E)
         case .clay: Color(light: 0xDAD9D4, dark: 0x3E3E38)   // `--border`
+        case .wabiSabi: Color(light: 0xD5CDC0, dark: 0x3C3833)
         default: nil
         }
     }
@@ -438,6 +466,8 @@ extension AppTheme {
         // a flat page. Here a card sits on a gradient, so it has to be the brightest
         // surface at every stop or it reads as a hole partway down the screen.
         case .clay: Color(light: 0xFFFFFF, dark: 0x30302E)
+        // A hair off the ground on purpose — shadows, not contrast, separate a card.
+        case .wabiSabi: Color(light: 0xE9E3D8, dark: 0x2E2B27)
         default: nil
         }
     }
@@ -450,6 +480,7 @@ extension AppTheme {
         // `--input` (#52514A), which is a border color there and would read as a
         // raised block, not a well, once it fills the field.
         case .clay: Color(light: 0xEDE9DE, dark: 0x1F1E1D)
+        case .wabiSabi: Color(light: 0xDED7CA, dark: 0x252220)   // the mock's `well`
         default: nil
         }
     }
@@ -460,6 +491,8 @@ extension AppTheme {
         switch self {
         case .colonnade: Color(light: 0x5C564C, dark: 0xB6B0A5)
         case .clay: Color(light: 0x6E6D68, dark: 0xB7B5A9)   // `--muted-foreground`
+        // The mock's `ink2` (#7B7265), deepened to hold 4.5:1 on the clay ground.
+        case .wabiSabi: Color(light: 0x6A6257, dark: 0xA69C8E)
         default: nil
         }
     }
@@ -477,6 +510,24 @@ extension AppTheme {
             Color(light: 0xF2EFE6, dark: 0x2C2C2B),
             Color(light: 0xFAF9F5, dark: 0x1F1E1D),
         ]
+        case .wabiSabi: [
+            Color(light: 0xE7E1D6, dark: 0x2B2825),
+            Color(light: 0xE7E1D6, dark: 0x2B2825),
+        ]
+        default: nil
+        }
+    }
+
+    /// Positive / negative / warning text for this theme; `nil` uses the shared
+    /// status hues. Wabi-Sabi mutes them to moss, clay and ochre so status never
+    /// shouts, each deepened in light mode to stay 4.5:1 on the clay ground.
+    var statusOverride: (positive: Color, negative: Color, warning: Color)? {
+        switch self {
+        case .wabiSabi: (
+            positive: Color(light: 0x526A49, dark: 0x9DBA8C),
+            negative: Color(light: 0x8D5643, dark: 0xD8967E),
+            warning: Color(light: 0x79602E, dark: 0xD3B26A)
+        )
         default: nil
         }
     }
@@ -487,7 +538,35 @@ extension AppTheme {
 /// Shared neutral backdrop for pages and sheets in every palette.
 struct AppBackground: View {
     var body: some View {
-        Theme.background.ignoresSafeArea()
+        Theme.background
+            .overlay {
+                if ThemeManager.shared.selection.usesSoftElevation { GrainTexture() }
+            }
+            .ignoresSafeArea()
+    }
+}
+
+/// The faint paper grain on Wabi-Sabi's ground: tiled grey noise multiplied at 7%,
+/// so it darkens the clay unevenly instead of greying it.
+private struct GrainTexture: View {
+    private static let tile: UIImage = {
+        let side = 128
+        let pixels = Data((0..<(side * side)).map { _ in UInt8.random(in: 0...255) })
+        let image = CGDataProvider(data: pixels as CFData).flatMap {
+            CGImage(width: side, height: side, bitsPerComponent: 8, bitsPerPixel: 8, bytesPerRow: side,
+                    space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGBitmapInfo(),
+                    provider: $0, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
+        }
+        return image.map { UIImage(cgImage: $0, scale: 2, orientation: .up) } ?? UIImage()
+    }()
+
+    var body: some View {
+        Image(uiImage: Self.tile)
+            .resizable(resizingMode: .tile)
+            .blendMode(.multiply)
+            .opacity(0.07)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 
@@ -585,9 +664,15 @@ enum Theme {
     /// Semantic colors are intentionally adaptive: the darker light-mode values
     /// remain readable as small text on white, while their lifted dark-mode values
     /// stay distinct from raised dark surfaces.
-    static let positive = Color(light: 0x047857, dark: 0x6EE7B7)
-    static let negative = Color(light: 0xB91C1C, dark: 0xFCA5A5)
-    static let warning = Color(light: 0x92400E, dark: 0xFCD34D)
+    static var positive: Color {
+        ThemeManager.shared.selection.statusOverride?.positive ?? Color(light: 0x047857, dark: 0x6EE7B7)
+    }
+    static var negative: Color {
+        ThemeManager.shared.selection.statusOverride?.negative ?? Color(light: 0xB91C1C, dark: 0xFCA5A5)
+    }
+    static var warning: Color {
+        ThemeManager.shared.selection.statusOverride?.warning ?? Color(light: 0x92400E, dark: 0xFCD34D)
+    }
 
     /// Non-text fills may retain brighter brand-like status hues. Pair them with
     /// these foregrounds instead of forcing white text.
@@ -644,7 +729,11 @@ struct MeterBar: View {
         let clamped = min(1, max(0, fraction))
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                shape.fill(track)
+                if ThemeManager.shared.selection.usesSoftElevation {
+                    SoftSurface(shape: shape, fill: track, depth: 2, pressed: true)
+                } else {
+                    shape.fill(track)
+                }
                 shape.fill(fill).frame(width: geo.size.width * clamped)
             }
         }
@@ -671,7 +760,14 @@ extension View {
     }
 
     func fieldFill(cornerRadius: CGFloat = Theme.Radius.field) -> some View {
-        background(Theme.fieldBackground, in: .rect(cornerRadius: cornerRadius))
+        let soft = ThemeManager.shared.selection.usesSoftElevation
+        return background(soft ? .clear : Theme.fieldBackground, in: .rect(cornerRadius: cornerRadius))
+            .background {
+                if soft {
+                    SoftSurface(shape: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous),
+                                depth: 3, pressed: true)
+                }
+            }
     }
 
     /// A solid fill for primary actions; floating map controls use glass directly.
@@ -710,18 +806,84 @@ private struct ReadableSurfaceModifier: ViewModifier {
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
     func body(content: Content) -> some View {
+        let soft = ThemeManager.shared.selection.usesSoftElevation
+        let increased = colorSchemeContrast == .increased
         content
             .background(
-                Theme.surface,
+                soft ? .clear : Theme.surface,
                 in: .rect(cornerRadius: cornerRadius)
             )
+            .background {
+                if soft {
+                    // Increased Contrast keeps its border, so the corners stay even to match it.
+                    SoftSurface(shape: SoftElevation.cardShape(cornerRadius: cornerRadius, even: increased),
+                                depth: cornerRadius >= 18 ? 8 : 4)
+                }
+            }
             .overlay {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .strokeBorder(
-                        Theme.separator.opacity(colorSchemeContrast == .increased ? 1 : 0.5),
-                        lineWidth: colorSchemeContrast == .increased ? 2 : 1
+                        Theme.separator.opacity(increased ? 1 : (soft ? 0 : 0.5)),
+                        lineWidth: increased ? 2 : 1
                     )
             }
+    }
+}
+
+// MARK: - Soft elevation (Wabi-Sabi)
+
+/// Wabi-Sabi's shadow pair. Every raised element casts a highlight up-left and a
+/// shade down-right; pressed elements take the same pair inset. Blur is twice the
+/// offset in the design, which is SwiftUI's `radius` equal to the offset.
+enum SoftElevation {
+    static let highlight = dynamic(light: 0xFFFFFF, lightAlpha: 0.9, dark: 0x3B3731, darkAlpha: 0.6)
+    static let shade = dynamic(light: 0xA69985, lightAlpha: 0.62, dark: 0x181614, darkAlpha: 0.85)
+
+    /// Card corners vary around the requested radius so cards read as hand-formed.
+    /// Small radii stay even: on a chip or row a 4pt swing reads as a mistake.
+    static func cardShape(cornerRadius r: CGFloat, even: Bool = false) -> UnevenRoundedRectangle {
+        let uneven = r >= 18 && !even
+        return UnevenRoundedRectangle(
+            topLeadingRadius: r,
+            bottomLeadingRadius: uneven ? r + 2 : r,
+            bottomTrailingRadius: uneven ? r - 4 : r,
+            topTrailingRadius: uneven ? r + 4 : r,
+            style: .continuous
+        )
+    }
+
+    private static func dynamic(light: UInt32, lightAlpha: CGFloat, dark: UInt32, darkAlpha: CGFloat) -> Color {
+        Color(uiColor: UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(Color(hex: dark)).withAlphaComponent(darkAlpha)
+                : UIColor(Color(hex: light)).withAlphaComponent(lightAlpha)
+        })
+    }
+}
+
+/// A shape made of the ground's own material: raised out of it, or pressed into it.
+struct SoftSurface<S: Shape>: View {
+    let shape: S
+    /// Defaults to the card surface when raised and the field well when pressed.
+    var fill: Color?
+    var depth: CGFloat
+    var pressed = false
+
+    var body: some View {
+        let fill = fill ?? (pressed ? Theme.fieldBackground : Theme.surface)
+        if pressed {
+            shape.fill(
+                fill.shadow(.inner(color: SoftElevation.shade, radius: depth, x: depth, y: depth))
+                    .shadow(.inner(color: SoftElevation.highlight, radius: depth, x: -depth, y: -depth))
+            )
+        } else {
+            // Two fills rather than chained `.shadow`s: a second shadow modifier would
+            // also cast the first one's highlight, muddying the shade.
+            ZStack {
+                shape.fill(fill).shadow(color: SoftElevation.highlight, radius: depth, x: -depth, y: -depth)
+                shape.fill(fill).shadow(color: SoftElevation.shade, radius: depth, x: depth, y: depth)
+            }
+        }
     }
 }
 
@@ -733,26 +895,41 @@ struct AppActionStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
+        let soft = ThemeManager.shared.selection.usesSoftElevation
+        let fill = primary ? Theme.accent : Theme.surface
         configuration.label
             .font(.app(.subheadline, .semibold))
             .foregroundStyle(primary ? Theme.onAccent : Theme.accent)
             .frame(maxWidth: .infinity, minHeight: 48)
             .padding(.horizontal, 12)
-            .background(primary ? Theme.accent : Theme.surface, in: .rect(cornerRadius: Theme.Radius.action))
+            .background(soft ? .clear : fill, in: .rect(cornerRadius: Theme.Radius.action))
+            .background {
+                // Wabi-Sabi shows a press by sinking the button, not by fading it.
+                if soft {
+                    SoftSurface(shape: RoundedRectangle(cornerRadius: 20, style: .continuous),
+                                fill: fill, depth: 4, pressed: configuration.isPressed)
+                }
+            }
             .overlay {
-                if !primary {
+                if !primary && !soft {
                     RoundedRectangle(cornerRadius: Theme.Radius.action)
                         .strokeBorder(Theme.separator, lineWidth: 1)
                 }
             }
-            .opacity(!isEnabled ? 0.45 : (configuration.isPressed ? 0.75 : 1))
+            .opacity(!isEnabled ? 0.45 : (configuration.isPressed && !soft ? 0.75 : 1))
     }
 }
 
 extension View {
     /// Opaque control surface for inline filters and pickers. Glass is reserved for overlays.
     func controlSurface(tint: Color? = nil, in shape: some Shape = .capsule) -> some View {
-        background(tint ?? Theme.surface, in: shape)
-            .overlay { shape.stroke(Theme.separator.opacity(tint == nil ? 0.5 : 0), lineWidth: 1) }
+        // Tinted (selected) controls keep their flat fill: tints can be translucent,
+        // and a raised surface is drawn twice, which would double a translucent fill.
+        let soft = ThemeManager.shared.selection.usesSoftElevation && tint == nil
+        return background(soft ? .clear : (tint ?? Theme.surface), in: shape)
+            .background {
+                if soft { SoftSurface(shape: shape, depth: 4) }
+            }
+            .overlay { shape.stroke(Theme.separator.opacity(tint == nil && !soft ? 0.5 : 0), lineWidth: 1) }
     }
 }
