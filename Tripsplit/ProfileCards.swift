@@ -13,6 +13,7 @@ struct VisitedPlaceCard: View {
         VStack(spacing: 4) {
             PlaceStampBadge(place: place, size: 128, compact: true)
                 .frame(width: 136, height: 136)
+                .accessibilityHidden(true)
 
             Text(verbatim: place.shortName)
                 .font(.app(.footnote, .semibold))
@@ -24,7 +25,8 @@ struct VisitedPlaceCard: View {
                 .lineLimit(1)
         }
         .frame(width: 128)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(verbatim: [place.name, monthYear].compactMap { $0 }.joined(separator: ", ")))
     }
 }
 
