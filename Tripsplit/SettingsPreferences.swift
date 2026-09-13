@@ -98,6 +98,26 @@ struct AppearanceSettingsView: View {
     }
 }
 
+/// Toolbar menu for choosing System / Light / Dark from the main tabs.
+struct AppearanceToggle: View {
+    @AppStorage("appearancePreference") private var appearance: AppearancePreference = .system
+
+    var body: some View {
+        Menu {
+            Picker("Appearance", selection: $appearance) {
+                ForEach(AppearancePreference.allCases) { option in
+                    Label(option.label, systemImage: option.icon).tag(option)
+                }
+            }
+        } label: {
+            Image(systemName: appearance.icon)
+                .frame(width: 44, height: 44)
+                .contentShape(.rect)
+        }
+        .accessibilityLabel("Appearance: \(appearance.label)")
+    }
+}
+
 struct PaymentPreferencesView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("defaultPaymentMethod") private var defaultMethod = PaymentMethod.cash.rawValue

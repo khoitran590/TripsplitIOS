@@ -16,7 +16,15 @@ struct RootView: View {
     /// open sign-in instead of leaving the user to find it.
     @State private var startsAtSignIn = false
 
+    /// Launch-argument overrides are launch state. SwiftUI re-creates `RootView` whenever
+    /// state it observed changes — including the theme set just below — so re-applying
+    /// them on every init snapped each theme, font and onboarding change straight back.
+    private static var appliedLaunchOverrides = false
+
     init() {
+        guard !Self.appliedLaunchOverrides else { return }
+        Self.appliedLaunchOverrides = true
+
         let arguments = ProcessInfo.processInfo.arguments
         let isUITest = arguments.contains("-ui-test-reset-onboarding")
             || arguments.contains("-ui-test-skip-onboarding")

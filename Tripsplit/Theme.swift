@@ -518,6 +518,16 @@ extension AppTheme {
         }
     }
 
+    /// Ink for titles, amounts and headings; `nil` keeps the system label colour.
+    /// Applied per text role (`Theme.ink`), never to a container: any foreground
+    /// style set above a button replaces its accent tint.
+    var inkOverride: Color? {
+        switch self {
+        case .wabiSabi: Color(light: 0x3A3530, dark: 0xEAE3D7)
+        default: nil
+        }
+    }
+
     /// Positive / negative / warning text for this theme; `nil` uses the shared
     /// status hues. Wabi-Sabi mutes them to moss, clay and ochre so status never
     /// shouts, each deepened in light mode to stay 4.5:1 on the clay ground.
@@ -578,12 +588,57 @@ final class ThemeManager {
     static let shared = ThemeManager()
 
     var selection: AppTheme {
-        didSet { UserDefaults.standard.set(selection.rawValue, forKey: "appTheme") }
+        didSet {
+            UserDefaults.standard.set(selection.rawValue, forKey: "appTheme")
+            ThemeManager.applyNavigationBarAppearance(selection)
+        }
     }
 
     private init() {
         selection = AppTheme(rawValue: UserDefaults.standard.string(forKey: "appTheme") ?? "")
             ?? .classic
+    }
+
+    /// Navigation bar titles are drawn by UIKit and can't read `Theme.ink`, so the
+    /// theme's ink goes through the appearance proxy for bars created later, and is
+    /// written onto every bar already on screen — the proxy alone left existing titles
+    /// in the previous theme's colour until the app was relaunched.
+    static func applyNavigationBarAppearance(_ theme: AppTheme) {
+        let ink = theme.inkOverride.map { UIColor($0) }
+        applyTitleInk(ink, to: UINavigationBar.appearance())
+        for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
+            for window in scene.windows { applyTitleInk(ink, inBarsUnder: window) }
+        }
+    }
+
+    private static func applyTitleInk(_ ink: UIColor?, inBarsUnder view: UIView) {
+        if let bar = view as? UINavigationBar { applyTitleInk(ink, to: bar) }
+        for subview in view.subviews { applyTitleInk(ink, inBarsUnder: subview) }
+    }
+
+    /// Works on the appearance proxy and on live bars alike. Mutates the existing
+    /// appearances so the font attributes and bar background `FontManager` configures
+    /// are left alone.
+    private static func applyTitleInk(_ ink: UIColor?, to bar: UINavigationBar) {
+        let standard = bar.standardAppearance
+        standard.titleTextAttributes[.foregroundColor] = ink
+        standard.largeTitleTextAttributes[.foregroundColor] = ink
+        bar.standardAppearance = standard
+
+        if let ink {
+            let edge = bar.scrollEdgeAppearance ?? {
+                let a = UINavigationBarAppearance()
+                a.configureWithTransparentBackground()
+                return a
+            }()
+            edge.titleTextAttributes[.foregroundColor] = ink
+            edge.largeTitleTextAttributes[.foregroundColor] = ink
+            bar.scrollEdgeAppearance = edge
+        } else if let edge = bar.scrollEdgeAppearance {
+            edge.titleTextAttributes[.foregroundColor] = nil
+            edge.largeTitleTextAttributes[.foregroundColor] = nil
+            bar.scrollEdgeAppearance = edge
+        }
     }
 }
 
@@ -652,6 +707,10 @@ enum Theme {
         ThemeManager.shared.selection.textSecondaryOverride ?? Color(light: 0x4B5563, dark: 0xC6CBD2)
     }
 
+    /// Prominent text — page, card and section titles, hero amounts. `.primary` unless
+    /// the theme supplies its own ink.
+    static var ink: Color { ThemeManager.shared.selection.inkOverride ?? .primary }
+
     /// Accent used for primary actions and creator badges (follows the chosen theme).
     static var accent: Color { ThemeManager.shared.selection.accent }
 
@@ -707,9 +766,11 @@ extension View {
     }
 
     func homeSectionHeading() -> some View {
-        font(.app(.headline))
-            .foregroundStyle(Color(light: 0x111827, dark: 0xF9FAFB))
-            .background(Theme.surfaceSubtle, in: .rect(cornerRadius: 4))
+        let theme = ThemeManager.shared.selection
+        return font(.app(.headline))
+            .foregroundStyle(theme.inkOverride ?? Color(light: 0x111827, dark: 0xF9FAFB))
+            // The cool near-white chip reads as a sticker on Wabi-Sabi's clay ground.
+            .background(theme.usesSoftElevation ? .clear : Theme.surfaceSubtle, in: .rect(cornerRadius: 4))
     }
 }
 
@@ -868,6 +929,9 @@ struct SoftSurface<S: Shape>: View {
     var fill: Color?
     var depth: CGFloat
     var pressed = false
+    /// Scales the raised highlight. Floating chrome dims it: over photos and maps the
+    /// highlight has no matching ground and reads as a glow.
+    var highlightStrength: Double = 1
 
     var body: some View {
         let fill = fill ?? (pressed ? Theme.fieldBackground : Theme.surface)
@@ -880,7 +944,7 @@ struct SoftSurface<S: Shape>: View {
             // Two fills rather than chained `.shadow`s: a second shadow modifier would
             // also cast the first one's highlight, muddying the shade.
             ZStack {
-                shape.fill(fill).shadow(color: SoftElevation.highlight, radius: depth, x: -depth, y: -depth)
+                shape.fill(fill).shadow(color: SoftElevation.highlight.opacity(highlightStrength), radius: depth, x: -depth, y: -depth)
                 shape.fill(fill).shadow(color: SoftElevation.shade, radius: depth, x: depth, y: depth)
             }
         }

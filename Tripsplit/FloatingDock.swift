@@ -42,7 +42,9 @@ struct FloatingDock: View {
         .background {
             if softElevation {
                 // Composited first so the transparency slider fades the shadows with the fill.
-                SoftSurface(shape: Capsule(), depth: 10)
+                // Shallower than a card, with a faint highlight: the dock floats over
+                // photos and maps, where a full-strength highlight glows.
+                SoftSurface(shape: Capsule(), depth: 6, highlightStrength: 0.3)
                     .compositingGroup()
                     .opacity(backgroundVisibility)
             } else {

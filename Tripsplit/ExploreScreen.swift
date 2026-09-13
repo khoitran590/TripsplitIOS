@@ -6,6 +6,7 @@ import UIKit
 /// adventure" carousel, a smaller "Trending with travelers" rail, and a saved list.
 struct RecScreen: View {
     var isActive = true
+    @Environment(\.colorScheme) private var colorScheme
     var onNavigationDepthChange: (Bool) -> Void = { _ in }
     @State private var searchText = ""
     /// Keep the detail route while Explore is covered by the Map tab. Without an
@@ -17,7 +18,6 @@ struct RecScreen: View {
     @Environment(AuthStore.self) private var auth
     @Environment(ExploreMapModel.self) private var mapModel
     @Environment(OnboardingCoordinator.self) private var onboarding
-    @AppStorage("appearancePreference") private var appearance: AppearancePreference = .system
 
     /// Presents the build-your-own-itinerary flow (ItineraryFeature.swift).
     @State private var showCreateItinerary = false
@@ -416,7 +416,7 @@ struct RecScreen: View {
                     }
                     .accessibilityLabel("How Explore works")
 
-                    appearanceToggle
+                    AppearanceToggle()
 
                     Button {
                         isSearchFocused = false
@@ -462,7 +462,11 @@ struct RecScreen: View {
                 }
             }
             .sheet(isPresented: $showSettings) {
+                // Settings holds the colour-mode picker. `RootView`'s preference doesn't
+                // reach a sheet that's already open, and `preferredColorScheme(nil)` won't
+                // release one once forced, so the sheet mirrors this screen's resolved mode.
                 SettingsScreen()
+                    .preferredColorScheme(colorScheme)
             }
             // Chaining off `onDismiss` rather than a fixed delay: the previous version
             // guessed 0.35s for the cover's dismissal, which is a race on a slow device
@@ -571,21 +575,6 @@ struct RecScreen: View {
         }
     }
 
-    private var appearanceToggle: some View {
-        Menu {
-            Picker("Appearance", selection: $appearance) {
-                ForEach(AppearancePreference.allCases) { option in
-                    Label(option.label, systemImage: option.icon).tag(option)
-                }
-            }
-        } label: {
-            Image(systemName: appearance.icon)
-                .frame(width: 44, height: 44)
-                .contentShape(.rect)
-        }
-        .accessibilityLabel("Appearance: \(appearance.label)")
-    }
-
     /// The landing header. Explore is the tab the app opens on, so the top of it has to
     /// read as a home screen: who's here, one question, and the way to act on it — in
     /// one row. The previous version spent ~180pt before any content on an eyebrow
@@ -605,6 +594,7 @@ struct RecScreen: View {
 
                 Text("Where to next?")
                     .font(.app(.title, .bold))
+                    .foregroundStyle(Theme.ink)
                     .accessibilityAddTraits(.isHeader)
             }
 
@@ -1276,7 +1266,7 @@ struct RecScreen: View {
 
     @ViewBuilder
     private func sectionHeader(_ title: LocalizedStringKey) -> some View {
-        Text(title).font(.app(.title2, .bold))
+        Text(title).font(.app(.title2, .bold)).foregroundStyle(Theme.ink)
     }
 
     @ViewBuilder

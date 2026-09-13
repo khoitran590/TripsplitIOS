@@ -514,7 +514,7 @@ struct TripDetailView: View {
             Text(money(budget > 0 ? abs(remaining) : spent, trip.currencyCode))
                 .font(Theme.Typography.heroAmount)
                 .monospacedDigit()
-                .foregroundStyle(over ? Theme.negative : .primary)
+                .foregroundStyle(over ? Theme.negative : Theme.ink)
                 .fixedSize(horizontal: false, vertical: true)
             if budget > 0 {
                 MeterBar(fraction: min(spent / budget, 1), colors: [statusColor], track: Theme.fieldBackground, height: 8)
@@ -599,6 +599,7 @@ struct TripDetailView: View {
                 Label {
                     Text(preview ? "Your balances" : "Balances")
                         .font(Theme.Typography.sectionTitle)
+                        .foregroundStyle(Theme.ink)
                         .fixedSize(horizontal: false, vertical: true)
                 } icon: {
                     Image(systemName: "arrow.left.arrow.right.circle.fill")

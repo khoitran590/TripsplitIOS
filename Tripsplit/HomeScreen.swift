@@ -57,6 +57,9 @@ struct HomeScreen: View {
             }
             .background { AppBackground() }
             .navigationTitle("Your trips")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) { AppearanceToggle() }
+            }
             .refreshable {
                 // A deliberate refresh must bypass the repository's short-lived launch
                 // cache or another trip member's recent edits remain invisible.
@@ -765,6 +768,7 @@ struct BalanceCard: View {
                     }
                 }
                 .font(Theme.Typography.rowTitle)
+                .foregroundStyle(Theme.ink)
                 if !dynamicTypeSize.isAccessibilitySize { Spacer() }
                 HStack(spacing: Theme.Space.compact) {
                     Menu {
@@ -827,7 +831,7 @@ struct BalanceCard: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(verbatim: heroValue)
                                 .font(.app(.largeTitle, .bold))
-                                .foregroundStyle(isOver ? statusColor : .primary)
+                                .foregroundStyle(isOver ? statusColor : Theme.ink)
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.72)
 
@@ -1928,7 +1932,7 @@ struct TransactionRow: View {
             Text(money(transaction.amount, transaction.currencyCode))
                 .font(Theme.Typography.rowTitle)
                 .monospacedDigit()
-                .foregroundStyle(.primary)
+                .foregroundStyle(Theme.ink)
         }
         .padding(14)
         .contentShape(.rect)

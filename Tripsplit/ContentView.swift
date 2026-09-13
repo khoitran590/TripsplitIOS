@@ -16,6 +16,7 @@ private struct PendingTripInvitation {
         // Navigation bars read their title font from the appearance proxy when they're
         // created, so the user's typeface has to be installed before the first one is.
         FontManager.applyNavigationBarAppearance(FontManager.shared.selection)
+        ThemeManager.applyNavigationBarAppearance(ThemeManager.shared.selection)
     }
 
     var body: some Scene {

@@ -276,6 +276,7 @@ struct TripCard<Content: View>: View {
             Label {
                 Text(title)
                     .font(Theme.Typography.sectionTitle)
+                    .foregroundStyle(Theme.ink)
                     .fixedSize(horizontal: false, vertical: true)
             } icon: {
                 Image(systemName: icon).font(.system(size: 18, weight: .semibold))

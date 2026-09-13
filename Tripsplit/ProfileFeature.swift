@@ -69,6 +69,7 @@ struct ProfileDetailView: View {
     @State private var geocoder = VisitedPlaceGeocoder.shared
     @AppStorage("displayCurrency") private var displayCurrency = "USD"
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.colorScheme) private var colorScheme
 
     /// The user's own list first, then any trip locations not already in it.
     /// A trip's start (or end) date is attached so the cards can show when they went.
@@ -190,6 +191,7 @@ struct ProfileDetailView: View {
                         .accessibilityLabel("Share profile")
                 }
             }
+            ToolbarItem(placement: .topBarTrailing) { AppearanceToggle() }
             // Settings used to be reachable only from the Explore tab, which left the
             // Profile tab with no route to sign-out, currency, appearance or language.
             ToolbarItem(placement: .topBarTrailing) {
@@ -223,6 +225,9 @@ struct ProfileDetailView: View {
         // sheet, so Settings must not offer to push another copy of it.
         .sheet(isPresented: $showSettings) {
             SettingsScreen(showsProfileLink: false)
+                // Mirrors this screen's colour mode so the Appearance picker applies live
+                // (see the matching sheet in `RecScreen`).
+                .preferredColorScheme(colorScheme)
         }
         .sheet(item: $selectedTrip) { trip in
             TripDetailView(tripID: trip.id)
@@ -326,6 +331,7 @@ struct ProfileDetailView: View {
                     }
                 }
                 .font(.app(size: 26, weight: .bold))
+                .foregroundStyle(Theme.ink)
                 .multilineTextAlignment(.center)
 
                 if let dob = store.userProfile.dateOfBirth {
@@ -383,6 +389,7 @@ struct ProfileDetailView: View {
                 .background(Theme.accent.opacity(0.12), in: .circle)
             Text(verbatim: "\(value)")
                 .font(.app(.title2, .bold))
+                .foregroundStyle(Theme.ink)
                 .monospacedDigit()
             Text(label)
                 .font(.app(.caption2, .semibold))
@@ -407,6 +414,7 @@ struct ProfileDetailView: View {
                         .foregroundStyle(.secondary)
                     (Text(verbatim: formattedMoney(stats.spent, displayCurrency))
                         .font(.app(size: 28, weight: .bold))
+                        .foregroundStyle(Theme.ink)
                      + Text(verbatim: " " + displayCurrency)
                         .font(.app(.footnote, .semibold))
                         .foregroundStyle(.secondary))
@@ -488,6 +496,7 @@ struct ProfileDetailView: View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(title)
                 .font(.app(.title3, .bold))
+                .foregroundStyle(Theme.ink)
             if count > 0 {
                 Text(verbatim: "\(count)")
                     .font(.app(.footnote, .semibold))
