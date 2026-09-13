@@ -38,6 +38,15 @@ nonisolated enum ItineraryStopKind: String, Codable, CaseIterable, Identifiable 
     }
 }
 
+/// How an itinerary coordinate was established. This is shown on the Map tab so a
+/// traveler can distinguish an exact place they chose from a best-effort automatic
+/// match and correct the latter when necessary.
+nonisolated enum ItineraryLocationSource: String, Codable, Equatable {
+    case userSelected
+    case placeIdentifier
+    case automatic
+}
+
 /// One planned entry in a day's timeline: a location to visit, a thing to do, or a
 /// restaurant to eat at, optionally pinned to a time of day with an estimated cost
 /// in the trip's currency.
@@ -54,6 +63,16 @@ nonisolated struct ItineraryStop: Identifiable, Codable, Equatable {
     var latitude: Double? = nil
     var longitude: Double? = nil
     var address: String? = nil
+    /// Neighborhood/city/country context supplied by the planner. Keeping this beside
+    /// the name makes automatic lookup far less ambiguous than the trip destination alone.
+    var area: String? = nil
+    /// Stable Apple Maps Place ID, when MapKit supplies one. Coordinates remain stored
+    /// for instant/offline display; the identifier lets the app refresh exact details.
+    var placeIdentifier: String? = nil
+    var resolvedName: String? = nil
+    var resolutionConfidence: Double? = nil
+    var locationSource: ItineraryLocationSource? = nil
+    var resolutionVersion: Int? = nil
     /// True when the coordinate came from the traveler tapping a real place (the stop
     /// editor's autocomplete, or "add to itinerary" on the map) rather than from the
     /// Map tab resolving the stop's name. Map keeps its hands off those pins: they are
@@ -70,6 +89,12 @@ nonisolated struct ItineraryStop: Identifiable, Codable, Equatable {
         latitude: Double? = nil,
         longitude: Double? = nil,
         address: String? = nil,
+        area: String? = nil,
+        placeIdentifier: String? = nil,
+        resolvedName: String? = nil,
+        resolutionConfidence: Double? = nil,
+        locationSource: ItineraryLocationSource? = nil,
+        resolutionVersion: Int? = nil,
         isUserPlaced: Bool = false
     ) {
         self.id = id
@@ -81,11 +106,19 @@ nonisolated struct ItineraryStop: Identifiable, Codable, Equatable {
         self.latitude = latitude
         self.longitude = longitude
         self.address = address
+        self.area = area
+        self.placeIdentifier = placeIdentifier
+        self.resolvedName = resolvedName
+        self.resolutionConfidence = resolutionConfidence
+        self.locationSource = locationSource
+        self.resolutionVersion = resolutionVersion
         self.isUserPlaced = isUserPlaced
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, kind, time, notes, cost, latitude, longitude, address, isUserPlaced
+        case id, name, kind, time, notes, cost, latitude, longitude, address, area
+        case placeIdentifier, resolvedName, resolutionConfidence, locationSource, resolutionVersion
+        case isUserPlaced
     }
 
     // Every field decodes with a default so trips stored before a field existed keep loading.
@@ -100,6 +133,12 @@ nonisolated struct ItineraryStop: Identifiable, Codable, Equatable {
         latitude = try c.decodeIfPresent(Double.self, forKey: .latitude)
         longitude = try c.decodeIfPresent(Double.self, forKey: .longitude)
         address = try c.decodeIfPresent(String.self, forKey: .address)
+        area = try c.decodeIfPresent(String.self, forKey: .area)
+        placeIdentifier = try c.decodeIfPresent(String.self, forKey: .placeIdentifier)
+        resolvedName = try c.decodeIfPresent(String.self, forKey: .resolvedName)
+        resolutionConfidence = try c.decodeIfPresent(Double.self, forKey: .resolutionConfidence)
+        locationSource = try c.decodeIfPresent(ItineraryLocationSource.self, forKey: .locationSource)
+        resolutionVersion = try c.decodeIfPresent(Int.self, forKey: .resolutionVersion)
         isUserPlaced = try c.decodeIfPresent(Bool.self, forKey: .isUserPlaced) ?? false
     }
 
@@ -150,17 +189,19 @@ nonisolated struct ItinerarySuggestionStop: Identifiable, Codable, Equatable {
     var id = UUID()
     var kind: ItineraryStopKind = .activity
     var name: String = ""
+    var area: String? = nil
     /// 24-hour "HH:mm" as returned by the model; nil when untimed.
     var time: String? = nil
     var notes: String = ""
     var cost: Double = 0
 
-    private enum CodingKeys: String, CodingKey { case id, kind, name, time, notes, cost }
+    private enum CodingKeys: String, CodingKey { case id, kind, name, area, time, notes, cost }
 
-    init(id: UUID = UUID(), kind: ItineraryStopKind = .activity, name: String = "", time: String? = nil, notes: String = "", cost: Double = 0) {
+    init(id: UUID = UUID(), kind: ItineraryStopKind = .activity, name: String = "", area: String? = nil, time: String? = nil, notes: String = "", cost: Double = 0) {
         self.id = id
         self.kind = kind
         self.name = name
+        self.area = area
         self.time = time
         self.notes = notes
         self.cost = cost
@@ -174,6 +215,7 @@ nonisolated struct ItinerarySuggestionStop: Identifiable, Codable, Equatable {
         let kindRaw = try c.decodeIfPresent(String.self, forKey: .kind) ?? ""
         kind = ItineraryStopKind(rawValue: kindRaw) ?? .activity
         name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        area = try c.decodeIfPresent(String.self, forKey: .area)
         time = try c.decodeIfPresent(String.self, forKey: .time)
         notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
         cost = try c.decodeIfPresent(Double.self, forKey: .cost) ?? 0
@@ -1973,7 +2015,8 @@ struct ItineraryDetailView: View {
                     kind: suggested.kind,
                     time: Self.timeDate(suggested.time),
                     notes: suggested.notes,
-                    cost: SplitEngine.roundToTwo(suggested.cost)
+                    cost: SplitEngine.roundToTwo(suggested.cost),
+                    area: suggested.area
                 )
             }
             itinerary.days[index].stops = stops
@@ -2185,6 +2228,10 @@ struct ItineraryStopEditorView: View {
     @State private var latitude: Double?
     @State private var longitude: Double?
     @State private var resolvedAddress: String?
+    @State private var placeIdentifier: String?
+    @State private var resolvedName: String?
+    @State private var resolutionConfidence: Double?
+    @State private var locationSource: ItineraryLocationSource?
     /// Whether the coordinate about to be saved was chosen by the traveler. Seeded from
     /// the stop being edited so re-saving it without touching the name keeps its
     /// provenance, and set when a suggestion is tapped here.
@@ -2192,6 +2239,7 @@ struct ItineraryStopEditorView: View {
 
     @StateObject private var placeCompleter = StopPlaceCompleter()
     @FocusState private var nameFocused: Bool
+    @State private var isInitializing = true
     /// True while filling the field from a tapped suggestion, so `onChange` doesn't
     /// immediately re-query and reopen the list.
     @State private var isSelectingPlace = false
@@ -2340,19 +2388,28 @@ struct ItineraryStopEditorView: View {
                 }
             }
             .onAppear {
-                guard let stop else { return }
-                kind = stop.kind
-                names[stop.kind] = stop.name
-                if let stopTime = stop.time {
-                    hasTime = true
-                    time = stopTime
+                if let stop {
+                    kind = stop.kind
+                    names[stop.kind] = stop.name
+                    if let stopTime = stop.time {
+                        hasTime = true
+                        time = stopTime
+                    }
+                    costText = stop.cost > 0 ? String(format: "%.2f", stop.cost) : ""
+                    notes = stop.notes
+                    latitude = stop.latitude
+                    longitude = stop.longitude
+                    resolvedAddress = stop.address
+                    placeIdentifier = stop.placeIdentifier
+                    resolvedName = stop.resolvedName
+                    resolutionConfidence = stop.resolutionConfidence
+                    locationSource = stop.locationSource
+                    isUserPlaced = stop.isUserPlaced
                 }
-                costText = stop.cost > 0 ? String(format: "%.2f", stop.cost) : ""
-                notes = stop.notes
-                latitude = stop.latitude
-                longitude = stop.longitude
-                resolvedAddress = stop.address
-                isUserPlaced = stop.isUserPlaced
+                Task { @MainActor in
+                    await Task.yield()
+                    isInitializing = false
+                }
             }
             .task {
                 placeCompleter.setKind(kind)
@@ -2360,17 +2417,17 @@ struct ItineraryStopEditorView: View {
             }
             .onChange(of: kind) { _, newKind in
                 placeCompleter.setKind(newKind)
+                guard !isInitializing else { return }
+                clearResolvedLocation()
                 placeCompleter.update(query: names[newKind] ?? "")
             }
             .onChange(of: names) {
+                guard !isInitializing else { return }
                 if isSelectingPlace {
                     isSelectingPlace = false
                     return
                 }
-                latitude = nil
-                longitude = nil
-                resolvedAddress = nil
-                isUserPlaced = false
+                clearResolvedLocation()
                 placeCompleter.update(query: name)
             }
         }
@@ -2384,13 +2441,31 @@ struct ItineraryStopEditorView: View {
         Task { await resolve(suggestion) }
     }
 
+    private func clearResolvedLocation() {
+        latitude = nil
+        longitude = nil
+        resolvedAddress = nil
+        placeIdentifier = nil
+        resolvedName = nil
+        resolutionConfidence = nil
+        locationSource = nil
+        isUserPlaced = false
+    }
+
     private func resolve(_ suggestion: MKLocalSearchCompletion) async {
         let request = MKLocalSearch.Request(completion: suggestion)
-        guard let item = try? await MKLocalSearch(request: request).start().mapItems.first,
+        let result = await MapLookupPacer.shared.perform {
+            try await MKLocalSearch(request: request).start().mapItems.first
+        }
+        guard let result, case .success(let item) = result, let item,
               names[kind] == suggestion.title else { return }
         latitude = item.location.coordinate.latitude
         longitude = item.location.coordinate.longitude
         resolvedAddress = item.address?.fullAddress
+        placeIdentifier = item.identifier?.rawValue
+        resolvedName = item.name
+        resolutionConfidence = 1
+        locationSource = .userSelected
         isUserPlaced = true
     }
 
@@ -2398,11 +2473,9 @@ struct ItineraryStopEditorView: View {
     /// than around the device's current location.
     private func biasToDestination() async {
         guard let locationHint, !locationHint.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        let request = MKLocalSearch.Request()
-        request.naturalLanguageQuery = locationHint
-        guard let item = try? await MKLocalSearch(request: request).start().mapItems.first else { return }
+        guard let destination = await DestinationResolver.shared.resolve(locationHint) else { return }
         placeCompleter.bias(to: MKCoordinateRegion(
-            center: item.location.coordinate,
+            center: destination.coordinate,
             span: MKCoordinateSpan(latitudeDelta: 1, longitudeDelta: 1)
         ))
     }
@@ -2418,6 +2491,12 @@ struct ItineraryStopEditorView: View {
             latitude: latitude,
             longitude: longitude,
             address: resolvedAddress,
+            area: stop?.area,
+            placeIdentifier: placeIdentifier,
+            resolvedName: resolvedName,
+            resolutionConfidence: resolutionConfidence,
+            locationSource: locationSource,
+            resolutionVersion: locationSource == nil ? stop?.resolutionVersion : 3,
             isUserPlaced: isUserPlaced && latitude != nil
         )
         onSave(saved)

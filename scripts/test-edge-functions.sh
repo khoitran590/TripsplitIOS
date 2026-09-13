@@ -246,7 +246,7 @@ jq -e '.merchant == "TripSplit Local Cafe" and (.items | length) == 1' "$respons
 
 status="$(request_function suggest-itinerary "$owner_token" '{"location":"Localhost","days":1,"currency":"USD","totalBudget":10}')"
 assert_status 200 "$status" 'suggest-itinerary authenticated mock path'
-jq -e '(.days | length) == 1 and (.days[0].stops | length) == 1' "$response_file" >/dev/null || fail 'suggest-itinerary mock response shape is invalid.'
+jq -e '(.days | length) == 1 and (.days[0].stops | length) == 1 and .days[0].stops[0].area == "Localhost"' "$response_file" >/dev/null || fail 'suggest-itinerary mock response shape is invalid or lost its location area.'
 
 owner_invite_email="edge-invite-$suffix@example.com"
 status="$(request_function send-invitation "$owner_token" "$(jq -nc --arg id "$trip_id" --arg email "$owner_invite_email" '{tripID:$id,email:$email}')")"

@@ -61,6 +61,7 @@ struct ExpenseMapMarker: View {
 struct NumberedItineraryPin: View {
     let number: Int
     let kind: ItineraryStopKind
+    let quality: ItineraryLocationQuality
 
     var body: some View {
         ZStack {
@@ -68,6 +69,13 @@ struct NumberedItineraryPin: View {
             Text("\(number)")
                 .font(.app(.caption, .bold))
                 .foregroundStyle(.white)
+            Image(systemName: quality.icon)
+                .font(.app(size: 8, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 14, height: 14)
+                .background(quality.tint, in: .circle)
+                .overlay(Circle().strokeBorder(.white, lineWidth: 1.5))
+                .offset(x: 13, y: -13)
         }
         .frame(width: 32, height: 32)
         .overlay(Circle().strokeBorder(.white, lineWidth: 2.5))

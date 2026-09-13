@@ -178,6 +178,7 @@ Deno.serve(withTiming("suggest-itinerary", async (req, timing) => {
         stops: [{
           kind: "activity",
           name: "Local smoke-test stop",
+          area: location,
           time: "09:00",
           notes: "Deterministic local provider mock",
           cost: 0,
@@ -801,13 +802,12 @@ function enforceDestinationScope(
       );
       if (!inScope) dropped++;
       return inScope;
-    // `area` has done its job; the client's wire shape stays unchanged.
-    }).map(({ area: _area, ...stop }) => stop);
+    });
     return { ...day, stops };
   }).filter((day) => (day.stops as unknown[]).length > 0);
 
   if (days.length === 0) return { plan: null, dropped };
-  return { plan: { days }, dropped };
+  return { plan: { destinationArea: declaredArea, days }, dropped };
 }
 
 const KINDS = new Set(["location", "activity", "restaurant"]);
@@ -829,8 +829,8 @@ function normalizePlan(input: unknown): Record<string, unknown> | null {
       return {
         kind,
         name: typeof stop.name === "string" ? stop.name.slice(0, 120) : "",
-        // Where the place physically is, as the model reports it. Kept only long enough
-        // for `enforceDestinationScope` to check it; stripped before the response.
+        // Where the place physically is, as the model reports it. The scope gate checks
+        // it and the client keeps it as neighborhood context for accurate MapKit lookup.
         area: typeof stop.area === "string" ? stop.area.slice(0, 160) : "",
         time,
         notes: typeof stop.notes === "string" ? stop.notes.slice(0, 240) : "",

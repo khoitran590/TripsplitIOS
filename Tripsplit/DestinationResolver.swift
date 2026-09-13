@@ -1,20 +1,31 @@
 import Foundation
 import MapKit
 
-/// Share the automatic lookup budget across feed, planner, and destination searches.
-/// Queue every location instead of silently dropping entries after a fixed count.
+/// Shares MapKit lookup capacity across destinations, itinerary stops, and companion
+/// places. Two unrelated requests may run together; starts are gently staggered and
+/// only a real MapKit throttle response introduces a longer adaptive backoff.
 @MainActor
 final class MapLookupPacer {
     static let shared = MapLookupPacer()
     private let clock = ContinuousClock()
     private var nextStart: ContinuousClock.Instant?
     private let interval: Duration
+    private let maximumConcurrent: Int
+    private var activeCount = 0
+    private var throttleDelay: Duration = .seconds(1)
+    private var throttleUntil: ContinuousClock.Instant?
 
-    init(interval: Duration = .seconds(2)) { self.interval = interval }
+    init(interval: Duration = .milliseconds(300), maximumConcurrent: Int = 2) {
+        self.interval = interval
+        self.maximumConcurrent = max(1, maximumConcurrent)
+    }
 
+    /// Retained as a small, directly testable primitive. Production searches should
+    /// use `perform`, which also enforces the concurrency ceiling and adaptive backoff.
     func waitForTurn() async -> Bool {
         guard !Task.isCancelled else { return false }
-        let start = max(nextStart ?? clock.now, clock.now)
+        let throttledStart = throttleUntil.map { max($0, clock.now) } ?? clock.now
+        let start = max(nextStart ?? throttledStart, throttledStart)
         nextStart = start.advanced(by: interval)
         do {
             try await clock.sleep(until: start)
@@ -22,6 +33,42 @@ final class MapLookupPacer {
         } catch {
             return false
         }
+    }
+
+    func perform<T>(_ operation: () async throws -> T) async -> Result<T, Error>? {
+        guard await acquireSlot() else { return nil }
+        guard await waitForTurn() else {
+            activeCount -= 1
+            return nil
+        }
+        defer { activeCount -= 1 }
+        do {
+            let value = try await operation()
+            throttleDelay = .seconds(1)
+            return .success(value)
+        } catch {
+            let nsError = error as NSError
+            if nsError.domain == MKError.errorDomain,
+               nsError.code == MKError.Code.loadingThrottled.rawValue {
+                throttleUntil = clock.now.advanced(by: throttleDelay)
+                throttleDelay = min(throttleDelay * 2, .seconds(8))
+            }
+            return .failure(error)
+        }
+    }
+
+    private func acquireSlot() async -> Bool {
+        while activeCount >= maximumConcurrent {
+            guard !Task.isCancelled else { return false }
+            do {
+                try await clock.sleep(for: .milliseconds(40))
+            } catch {
+                return false
+            }
+        }
+        guard !Task.isCancelled else { return false }
+        activeCount += 1
+        return true
     }
 }
 
@@ -41,6 +88,20 @@ nonisolated struct ResolvedDestination: Equatable {
     }
 }
 
+private struct DestinationCacheRecord: Codable {
+    let latitude: Double
+    let longitude: Double
+    let regionName: String?
+    let date: Date
+
+    var destination: ResolvedDestination {
+        ResolvedDestination(
+            coordinate: CLLocationCoordinate2D(latitude: latitude, longitude: longitude),
+            regionName: regionName
+        )
+    }
+}
+
 /// Shared by trip pins and itinerary search regions. Cache only successful exact
 /// destination queries; a failed lookup can be retried and never becomes a nil hit.
 @MainActor
@@ -51,27 +112,38 @@ final class DestinationResolver {
     private let lookup: (String) async -> ResolvedDestination?
     private let lifetime: TimeInterval
     private let capacity: Int
+    private let persistenceKey: String?
 
     init(lifetime: TimeInterval = 86_400, capacity: Int = 256,
          lookup: ((String) async -> ResolvedDestination?)? = nil) {
         self.lifetime = lifetime
         self.capacity = max(1, capacity)
+        self.persistenceKey = lookup == nil ? "mapDestinationCacheV2" : nil
         self.lookup = lookup ?? { query in
             // Geocode cities/regions directly; local search alone can omit them.
-            guard await MapLookupPacer.shared.waitForTurn() else { return nil }
             var item: MKMapItem?
             if let geocoder = MKGeocodingRequest(addressString: query) {
-                item = try? await geocoder.mapItems.first
+                let result = await MapLookupPacer.shared.perform { try await geocoder.mapItems.first }
+                if let result, case .success(let mapItem) = result { item = mapItem }
             }
             if item == nil {
-                guard await MapLookupPacer.shared.waitForTurn() else { return nil }
-                item = try? await MKLocalSearch(request: Self.searchRequest(for: query)).start().mapItems.first
+                let result = await MapLookupPacer.shared.perform {
+                    try await MKLocalSearch(request: Self.searchRequest(for: query)).start().mapItems.first
+                }
+                if let result, case .success(let mapItem) = result { item = mapItem }
             }
             guard let item else { return nil }
             return ResolvedDestination(
                 coordinate: item.location.coordinate,
                 regionName: item.addressRepresentations?.regionName
             )
+        }
+        if let persistenceKey,
+           let data = UserDefaults.standard.data(forKey: persistenceKey),
+           let records = try? JSONDecoder().decode([String: DestinationCacheRecord].self, from: data) {
+            cache = records.reduce(into: [:]) { result, entry in
+                result[entry.key] = (entry.value.date, entry.value.destination)
+            }
         }
     }
 
@@ -85,6 +157,14 @@ final class DestinationResolver {
 
     func coordinate(for destination: String) async -> CLLocationCoordinate2D? {
         await resolve(destination)?.coordinate
+    }
+
+    func mapItem(forPlaceIdentifier rawValue: String) async -> MKMapItem? {
+        guard let identifier = MKMapItem.Identifier(rawValue: rawValue) else { return nil }
+        let request = MKMapItemRequest(mapItemIdentifier: identifier)
+        let result = await MapLookupPacer.shared.perform { try await request.mapItem }
+        guard let result, case .success(let item) = result else { return nil }
+        return item
     }
 
     func resolve(_ destination: String) async -> ResolvedDestination? {
@@ -101,7 +181,22 @@ final class DestinationResolver {
             if cache[key] == nil, cache.count >= capacity,
                let oldest = cache.min(by: { $0.value.date < $1.value.date })?.key { cache[oldest] = nil }
             cache[key] = (Date(), result)
+            persistCache()
         }
         return result
+    }
+
+    private func persistCache() {
+        guard let persistenceKey else { return }
+        let records = cache.mapValues { value in
+            DestinationCacheRecord(
+                latitude: value.destination.coordinate.latitude,
+                longitude: value.destination.coordinate.longitude,
+                regionName: value.destination.regionName,
+                date: value.date
+            )
+        }
+        guard let data = try? JSONEncoder().encode(records) else { return }
+        UserDefaults.standard.set(data, forKey: persistenceKey)
     }
 }

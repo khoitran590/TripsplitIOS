@@ -20,6 +20,19 @@ private actor GatedImages {
     func release(_ index: Int, data: Data?) { continuations.removeValue(forKey: index)?.resume(returning: data) }
 }
 
+private actor LookupConcurrencyProbe {
+    private var active = 0
+    private(set) var peak = 0
+
+    func run() async -> Int {
+        active += 1
+        peak = max(peak, active)
+        try? await Task.sleep(for: .milliseconds(15))
+        active -= 1
+        return active
+    }
+}
+
 @MainActor
 final class PerformanceRegressionTests: XCTestCase {
     func testResolvedPinAppearsBeforeWholeItineraryIsSaved() {
@@ -79,6 +92,113 @@ final class PerformanceRegressionTests: XCTestCase {
         pending.cancel()
         let allowed = await pending.value
         XCTAssertFalse(allowed)
+    }
+
+    func testMapLookupPacerCapsParallelWorkWithoutDroppingRequests() async {
+        let pacer = MapLookupPacer(interval: .milliseconds(1), maximumConcurrent: 2)
+        let probe = LookupConcurrencyProbe()
+        let tasks = (0..<8).map { _ in
+            Task { await pacer.perform { await probe.run() } }
+        }
+        var completed = 0
+        for task in tasks {
+            if case .success? = await task.value { completed += 1 }
+        }
+        let peak = await probe.peak
+        XCTAssertEqual(completed, 8)
+        XCTAssertLessThanOrEqual(peak, 2)
+    }
+
+    func testItineraryConfidenceGateMeetsTwoHundredCaseAccuracyTarget() {
+        struct Case {
+            let name: Double
+            let context: Double
+            let category: Bool
+            let margin: Double
+            let shouldPin: Bool
+        }
+
+        // Deterministic evidence fixtures model unique exact/strong matches and the
+        // ambiguous or weak alternatives that should remain unpinned for review.
+        var strongMatches: [Case] = []
+        for index in 0..<160 {
+            strongMatches.append(Case(
+                name: 88 + Double(index % 12),
+                context: 24 + Double(index % 15),
+                category: true,
+                margin: 16 + Double(index % 13),
+                shouldPin: true
+            ))
+        }
+        var ambiguousMatches: [Case] = []
+        for index in 0..<20 {
+            ambiguousMatches.append(Case(
+                name: 96 + Double(index % 4),
+                context: Double(index % 5),
+                category: true,
+                margin: Double(index % 3),
+                shouldPin: false
+            ))
+        }
+        var weakMatches: [Case] = []
+        for index in 0..<20 {
+            weakMatches.append(Case(
+                name: 45 + Double(index % 16),
+                context: 6 + Double(index % 8),
+                category: false,
+                margin: 2 + Double(index % 6),
+                shouldPin: false
+            ))
+        }
+        let cases = strongMatches + ambiguousMatches + weakMatches
+        let correct = cases.filter { item in
+            let confidence = ItineraryMatchScoring.confidence(
+                nameScore: item.name,
+                contextScore: item.context,
+                categoryMatches: item.category,
+                runnerUpMargin: item.margin
+            )
+            return (confidence >= ItineraryMatchScoring.acceptanceThreshold) == item.shouldPin
+        }.count
+
+        XCTAssertEqual(cases.count, 200)
+        XCTAssertGreaterThanOrEqual(Double(correct) / Double(cases.count), 0.80)
+    }
+
+    func testItineraryConfidenceRejectsEquallyPlausibleChainBranches() {
+        let confidence = ItineraryMatchScoring.confidence(
+            nameScore: 100,
+            contextScore: 0,
+            categoryMatches: true,
+            runnerUpMargin: 0
+        )
+        XCTAssertLessThan(confidence, ItineraryMatchScoring.acceptanceThreshold)
+    }
+
+    func testMapPlaceClusteringReducesDenseWideAreaMarkers() {
+        let places = (0..<12).map { index -> MapPlace in
+            let coordinate = CLLocationCoordinate2D(
+                latitude: 48.8566 + Double(index) * 0.0001,
+                longitude: 2.3522 + Double(index) * 0.0001
+            )
+            let item = MKMapItem(location: CLLocation(
+                latitude: coordinate.latitude,
+                longitude: coordinate.longitude
+            ), address: nil)
+            item.name = "Place \(index)"
+            return MapPlace(mapItem: item, category: .attractions)
+        }
+        let wideRegion = MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: 48.8566, longitude: 2.3522),
+            span: MKCoordinateSpan(latitudeDelta: 0.5, longitudeDelta: 0.5)
+        )
+        let closeRegion = MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: 48.8566, longitude: 2.3522),
+            span: MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)
+        )
+
+        XCTAssertLessThan(MapPlaceClusterer.clusters(for: places, in: wideRegion).count, places.count)
+        XCTAssertEqual(MapPlaceClusterer.clusters(for: places, in: closeRegion).count, places.count)
     }
 
     private func trip(expenseCount: Int = 3) -> Trip {

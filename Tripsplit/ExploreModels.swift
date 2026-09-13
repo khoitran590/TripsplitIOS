@@ -919,12 +919,22 @@ extension Destination {
         var itineraryDays = (0..<dayCount).map { _ in ItineraryDay() }
         for (index, place) in places.enumerated() {
             itineraryDays[index % dayCount].stops.append(
-                ItineraryStop(name: place.name, kind: .location, notes: place.detail)
+                ItineraryStop(
+                    name: place.name,
+                    kind: .location,
+                    notes: place.detail,
+                    area: "\(city), \(country)"
+                )
             )
         }
         for (index, restaurant) in restaurants.enumerated() {
             itineraryDays[index % dayCount].stops.append(
-                ItineraryStop(name: restaurant.name, kind: .restaurant, notes: restaurant.detail)
+                ItineraryStop(
+                    name: restaurant.name,
+                    kind: .restaurant,
+                    notes: restaurant.detail,
+                    area: "\(city), \(country)"
+                )
             )
         }
         let budget = SplitEngine.roundToTwo(budgetValue)

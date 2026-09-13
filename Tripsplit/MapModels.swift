@@ -191,6 +191,12 @@ nonisolated enum ItineraryPinPreview {
         displayed.latitude = preview.latitude
         displayed.longitude = preview.longitude
         displayed.address = preview.address
+        displayed.area = preview.area
+        displayed.placeIdentifier = preview.placeIdentifier
+        displayed.resolvedName = preview.resolvedName
+        displayed.resolutionConfidence = preview.resolutionConfidence
+        displayed.locationSource = preview.locationSource
+        displayed.resolutionVersion = preview.resolutionVersion
         return displayed
     }
 }
@@ -201,6 +207,117 @@ struct ItineraryDayMapStop: Identifiable {
     let coordinate: CLLocationCoordinate2D
 
     var id: UUID { stop.id }
+}
+
+enum ItineraryLocationQuality: Equatable {
+    case exact, automatic, review, missing
+
+    var title: LocalizedStringKey {
+        switch self {
+        case .exact: "Exact place"
+        case .automatic: "Automatically located"
+        case .review: "Check location"
+        case .missing: "Location needed"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .exact: "checkmark.seal.fill"
+        case .automatic: "sparkles"
+        case .review: "exclamationmark.triangle.fill"
+        case .missing: "mappin.slash"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .exact: .green
+        case .automatic: .indigo
+        case .review: .orange
+        case .missing: .secondary
+        }
+    }
+}
+
+extension ItineraryStop {
+    var mapLocationQuality: ItineraryLocationQuality {
+        guard coordinate != nil else { return .missing }
+        if isUserPlaced || locationSource == .userSelected || locationSource == .placeIdentifier {
+            return .exact
+        }
+        guard let confidence = resolutionConfidence else { return .review }
+        return confidence >= ItineraryMatchScoring.acceptanceThreshold ? .automatic : .review
+    }
+}
+
+/// A Sendable, persistable subset of MapKit's result. `MKMapItem` itself is not a
+/// durable cache value; these fields are enough to render immediately and preserve
+/// the Place ID used for an exact refresh.
+nonisolated struct ResolvedItineraryLocation: Codable, Equatable, Sendable {
+    let latitude: Double
+    let longitude: Double
+    let address: String?
+    let resolvedName: String?
+    let placeIdentifier: String?
+    let confidence: Double
+    let source: ItineraryLocationSource
+    let resolvedAt: Date
+
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+}
+
+/// Converts candidate evidence into a calibrated acceptance score. The top-two
+/// margin matters: two equally plausible branches of the same chain should be sent
+/// to review even when both names look perfect.
+nonisolated enum ItineraryMatchScoring {
+    static let acceptanceThreshold = 0.80
+
+    static func confidence(
+        nameScore: Double,
+        contextScore: Double,
+        categoryMatches: Bool,
+        runnerUpMargin: Double
+    ) -> Double {
+        let name = min(max(nameScore / 100, 0), 1)
+        let context = min(max(contextScore / 42, 0), 1)
+        let margin = min(max(runnerUpMargin / 28, 0), 1)
+        let category = categoryMatches ? 1.0 : 0.35
+        return min(max(name * 0.58 + context * 0.18 + category * 0.12 + margin * 0.12, 0), 0.99)
+    }
+}
+
+struct MapPlaceCluster: Identifiable {
+    let places: [MapPlace]
+    let coordinate: CLLocationCoordinate2D
+
+    var id: String { places.map(\.id).sorted().joined(separator: "|") }
+}
+
+enum MapPlaceClusterer {
+    static func clusters(for places: [MapPlace], in region: MKCoordinateRegion?) -> [MapPlaceCluster] {
+        guard let region, places.count > 8,
+              max(region.span.latitudeDelta, region.span.longitudeDelta) > 0.08 else {
+            return places.map { MapPlaceCluster(places: [$0], coordinate: $0.coordinate) }
+        }
+        let latitudeStep = max(region.span.latitudeDelta / 9, 0.0005)
+        let longitudeStep = max(region.span.longitudeDelta / 6, 0.0005)
+        let grouped = Dictionary(grouping: places) { place in
+            let latitudeCell = Int(floor(place.coordinate.latitude / latitudeStep))
+            let longitudeCell = Int(floor(place.coordinate.longitude / longitudeStep))
+            return "\(latitudeCell):\(longitudeCell)"
+        }
+        return grouped.values.map { members in
+            let latitude = members.map { $0.coordinate.latitude }.reduce(0, +) / Double(members.count)
+            let longitude = members.map { $0.coordinate.longitude }.reduce(0, +) / Double(members.count)
+            return MapPlaceCluster(
+                places: members,
+                coordinate: CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+            )
+        }
+    }
 }
 
 struct FeedMapPin: Identifiable {

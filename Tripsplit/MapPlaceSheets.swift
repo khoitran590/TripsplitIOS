@@ -182,6 +182,11 @@ struct AddPlaceToItinerarySheet: View {
             latitude: place.coordinate.latitude,
             longitude: place.coordinate.longitude,
             address: place.addressText,
+            placeIdentifier: place.mapItem.identifier?.rawValue,
+            resolvedName: place.name,
+            resolutionConfidence: 1,
+            locationSource: .userSelected,
+            resolutionVersion: 3,
             // The traveler tapped this exact pin on the map; nothing should second-guess it.
             isUserPlaced: true
         ))

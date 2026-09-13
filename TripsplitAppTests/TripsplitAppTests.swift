@@ -407,7 +407,10 @@ final class TripsplitAppTests: XCTestCase {
         let stop = ItineraryStop(name: "Museum", kind: .activity, cost: 15)
         let encoded = try JSONEncoder().encode(stop)
         var json = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
-        ["latitude", "longitude", "address"].forEach { json.removeValue(forKey: $0) }
+        [
+            "latitude", "longitude", "address", "area", "placeIdentifier",
+            "resolvedName", "resolutionConfidence", "locationSource", "resolutionVersion",
+        ].forEach { json.removeValue(forKey: $0) }
 
         let decoded = try JSONDecoder().decode(
             ItineraryStop.self,
@@ -415,6 +418,10 @@ final class TripsplitAppTests: XCTestCase {
         )
         XCTAssertNil(decoded.coordinate)
         XCTAssertNil(decoded.address)
+        XCTAssertNil(decoded.area)
+        XCTAssertNil(decoded.placeIdentifier)
+        XCTAssertNil(decoded.resolutionConfidence)
+        XCTAssertNil(decoded.locationSource)
         XCTAssertEqual(decoded.name, "Museum")
     }
 
@@ -532,12 +539,24 @@ final class TripsplitAppTests: XCTestCase {
             name: "Night Market",
             latitude: location.latitude,
             longitude: location.longitude,
-            address: location.address
+            address: location.address,
+            area: "Xinyi, Taipei, Taiwan",
+            placeIdentifier: "I1234567890",
+            resolvedName: "Taipei Night Market",
+            resolutionConfidence: 0.94,
+            locationSource: .automatic,
+            resolutionVersion: 3
         )
         let decodedStop = try JSONDecoder().decode(ItineraryStop.self, from: JSONEncoder().encode(stop))
         XCTAssertEqual(decodedStop.coordinate?.latitude, location.latitude)
         XCTAssertEqual(decodedStop.coordinate?.longitude, location.longitude)
         XCTAssertEqual(decodedStop.address, location.address)
+        XCTAssertEqual(decodedStop.area, "Xinyi, Taipei, Taiwan")
+        XCTAssertEqual(decodedStop.placeIdentifier, "I1234567890")
+        XCTAssertEqual(decodedStop.resolvedName, "Taipei Night Market")
+        XCTAssertEqual(decodedStop.resolutionConfidence, 0.94)
+        XCTAssertEqual(decodedStop.locationSource, .automatic)
+        XCTAssertEqual(decodedStop.resolutionVersion, 3)
     }
 
     func testStructuredAIRateLimitRetryDelay() throws {

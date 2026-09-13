@@ -75,8 +75,10 @@ final class ExploreMapModel {
             // addresses. Restricting this prevents a similarly named road/address
             // from winning over the actual attraction or restaurant.
             request.resultTypes = .pointOfInterest
-            guard await MapLookupPacer.shared.waitForTurn() else { return nil }
-            let items = (try? await MKLocalSearch(request: request).start())?.mapItems ?? []
+            let result = await MapLookupPacer.shared.perform {
+                try await MKLocalSearch(request: request).start().mapItems
+            }
+            guard let result, case .success(let items) = result else { continue }
             scoredResults += items.map {
                 (score: matchScore($0, for: focus, queryIndex: queryIndex, isRestaurant: isRestaurant), item: $0)
             }
