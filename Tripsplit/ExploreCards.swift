@@ -269,8 +269,8 @@ struct AdventureCard: View {
                 // text line carried, but scannable.
                 HStack(spacing: 6) {
                     coverChip(Text("\(destination.days) days"), icon: "calendar")
-                    coverChip(Text(verbatim: "\(destination.stops)"), icon: "mappin.and.ellipse")
-                        .accessibilityLabel("\(destination.stops) stops")
+                    coverChip(Text(verbatim: "\(destination.recommendedStopCount)"), icon: "mappin.and.ellipse")
+                        .accessibilityLabel("\(destination.recommendedStopCount) recommended stops")
                     coverChip(Text(verbatim: destination.price), icon: nil)
                     Spacer(minLength: 6)
                     if showsCTA {
@@ -379,8 +379,8 @@ struct CountryTripCard: View {
                 HStack(spacing: 10) {
                     fact(Text(verbatim: "\(destination.days)"), icon: "calendar")
                         .accessibilityLabel("\(destination.days) days")
-                    fact(Text(verbatim: "\(destination.stops)"), icon: "mappin.and.ellipse")
-                        .accessibilityLabel("\(destination.stops) stops")
+                    fact(Text(verbatim: "\(destination.recommendedStopCount)"), icon: "mappin.and.ellipse")
+                        .accessibilityLabel("\(destination.recommendedStopCount) recommended stops")
                     if let style {
                         fact(Text(style.title), icon: style.systemImage)
                     }
@@ -440,7 +440,7 @@ struct MatchingTripCard: View {
                     .lineLimit(1)
                 // Same facts as the rail cards, so a guide reads the same wherever it
                 // appears.
-                Text("\(destination.days)d · \(destination.stops) stops · \(destination.price)")
+                Text("\(destination.days)d · \(destination.recommendedStopCount) recommended · \(destination.price)")
                     .font(.app(.caption2, .semibold))
                     .foregroundStyle(.white)
                     .lineLimit(1)

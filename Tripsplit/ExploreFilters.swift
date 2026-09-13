@@ -159,11 +159,16 @@ enum ExploreGatedAction: Equatable {
     /// a search that matched no curated guide.
     case createItinerary(prefill: String?)
     case startItinerary(destinationID: String, startDate: Date?)
+    case submitCommunityGuide
+    case startCommunityItinerary(guideID: UUID, startDate: Date?)
+    case reportCommunityGuide(guideID: UUID)
 
     var title: LocalizedStringKey {
         switch self {
         case .save: "Sign in to save this guide"
-        case .createItinerary, .startItinerary: "Sign in to start planning"
+        case .createItinerary, .startItinerary, .startCommunityItinerary: "Sign in to start planning"
+        case .submitCommunityGuide: "Sign in to share your guide"
+        case .reportCommunityGuide: "Sign in to report this guide"
         }
     }
 
@@ -175,6 +180,12 @@ enum ExploreGatedAction: Equatable {
             "Your itinerary lives on your account so you can edit it anywhere and invite tripmates to plan with you."
         case .startItinerary:
             "We'll copy this guide into an editable plan on your account as soon as you're signed in."
+        case .submitCommunityGuide:
+            "Community guides are connected to your account so travelers know who curated them and recommendations can be moderated safely."
+        case .startCommunityItinerary:
+            "We'll copy this community guide into an editable plan on your account as soon as you're signed in."
+        case .reportCommunityGuide:
+            "Reports are private and connected to your account so the TripSplit moderation team can review them safely."
         }
     }
 }

@@ -35,7 +35,7 @@ final class DestinationStopsLoader {
         defer { isLoading = false }
 
         var resolved: [Stop] = []
-        for item in destination.places.prefix(Self.maxStops) {
+        for item in destination.recommendedPlaces.prefix(Self.maxStops) {
             if Task.isCancelled { return }
             guard let coordinate = await Self.coordinate(for: item, in: destination) else { continue }
             resolved.append(Stop(id: item.id, name: item.name, coordinate: coordinate))
@@ -57,6 +57,9 @@ final class DestinationStopsLoader {
         for item: TravelPlanItem,
         in destination: Destination
     ) async -> CLLocationCoordinate2D? {
+        if let latitude = item.latitude, let longitude = item.longitude {
+            return CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+        }
         let request = MKLocalSearch.Request()
         request.naturalLanguageQuery = "\(item.mapSearchTerm), \(destination.city), \(destination.country)"
         request.region = MKCoordinateRegion(
@@ -140,10 +143,19 @@ struct DestinationDetailView: View {
     /// it, so users don't have to start planning from scratch. The date is optional —
     /// an undated copy is still a perfectly good wish-list.
     var onUseAsPlan: (Date?) -> Void = { _ in }
+    /// Community guides are public rather than profile bookmarks, so their detail
+    /// page swaps the editorial save control for reporting or owner management.
+    var showsSaveAction = true
+    var onReport: (() -> Void)? = nil
+    var onEdit: (() -> Void)? = nil
+    var onDelete: (() async throws -> Void)? = nil
 
     @State private var showUseAsPlanConfirm = false
     @State private var hasStartDate = false
     @State private var startDate = Date()
+    @State private var showDeleteConfirmation = false
+    @State private var isDeleting = false
+    @State private var managementError: String?
 
     private enum DetailTab: String, CaseIterable, Identifiable {
         case overview = "Overview"
@@ -187,15 +199,67 @@ struct DestinationDetailView: View {
                 }
                 .accessibilityLabel("Share this guide")
 
-                Button(action: onToggleSave) {
-                    Image(systemName: isSaved ? "heart.fill" : "heart")
-                        .foregroundStyle(isSaved ? AnyShapeStyle(.red) : AnyShapeStyle(.primary))
+                if showsSaveAction {
+                    Button(action: onToggleSave) {
+                        Image(systemName: isSaved ? "heart.fill" : "heart")
+                            .foregroundStyle(isSaved ? AnyShapeStyle(.red) : AnyShapeStyle(.primary))
+                    }
+                    .accessibilityLabel(Text(isSaved ? "Remove from saved" : "Save"))
+                } else if onReport != nil || onEdit != nil || onDelete != nil {
+                    Menu {
+                        if let onEdit {
+                            Button(action: onEdit) {
+                                Label("Edit guide", systemImage: "pencil")
+                            }
+                        }
+                        if let onReport {
+                            Button(role: .destructive, action: onReport) {
+                                Label("Report guide", systemImage: "exclamationmark.bubble")
+                            }
+                        }
+                        if onDelete != nil {
+                            Divider()
+                            Button(role: .destructive) {
+                                showDeleteConfirmation = true
+                            } label: {
+                                Label("Delete guide", systemImage: "trash")
+                            }
+                        }
+                    } label: {
+                        if isDeleting {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "ellipsis.circle")
+                        }
+                    }
+                    .disabled(isDeleting)
+                    .accessibilityLabel("Community guide options")
                 }
-                .accessibilityLabel(Text(isSaved ? "Remove from saved" : "Save"))
             }
         }
         .safeAreaInset(edge: .bottom) {
             detailActionBar
+        }
+        .confirmationDialog(
+            "Delete this community guide?",
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Guide", role: .destructive) { deleteGuide() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the guide for everyone. It won’t delete itineraries that travelers already created from it.")
+        }
+        .alert(
+            "Couldn’t delete guide",
+            isPresented: Binding(
+                get: { managementError != nil },
+                set: { if !$0 { managementError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(verbatim: managementError ?? "Please try again.")
         }
     }
 
@@ -207,19 +271,32 @@ struct DestinationDetailView: View {
             "",
             destination.blurb,
             "",
-            "\(destination.days) days · \(destination.price) · \(destination.stops) stops",
+            "\(destination.days) days · \(destination.price) · \(destination.recommendedStopCount) recommended stops",
         ]
-        let highlights = destination.places.prefix(4).map(\.name)
+        let highlights = destination.recommendedPlaces.prefix(4).map(\.name)
         if !highlights.isEmpty {
             lines.append("Highlights: \(highlights.joined(separator: ", "))")
         }
-        let eats = destination.restaurants.prefix(3).map(\.name)
+        let eats = destination.recommendedRestaurants.prefix(3).map(\.name)
         if !eats.isEmpty {
             lines.append("Eat at: \(eats.joined(separator: ", "))")
         }
         lines.append("")
         lines.append("Shared from TripSplit")
         return lines.joined(separator: "\n")
+    }
+
+    private func deleteGuide() {
+        guard let onDelete, !isDeleting else { return }
+        isDeleting = true
+        Task {
+            do {
+                try await onDelete()
+            } catch {
+                managementError = (error as? AuthError)?.message ?? "The community guide could not be deleted."
+                isDeleting = false
+            }
+        }
     }
 
     /// The underlined segmented tab strip below the navigation bar.
@@ -288,11 +365,13 @@ struct DestinationDetailView: View {
             HStack(spacing: 12) {
                 statTile(value: destination.price, label: "Est. total")
                 statTile(value: destination.dailyBudget, label: "Budget")
-                statTile(value: "\(destination.stops)", label: "Stops")
+                statTile(value: "\(destination.recommendedStopCount)", label: "Recommended")
             }
 
+            recommendationSummary
+
             DestinationStopsMap(destination: destination) {
-                if let firstPlace = destination.places.first {
+                if let firstPlace = destination.recommendedPlaces.first {
                     mapModel.showOnMap(firstPlace, in: destination)
                 }
             }
@@ -437,6 +516,77 @@ struct DestinationDetailView: View {
         .readableSurface(cornerRadius: Theme.cardRadius)
     }
 
+    /// Makes the guide's constraints actionable at the top of the overview. The
+    /// detailed tabs still expose every curated option, but these are the places that
+    /// will be copied into a new itinerary for this guide's length and budget.
+    private var recommendationSummary: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Recommended for your trip", systemImage: "wand.and.stars")
+                .font(Theme.Typography.sectionTitle)
+
+            Text(destination.recommendationSummary)
+                .font(Theme.Typography.secondary)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            ForEach(Array(destination.recommendedPlaces.prefix(3).enumerated()), id: \.element.id) { index, item in
+                Button {
+                    mapModel.showOnMap(item, in: destination)
+                } label: {
+                    recommendationRow(index: index, item: item)
+                }
+                .buttonStyle(.plain)
+            }
+
+            HStack(spacing: 8) {
+                Image(systemName: "fork.knife")
+                    .foregroundStyle(.tint)
+                Text("Plus \(destination.recommendedRestaurants.count) meal picks matched to the same budget.")
+                    .font(Theme.Typography.metadata)
+                    .foregroundStyle(.secondary)
+            }
+
+            Button("See all recommended stops") {
+                withAnimation(.snappy(duration: 0.2)) { tab = .thingsToDo }
+            }
+            .font(.app(.subheadline, .semibold))
+            .foregroundStyle(.tint)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .readableSurface(cornerRadius: Theme.cardRadius)
+    }
+
+    private func recommendationRow(index: Int, item: TravelPlanItem) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text("\(index + 1)")
+                .font(.app(.caption, .bold))
+                .foregroundStyle(Theme.onAccent)
+                .frame(width: 24, height: 24)
+                .background(Theme.accent, in: .circle)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(item.name)
+                        .font(.app(.subheadline, .semibold))
+                    Text(item.cost)
+                        .font(.app(.caption2, .bold))
+                        .foregroundStyle(.secondary)
+                }
+                Text(item.detail)
+                    .font(Theme.Typography.metadata)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "map")
+                .font(.app(.caption, .semibold))
+                .foregroundStyle(.tint)
+        }
+        .contentShape(.rect)
+    }
+
     private func guideRow(icon: String, title: String, detail: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: icon)
@@ -471,12 +621,24 @@ struct DestinationDetailView: View {
     /// A numbered TripAdvisor-style list of places or restaurants. Tapping a row
     /// drops a pin on the Map tab so the user can see where it is.
     private func planList(_ items: [TravelPlanItem], isRestaurant: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("Tap a spot to see it on the map", systemImage: "mappin.and.ellipse")
+        let recommended = isRestaurant ? destination.recommendedRestaurants : destination.recommendedPlaces
+        let recommendedIDs = Set(recommended.map(\.id))
+        let remaining = items.filter { !recommendedIDs.contains($0.id) }
+
+        return VStack(alignment: .leading, spacing: 12) {
+            Label {
+                Text(
+                    isRestaurant
+                        ? "Recommended meal picks for this budget"
+                        : "Recommended locations for this trip"
+                )
+            } icon: {
+                Image(systemName: "wand.and.stars")
+            }
                 .font(Theme.Typography.metadata)
                 .foregroundStyle(.secondary)
 
-            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+            ForEach(Array(recommended.enumerated()), id: \.element.id) { index, item in
                 Button {
                     mapModel.showOnMap(item, in: destination)
                 } label: {
@@ -485,6 +647,24 @@ struct DestinationDetailView: View {
                 .buttonStyle(.plain)
                 .contentShape(.rect)
                 .accessibilityHint("Opens \(item.mapSearchTerm) on the map")
+            }
+
+            if !remaining.isEmpty {
+                Label("More curated options", systemImage: "ellipsis.circle")
+                    .font(Theme.Typography.metadata)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 8)
+
+                ForEach(Array(remaining.enumerated()), id: \.element.id) { index, item in
+                    Button {
+                        mapModel.showOnMap(item, in: destination)
+                    } label: {
+                        planRow(index: recommended.count + index, item: item, isRestaurant: isRestaurant)
+                    }
+                    .buttonStyle(.plain)
+                    .contentShape(.rect)
+                    .accessibilityHint("Opens \(item.mapSearchTerm) on the map")
+                }
             }
         }
     }

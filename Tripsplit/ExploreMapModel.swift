@@ -33,13 +33,16 @@ final class ExploreMapModel {
     /// Focus the Map tab on `item` within `destination`. Shows the city center
     /// immediately, then refines to the exact place + details via an on-device search.
     func showOnMap(_ item: TravelPlanItem, in destination: Destination) {
+        let selectedCoordinate = item.coordinate
         focus = MapFocus(
             item: item,
             destination: destination,
-            coordinate: destination.coordinate,
-            mapItem: nil
+            coordinate: selectedCoordinate ?? destination.coordinate,
+            mapItem: nil,
+            isResolving: selectedCoordinate == nil
         )
         navigateRequest += 1
+        guard selectedCoordinate == nil else { return }
         let token = navigateRequest
         Task(priority: .userInitiated) { await refine(token: token) }
     }
@@ -280,6 +283,11 @@ nonisolated enum ItineraryPinScope {
 }
 
 extension TravelPlanItem {
+    var coordinate: CLLocationCoordinate2D? {
+        guard let latitude, let longitude else { return nil }
+        return CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+
     /// The single, real-world landmark or venue that should receive the pin. Some
     /// itinerary labels intentionally group a neighborhood, a walk, or multiple
     /// stops; using that label verbatim makes MapKit return an arbitrary business

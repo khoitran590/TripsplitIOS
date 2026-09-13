@@ -5,7 +5,7 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select plan(38);
+select plan(49);
 
 select has_table('public', 'financial_audit_events', 'financial audit table exists');
 select has_table('public', 'storage_attachments', 'storage attachment ACL table exists');
@@ -13,6 +13,7 @@ select has_table('public', 'ai_processing_consents', 'AI consent receipts exist'
 select has_table('public', 'user_blocks', 'user block table exists');
 select has_table('public', 'content_reports', 'protected report queue exists');
 select has_table('public', 'trip_removed_members', 'removed-member capability tombstones exist');
+select has_table('public', 'community_trip_guides', 'community trip guides exist');
 
 select col_not_null('public', 'trip_expenses', 'created_by', 'expense creator is immutable/non-null');
 select col_not_null('public', 'settlement_records', 'created_by', 'settlement creator is immutable/non-null');
@@ -50,6 +51,46 @@ select ok(
 );
 select ok(has_table_privilege('authenticated', 'public.trip_feed_posts', 'DELETE'),
           'authenticated authors and owners can delete feed posts through RLS');
+select ok(has_table_privilege('anon', 'public.community_trip_guides', 'SELECT'),
+          'anonymous users can browse community guides through RLS');
+select ok(has_column_privilege('authenticated', 'public.community_trip_guides', 'title', 'INSERT'),
+          'authenticated users can publish community guides with scoped columns');
+select col_not_null('public', 'community_trip_guides', 'best_base',
+                    'community guides require a best-base recommendation');
+select col_not_null('public', 'community_trip_guides', 'getting_around',
+                    'community guides require local transportation guidance');
+select col_not_null('public', 'community_trip_guides', 'book_first',
+                    'community guides require booking guidance');
+select ok(
+    has_column_privilege('authenticated', 'public.community_trip_guides', 'best_base', 'UPDATE')
+    and has_table_privilege('authenticated', 'public.community_trip_guides', 'DELETE'),
+    'authenticated authors receive scoped guide-management privileges'
+);
+select ok(
+    (select count(*) from pg_policies
+      where schemaname = 'public'
+        and tablename = 'community_trip_guides'
+        and policyname in (
+            'Authors update their community guides',
+            'Authors delete their community guides'
+        )) = 2,
+    'community guides retain owner-only update and delete policies'
+);
+select ok(not has_function_privilege('anon', 'public.has_block_between(uuid,uuid)', 'EXECUTE'),
+          'anonymous users cannot inspect private block relationships');
+select ok(has_function_privilege('authenticated', 'public.has_block_between(uuid,uuid)', 'EXECUTE'),
+          'authenticated policies can enforce reciprocal blocks');
+select ok(
+    (select count(*) from pg_policies
+      where schemaname = 'public'
+        and tablename = 'community_trip_guides'
+        and cmd = 'SELECT'
+        and policyname in (
+            'Anonymous users read community guides',
+            'Authenticated users read unblocked community guides'
+        )) = 2,
+    'community-guide reads use separate anonymous and authenticated policies'
+);
 
 select is((select count(*)::integer from pg_policies
            where schemaname = 'public' and tablename = 'trip_expenses'

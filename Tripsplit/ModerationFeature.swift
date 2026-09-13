@@ -42,6 +42,18 @@ actor ModerationService {
     }
 
     func report(_ target: ModerationTarget, reason: ReportReason, details: String, accessToken: String) async throws {
+        if target.contentType == "community_trip" {
+            _ = try await rpc(
+                "report_community_trip_guide",
+                body: [
+                    "p_guide_id": target.contentID.uuidString,
+                    "p_reason": reason.rawValue,
+                    "p_details": details,
+                ],
+                accessToken: accessToken
+            )
+            return
+        }
         _ = try await rpc(
             "report_content",
             body: [

@@ -34,6 +34,147 @@ final class TripsplitAppTests: XCTestCase {
         }
     }
 
+    func testCuratedRecommendationsUseDaysAndBudget() {
+        let options = [
+            TravelPlanItem(name: "Free park", detail: "", cost: "Free"),
+            TravelPlanItem(name: "Local museum", detail: "", cost: "Low"),
+            TravelPlanItem(name: "Signature tour", detail: "", cost: "Mid-high"),
+            TravelPlanItem(name: "Premium experience", detail: "", cost: "High")
+        ]
+        let restaurants = [TravelPlanItem(name: "Local cafe", detail: "", cost: "$")]
+
+        let tightGuide = Destination(
+            id: "test-tight", title: "Tight", city: "Test City", country: "USA",
+            tags: ["3 days", "Urban"], planner: "Test", price: "$300",
+            dailyBudget: "~$100/day", stops: 4, isFeatured: false, symbol: "building.2.fill",
+            colors: [.blue, .green], places: options, restaurants: restaurants,
+            plannerNote: ""
+        )
+        let generousGuide = Destination(
+            id: "test-generous", title: "Generous", city: "Test City", country: "USA",
+            tags: ["3 days", "Urban"], planner: "Test", price: "$6.0k",
+            dailyBudget: "~$2,000/day", stops: 4, isFeatured: false, symbol: "building.2.fill",
+            colors: [.blue, .green], places: options, restaurants: restaurants,
+            plannerNote: ""
+        )
+
+        XCTAssertEqual(tightGuide.recommendedPlaces.count, 3, "A three-day guide should pick three places.")
+        XCTAssertFalse(tightGuide.recommendedPlaces.contains { $0.name == "Premium experience" })
+        XCTAssertTrue(generousGuide.recommendedPlaces.contains { $0.name == "Premium experience" })
+    }
+
+    func testStarterTripCopiesOnlyRecommendedStopsWithEstimatedCosts() {
+        let destination = Destination.all.first { $0.id == "bali" }!
+        let trip = destination.starterTrip(creator: alice)
+        let copiedStops = trip.itinerary?.days.flatMap(\.stops) ?? []
+
+        XCTAssertEqual(copiedStops.count, destination.recommendedStopCount)
+        XCTAssertEqual(trip.itinerary?.days.count, destination.days)
+        XCTAssertTrue(copiedStops.contains { $0.cost > 0 })
+    }
+
+    func testCommunityGuideDraftRequiresTheCompleteCuratedFramework() {
+        var draft = CommunityTripDraft()
+        XCTAssertFalse(draft.canPublish)
+
+        draft.title = "A Local Weekend"
+        draft.city = "Portland"
+        draft.country = "USA"
+        draft.budgetText = "850"
+        draft.plannerNote = "Stay near a frequent transit line and keep one afternoon open."
+        draft.bestBase = "Pearl District or downtown near MAX."
+        draft.gettingAround = "Use MAX and the streetcar, then walk within neighborhoods."
+        draft.bookFirst = "Reserve timed garden entry on busy weekends."
+        draft.places[0].name = "Forest Park"
+        draft.places[0].detail = "Start early for the quietest trails."
+        draft.places[0].address = "Portland, OR"
+        draft.places[0].latitude = 45.5722
+        draft.places[0].longitude = -122.7720
+        draft.places[0].placeIdentifier = "forest-park-place-id"
+        draft.restaurants[0].name = "Neighborhood food carts"
+        draft.restaurants[0].detail = "Share a few dishes instead of choosing one stall."
+
+        XCTAssertTrue(draft.canPublish)
+        XCTAssertEqual(draft.preparedPlaces.first?.name, "Forest Park")
+        XCTAssertEqual(draft.preparedPlaces.first?.latitude, 45.5722)
+        XCTAssertEqual(draft.preparedPlaces.first?.placeIdentifier, "forest-park-place-id")
+        XCTAssertEqual(draft.preparedRestaurants.first?.cost, "Low")
+    }
+
+    func testCommunityGuideUsesExistingStarterItineraryFramework() {
+        let guide = CommunityTripGuide.preview
+        let destination = guide.destination
+        let trip = destination.starterTrip(creator: alice)
+
+        XCTAssertEqual(destination.title, guide.title)
+        XCTAssertEqual(destination.planner, guide.authorName)
+        XCTAssertEqual(destination.coordinate.latitude, guide.latitude!, accuracy: 0.0001)
+        XCTAssertEqual(destination.coordinate.longitude, guide.longitude!, accuracy: 0.0001)
+        XCTAssertEqual(destination.practicalGuide.base, guide.bestBase)
+        XCTAssertEqual(destination.practicalGuide.transport, guide.gettingAround)
+        XCTAssertEqual(destination.practicalGuide.booking, guide.bookFirst)
+        XCTAssertEqual(trip.name, guide.title)
+        XCTAssertEqual(trip.itinerary?.days.count, guide.days)
+        XCTAssertFalse(trip.itinerary?.days.flatMap(\.stops).isEmpty ?? true)
+    }
+
+    func testCommunityAutocompletePlaceMetadataReachesStarterItinerary() {
+        var guide = CommunityTripGuide.preview
+        guide.places[0].address = "Largo das Portas do Sol, Lisboa"
+        guide.places[0].latitude = 38.7125
+        guide.places[0].longitude = -9.1306
+        guide.places[0].placeIdentifier = "portas-do-sol-place-id"
+
+        let trip = guide.destination.starterTrip(creator: alice)
+        let stop = trip.itinerary?.days.flatMap(\.stops).first {
+            $0.name == guide.places[0].name
+        }
+
+        XCTAssertEqual(stop?.address, guide.places[0].address)
+        XCTAssertEqual(stop?.latitude, guide.places[0].latitude)
+        XCTAssertEqual(stop?.longitude, guide.places[0].longitude)
+        XCTAssertEqual(stop?.placeIdentifier, guide.places[0].placeIdentifier)
+        XCTAssertEqual(stop?.locationSource, .userSelected)
+        XCTAssertEqual(stop?.isUserPlaced, true)
+    }
+
+    func testCommunitySelectedPlaceOpensAtItsExactMapCoordinate() {
+        let item = TravelPlanItem(
+            name: "Miradouro das Portas do Sol",
+            detail: "Alfama viewpoint",
+            cost: "Free",
+            address: "Largo Portas do Sol, Lisboa",
+            latitude: 38.7125,
+            longitude: -9.1306,
+            placeIdentifier: "portas-do-sol-place-id"
+        )
+        let model = ExploreMapModel()
+
+        model.showOnMap(item, in: CommunityTripGuide.preview.destination)
+
+        guard let focus = model.focus else {
+            XCTFail("Expected the selected community place to become the map focus.")
+            return
+        }
+        XCTAssertEqual(focus.coordinate.latitude, item.latitude!, accuracy: 0.0001)
+        XCTAssertEqual(focus.coordinate.longitude, item.longitude!, accuracy: 0.0001)
+        XCTAssertEqual(focus.addressText, item.address)
+        XCTAssertEqual(focus.isResolving, false)
+    }
+
+    func testCommunityGuideCanHydrateAnEditableDraft() {
+        let guide = CommunityTripGuide.preview
+        let draft = CommunityTripDraft(guide: guide)
+
+        XCTAssertEqual(draft.title, guide.title)
+        XCTAssertEqual(draft.bestBase, guide.bestBase)
+        XCTAssertEqual(draft.gettingAround, guide.gettingAround)
+        XCTAssertEqual(draft.bookFirst, guide.bookFirst)
+        XCTAssertEqual(draft.places.map(\.id), guide.places.map(\.id))
+        XCTAssertEqual(draft.restaurants.map(\.name), guide.restaurants.map(\.name))
+        XCTAssertTrue(draft.canPublish)
+    }
+
     private func contrast(_ first: Color, against second: Color, traits: UITraitCollection) -> Double {
         let a = relativeLuminance(UIColor(first).resolvedColor(with: traits))
         let b = relativeLuminance(UIColor(second).resolvedColor(with: traits))

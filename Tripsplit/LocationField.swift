@@ -49,12 +49,16 @@ extension PlaceSearchCompleter: MKLocalSearchCompleterDelegate {
 struct LocationField: View {
     @Binding var text: String
     var placeholder = "Location (e.g. Vietnam)"
+    /// Optional hook for flows that need the exact Apple Maps result rather than just
+    /// its display name (for example, to preview and persist a destination pin).
+    var onResolvedSelection: ((MKLocalSearchCompletion, MKMapItem) -> Void)?
 
     @StateObject private var completer = PlaceSearchCompleter()
     @FocusState private var focused: Bool
     /// True while filling the field from a tapped suggestion, so `onChange` doesn't
     /// immediately re-query and reopen the list.
     @State private var isSelecting = false
+    @State private var isResolvingSelection = false
 
     private var visibleSuggestions: [MKLocalSearchCompletion] {
         Array(completer.suggestions.prefix(5))
@@ -68,6 +72,11 @@ struct LocationField: View {
                     .focused($focused)
                     .autocorrectionDisabled()
                     .submitLabel(.done)
+                if isResolvingSelection {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel("Finding location")
+                }
                 if !text.isEmpty {
                     Button {
                         text = ""
@@ -117,9 +126,24 @@ struct LocationField: View {
     }
 
     private func select(_ suggestion: MKLocalSearchCompletion) {
-        isSelecting = true
+        isSelecting = text != suggestion.title
         text = suggestion.title
         completer.clear()
         focused = false
+        if onResolvedSelection != nil {
+            Task { await resolve(suggestion) }
+        }
+    }
+
+    private func resolve(_ suggestion: MKLocalSearchCompletion) async {
+        isResolvingSelection = true
+        defer { isResolvingSelection = false }
+        let request = MKLocalSearch.Request(completion: suggestion)
+        let result = await MapLookupPacer.shared.perform {
+            try await MKLocalSearch(request: request).start().mapItems.first
+        }
+        guard let result, case .success(let item) = result, let item,
+              text == suggestion.title else { return }
+        onResolvedSelection?(suggestion, item)
     }
 }

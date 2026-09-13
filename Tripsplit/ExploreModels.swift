@@ -17,6 +17,15 @@ struct Destination: Identifiable {
     let places: [TravelPlanItem]
     let restaurants: [TravelPlanItem]
     let plannerNote: String
+    /// Community authors provide the same practical guidance shown by editorial
+    /// guides. Bundled destinations leave these nil and use the curated switch below.
+    var customBestBase: String? = nil
+    var customGettingAround: String? = nil
+    var customBookFirst: String? = nil
+    /// Community guides resolve their destination at publish time. Bundled guides
+    /// leave these nil and continue using the stable city centers below.
+    var customLatitude: Double? = nil
+    var customLongitude: Double? = nil
 }
 
 struct TravelPlanItem: Identifiable {
@@ -24,6 +33,30 @@ struct TravelPlanItem: Identifiable {
     let name: String
     let detail: String
     let cost: String
+    /// Exact place metadata is present for traveler-selected community suggestions.
+    /// Bundled editorial recommendations continue to use nil and resolve lazily.
+    var address: String? = nil
+    var latitude: Double? = nil
+    var longitude: Double? = nil
+    var placeIdentifier: String? = nil
+}
+
+extension TravelPlanItem {
+    /// A deliberately broad USD estimate used for ranking recommendations. The
+    /// curated price labels are intentionally friendly rather than pretending to be
+    /// exact quotes, so this is only used to keep a guide's mix of free, paid, and
+    /// premium stops aligned with its stated daily budget.
+    var estimatedCostUSD: Double {
+        switch cost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "free": 0
+        case "low", "$": 15
+        case "low-mid", "$-$$": 35
+        case "mid", "$$": 65
+        case "mid-high", "$$-$$$": 110
+        case "high", "$$$": 180
+        default: 45
+        }
+    }
 }
 
 extension Destination {
@@ -749,7 +782,13 @@ extension Destination {
     /// deliberately specific enough to shape an itinerary, but avoid brittle
     /// claims such as exact hours, fares, or availability that can change.
     var practicalGuide: PracticalGuide {
-        switch id {
+        if let base = customBestBase?.trimmingCharacters(in: .whitespacesAndNewlines),
+           let transport = customGettingAround?.trimmingCharacters(in: .whitespacesAndNewlines),
+           let booking = customBookFirst?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !base.isEmpty, !transport.isEmpty, !booking.isEmpty {
+            return .init(base: base, transport: transport, booking: booking)
+        }
+        return switch id {
         case "tokyo": .init(base: "Ueno, Ginza, or Shinjuku for easy rail access.", transport: "Use an IC transit card; plan days by neighborhood.", booking: "Timed attractions and popular dinner slots.")
         case "kyoto": .init(base: "Gion, Kawaramachi, or Kyoto Station for a compact base.", transport: "Buses are useful, but group each day by district.", booking: "Temple-area meals and any seasonal evening visits.")
         case "seoul": .init(base: "Jongno for palaces, Myeongdong for transit, Hongdae for nights.", transport: "Metro first; use a taxi for late, cross-city hops.", booking: "Palace tours and a few restaurant backups.")
@@ -831,7 +870,10 @@ extension Destination {
     /// City-center coordinate, used to bias the Map tab's POI search and as the
     /// fallback pin location when a specific place can't be resolved.
     var coordinate: CLLocationCoordinate2D {
-        switch id {
+        if let customLatitude, let customLongitude {
+            return CLLocationCoordinate2D(latitude: customLatitude, longitude: customLongitude)
+        }
+        return switch id {
         case "tokyo": CLLocationCoordinate2D(latitude: 35.6762, longitude: 139.6503)
         case "kyoto": CLLocationCoordinate2D(latitude: 35.0116, longitude: 135.7681)
         case "seoul": CLLocationCoordinate2D(latitude: 37.5665, longitude: 126.9780)
@@ -892,6 +934,66 @@ extension Destination {
         return Double(trimmed) ?? 0
     }
 
+    /// The amount of a guide's all-in daily budget that is reasonable to spend on
+    /// places and activities. Lodging, transport, and meals make up the rest, so the
+    /// recommendation engine uses a conservative share instead of comparing an
+    /// attraction directly with the whole trip budget.
+    var experienceBudgetPerDayUSD: Double {
+        max(25, budgetValue / Double(max(days, 1)) * 0.22)
+    }
+
+    /// Picks one meaningful location per day for shorter guides, then caps the list
+    /// at six so a longer guide still feels edited. The ranking favors stops that fit
+    /// the guide's daily budget, while preserving the editorial order for ties.
+    var recommendedPlaces: [TravelPlanItem] {
+        recommendedItems(from: places, count: max(3, min(days, 6)))
+    }
+
+    /// Restaurants are rotated less frequently than sightseeing stops: two meal
+    /// anchors cover a short break and up to four options give a week-long trip
+    /// variety without turning the guide into a directory.
+    var recommendedRestaurants: [TravelPlanItem] {
+        recommendedItems(from: restaurants, count: max(2, min((days + 1) / 2, 4)))
+    }
+
+    /// The count shown on a guide reflects the recommendations a traveler will
+    /// actually receive, rather than the larger editorial pool behind the guide.
+    var recommendedStopCount: Int {
+        recommendedPlaces.count + recommendedRestaurants.count
+    }
+
+    var recommendationSummary: String {
+        "\(recommendedPlaces.count) locations selected for \(days) days at \(dailyBudget)"
+    }
+
+    private func recommendedItems(from items: [TravelPlanItem], count: Int) -> [TravelPlanItem] {
+        guard !items.isEmpty else { return [] }
+        let target = experienceBudgetPerDayUSD
+        let ranked = items.enumerated().sorted { lhs, rhs in
+            let leftScore = recommendationScore(for: lhs.element, target: target)
+            let rightScore = recommendationScore(for: rhs.element, target: target)
+            if leftScore == rightScore { return lhs.offset < rhs.offset }
+            return leftScore > rightScore
+        }
+        let selectedIDs = Set(ranked.prefix(min(count, items.count)).map { $0.element.id })
+        // Keep the guide's geographic/editorial sequence once the budget-aware
+        // selection is made, so a day-by-day plan does not jump around unexpectedly.
+        return items.filter { selectedIDs.contains($0.id) }
+    }
+
+    private func recommendationScore(for item: TravelPlanItem, target: Double) -> Double {
+        let cost = item.estimatedCostUSD
+        guard cost > 0 else { return 92 }
+
+        // A stop at or below the experience allowance is a strong fit. More expensive
+        // options remain eligible, but need enough budget headroom to outrank a better
+        // value alternative. This is a ranking, not a hard exclusion.
+        if cost <= target {
+            return 100 - ((target - cost) / target) * 28
+        }
+        return max(8, 72 - ((cost - target) / target) * 42)
+    }
+
     /// Continent bucket for the filter, keyed off the country.
     var continent: String {
         switch country {
@@ -908,7 +1010,9 @@ extension Destination {
     /// A ready-to-edit trip seeded from this curated plan, for users who'd rather
     /// start from a template than a blank itinerary: the curated budget becomes the
     /// itinerary budget, and the curated places/restaurants are spread round-robin
-    /// across the trip's days (each day tends to get a sight and a meal). Everything
+    /// across the trip's days (each day tends to get a sight and a meal). The selected
+    /// stops are budget- and pace-aware; the remaining editorial options stay in the
+    /// guide for browsing but are not forced into the user's plan. Everything
     /// is a normal `ItineraryStop` afterwards — rename, retime, or delete freely.
     ///
     /// `startDate` is optional because a curated guide is just as usable as an undated
@@ -917,23 +1021,43 @@ extension Destination {
     func starterTrip(creator me: Person, startDate: Date? = nil) -> Trip {
         let dayCount = min(max(days, 1), 30)
         var itineraryDays = (0..<dayCount).map { _ in ItineraryDay() }
-        for (index, place) in places.enumerated() {
+        for (index, place) in recommendedPlaces.enumerated() {
             itineraryDays[index % dayCount].stops.append(
                 ItineraryStop(
                     name: place.name,
                     kind: .location,
                     notes: place.detail,
-                    area: "\(city), \(country)"
+                    cost: place.estimatedCostUSD,
+                    latitude: place.latitude,
+                    longitude: place.longitude,
+                    address: place.address,
+                    area: "\(city), \(country)",
+                    placeIdentifier: place.placeIdentifier,
+                    resolvedName: place.name,
+                    resolutionConfidence: place.latitude == nil ? nil : 1,
+                    locationSource: place.latitude == nil ? nil : .userSelected,
+                    resolutionVersion: place.latitude == nil ? nil : 3,
+                    isUserPlaced: place.latitude != nil
                 )
             )
         }
-        for (index, restaurant) in restaurants.enumerated() {
+        for (index, restaurant) in recommendedRestaurants.enumerated() {
             itineraryDays[index % dayCount].stops.append(
                 ItineraryStop(
                     name: restaurant.name,
                     kind: .restaurant,
                     notes: restaurant.detail,
-                    area: "\(city), \(country)"
+                    cost: restaurant.estimatedCostUSD,
+                    latitude: restaurant.latitude,
+                    longitude: restaurant.longitude,
+                    address: restaurant.address,
+                    area: "\(city), \(country)",
+                    placeIdentifier: restaurant.placeIdentifier,
+                    resolvedName: restaurant.name,
+                    resolutionConfidence: restaurant.latitude == nil ? nil : 1,
+                    locationSource: restaurant.latitude == nil ? nil : .userSelected,
+                    resolutionVersion: restaurant.latitude == nil ? nil : 3,
+                    isUserPlaced: restaurant.latitude != nil
                 )
             )
         }

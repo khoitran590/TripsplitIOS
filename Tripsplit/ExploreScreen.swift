@@ -31,6 +31,10 @@ struct RecScreen: View {
     /// first-run sequence, and on demand from the help button after that.
     @State private var showExploreOnboarding = false
     @State private var showSettings = false
+    @State private var showCommunitySubmission = false
+    @State private var communityTrips = CommunityTripsModel()
+    @State private var communityGuideBeingEdited: CommunityTripGuide?
+    @State private var communityReportTarget: ModerationTarget?
     @FocusState private var isSearchFocused: Bool
 
     // Filters. Every facet here is edited by *both* the quick chips and the filter
@@ -309,6 +313,23 @@ struct RecScreen: View {
             let trip = destination.starterTrip(creator: store.currentUser, startDate: startDate)
             store.addTrip(trip)
             navigationPath.append(trip.id)
+        case .submitCommunityGuide:
+            showCommunitySubmission = true
+        case .startCommunityItinerary(let guideID, let startDate):
+            guard let guide = communityTrips.guides.first(where: { $0.id == guideID }) else { return }
+            let trip = guide.destination.starterTrip(creator: store.currentUser, startDate: startDate)
+            store.addTrip(trip)
+            navigationPath.append(trip.id)
+            Task { await communityTrips.recordUse(of: guideID, using: store) }
+        case .reportCommunityGuide(let guideID):
+            guard let guide = communityTrips.guides.first(where: { $0.id == guideID }),
+                  guide.authorID != store.currentUser.id else { return }
+            communityReportTarget = ModerationTarget(
+                contentType: "community_trip",
+                contentID: guide.id,
+                authorID: guide.authorID,
+                label: "community guide"
+            )
         }
     }
 
@@ -377,6 +398,7 @@ struct RecScreen: View {
                             // five near-identical carousels stacked on the directory,
                             // which gave it no shape and nothing to anchor on.
                             featuredHero
+                            communityGuidesSection
                             ForEach(collectionRails) { rail in
                                 collectionSection(
                                     title: rail.title,
@@ -450,6 +472,17 @@ struct RecScreen: View {
             .navigationDestination(for: Trip.ID.self) { tripID in
                 ItineraryDetailView(tripID: tripID)
             }
+            .navigationDestination(for: CommunityTripRoute.self) { route in
+                if let guide = communityTrips.guides.first(where: { $0.id == route.guideID }) {
+                    communityGuideDetail(guide)
+                }
+            }
+            .sheet(item: $communityGuideBeingEdited) { guide in
+                CommunityTripSubmissionView(guide: guide) { draft in
+                    try await communityTrips.update(draft, guideID: guide.id, using: store)
+                }
+                .preferredColorScheme(colorScheme)
+            }
             .sheet(isPresented: $showCreateItinerary, onDismiss: {
                 itineraryPrefill = nil
                 // Closed without creating anything: no planner to protect, so a step
@@ -466,6 +499,16 @@ struct RecScreen: View {
                 // reach a sheet that's already open, and `preferredColorScheme(nil)` won't
                 // release one once forced, so the sheet mirrors this screen's resolved mode.
                 SettingsScreen()
+                    .preferredColorScheme(colorScheme)
+            }
+            .sheet(isPresented: $showCommunitySubmission) {
+                CommunityTripSubmissionView { draft in
+                    try await communityTrips.publish(draft, using: store)
+                }
+                .preferredColorScheme(colorScheme)
+            }
+            .sheet(item: $communityReportTarget) { target in
+                ReportContentView(target: target)
                     .preferredColorScheme(colorScheme)
             }
             // Chaining off `onDismiss` rather than a fixed delay: the previous version
@@ -530,6 +573,9 @@ struct RecScreen: View {
                 navigationPath = NavigationPath()
                 navigationPath.append(tripID)
             }
+            .task(id: auth.session?.accessToken) {
+                await communityTrips.load(using: store)
+            }
             // The walkthrough is the last step of the first-run sequence, and this is
             // the tab that owns it. Keying on the step *and* `isActive` keeps the old
             // behaviour now that Explore stays mounted: a step queued while another tab
@@ -545,6 +591,39 @@ struct RecScreen: View {
                 if depth == 0 { onboarding.isPaused = false }
             }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func communityGuideDetail(_ guide: CommunityTripGuide) -> some View {
+        if auth.isAuthenticated && guide.authorID == store.currentUser.id {
+            DestinationDetailView(
+                destination: guide.destination,
+                isSaved: false,
+                onToggleSave: {},
+                onUseAsPlan: { startDate in
+                    requireAccount(.startCommunityItinerary(guideID: guide.id, startDate: startDate))
+                },
+                showsSaveAction: false,
+                onEdit: { communityGuideBeingEdited = guide },
+                onDelete: {
+                    try await communityTrips.delete(guide.id, using: store)
+                    if !navigationPath.isEmpty { navigationPath.removeLast() }
+                }
+            )
+        } else {
+            DestinationDetailView(
+                destination: guide.destination,
+                isSaved: false,
+                onToggleSave: {},
+                onUseAsPlan: { startDate in
+                    requireAccount(.startCommunityItinerary(guideID: guide.id, startDate: startDate))
+                },
+                showsSaveAction: false,
+                onReport: {
+                    requireAccount(.reportCommunityGuide(guideID: guide.id))
+                }
+            )
         }
     }
 
@@ -745,6 +824,95 @@ struct RecScreen: View {
                 )
             }
             .buttonStyle(.plain)
+        }
+    }
+
+    /// Traveler-authored guides use the same detail and starter-itinerary framework as
+    /// editor picks. Keeping them in their own rail makes their source unmistakable and
+    /// gives contribution a permanent home without mixing UGC into editorial rankings.
+    private var communityGuidesSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Community curated")
+                        .font(Theme.Typography.sectionTitle)
+                        .accessibilityAddTraits(.isHeader)
+                    Text("Real itineraries shared by TripSplit travelers.")
+                        .font(Theme.Typography.metadata)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                Button {
+                    requireAccount(.submitCommunityGuide)
+                } label: {
+                    Label("Contribute", systemImage: "plus")
+                        .font(.app(.subheadline, .bold))
+                        .foregroundStyle(Theme.accent)
+                        .frame(minHeight: 44)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Opens the community trip framework")
+            }
+
+            if !communityTrips.guides.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(alignment: .top, spacing: 14) {
+                        ForEach(communityTrips.guides) { guide in
+                            NavigationLink(value: CommunityTripRoute(guideID: guide.id)) {
+                                CommunityGuideCard(guide: guide)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .scrollTargetLayout()
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 4)
+                }
+                .scrollTargetBehavior(.viewAligned)
+                .padding(.horizontal, -16)
+            } else {
+                switch communityTrips.loadState {
+                case .idle, .loading:
+                    HStack(spacing: 10) {
+                        ProgressView()
+                        Text("Loading community guides…")
+                            .font(Theme.Typography.secondary)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+                    .readableSurface(cornerRadius: Theme.cardRadius)
+                case .loaded:
+                    Button {
+                        requireAccount(.submitCommunityGuide)
+                    } label: {
+                        Label("Be the first to share a trip", systemImage: "paperplane.fill")
+                            .font(Theme.Typography.rowTitle)
+                            .foregroundStyle(Theme.accent)
+                            .frame(maxWidth: .infinity, minHeight: 52)
+                    }
+                    .buttonStyle(.plain)
+                    .readableSurface(cornerRadius: Theme.cardRadius)
+                case .failed(let message):
+                    HStack(spacing: 12) {
+                        Image(systemName: "wifi.exclamationmark")
+                            .foregroundStyle(.secondary)
+                        Text(verbatim: message)
+                            .font(Theme.Typography.metadata)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                        Spacer(minLength: 0)
+                        Button("Retry") {
+                            Task { await communityTrips.load(using: store) }
+                        }
+                        .font(Theme.Typography.rowTitle)
+                        .foregroundStyle(Theme.accent)
+                    }
+                    .padding(14)
+                    .readableSurface(cornerRadius: Theme.cardRadius)
+                }
+            }
         }
     }
 

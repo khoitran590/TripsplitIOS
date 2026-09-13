@@ -35,7 +35,7 @@ struct MapFocus {
 
     /// The formatted street address MapKit resolved, if any.
     var addressText: String? {
-        mapItem?.address?.fullAddress
+        mapItem?.address?.fullAddress ?? item.address
     }
 
     /// A `tel:` URL for the resolved place's phone number, if it has one.

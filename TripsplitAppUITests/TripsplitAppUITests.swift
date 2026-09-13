@@ -109,6 +109,31 @@ final class TripsplitAppUITests: XCTestCase {
         captureDesignScreen("Itinerary-large-text")
     }
 
+    func testExploreCommunityGuideAndContributionFrameworkAreReachable() throws {
+        app.launchArguments = ["-app-store-demo", "-ui-test-skip-onboarding", "-appearancePreference", "light"]
+        app.launch()
+
+        let contribute = app.buttons["Contribute"]
+        tapAfterScrolling(contribute)
+        XCTAssertTrue(app.navigationBars["Community guide"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.textFields["Guide title"].exists)
+        XCTAssertTrue(app.textFields["Search city or destination"].exists)
+        XCTAssertTrue(app.textFields["Search for a place"].exists)
+        XCTAssertTrue(app.buttons["Add a place"].exists)
+        XCTAssertTrue(app.buttons["Add a restaurant"].exists)
+        XCTAssertFalse(app.buttons["Publish to community"].isEnabled)
+        app.buttons["Cancel"].tap()
+
+        let sharedGuide = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS %@", "Lisbon Like a Local")
+        ).firstMatch
+        tapAfterScrolling(sharedGuide)
+        XCTAssertTrue(app.navigationBars["Lisbon"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Use as my starting plan"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Community guide options"].exists)
+        captureDesignScreen("Explore-community-guide")
+    }
+
     private func launchDemoTrip(theme: String, largeText: Bool = false) {
         app.launchArguments = ["-app-store-demo", "-ui-test-skip-onboarding", "-ui-test-theme", theme,
                                "-appearancePreference", "light", "-AppleLanguages", "(en)"]
