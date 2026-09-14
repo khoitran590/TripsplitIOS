@@ -145,7 +145,7 @@ struct LanguagePickerView: View {
         NavigationStack {
             List {
                 Section {
-                    ForEach([AppLanguage.english]) { language in
+                    ForEach(AppLanguage.allCases) { language in
                         Button {
                             localization.language = language
                             dismiss()

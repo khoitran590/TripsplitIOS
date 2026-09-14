@@ -22,6 +22,7 @@ struct SettingsScreen: View {
     @State private var showPrivacyPolicy = false
     @State private var showCommunityStandards = false
     @State private var showAppearanceSettings = false
+    @State private var showLanguagePicker = false
     @State private var isSigningOut = false
     @AppStorage("appearancePreference") private var appearance: AppearancePreference = .system
     @AppStorage("displayCurrency") private var displayCurrency = "USD"
@@ -123,6 +124,11 @@ struct SettingsScreen: View {
                                      iconColor: Theme.accent) {
                         showAppearanceSettings = true
                     }
+                    PlainSettingsRow(icon: "globe", title: "Language",
+                                     value: localization.language.endonym,
+                                     iconColor: Theme.accent) {
+                        showLanguagePicker = true
+                    }
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
@@ -176,6 +182,9 @@ struct SettingsScreen: View {
         }
         .sheet(isPresented: $showChangePassword) {
             ChangePasswordView()
+        }
+        .sheet(isPresented: $showLanguagePicker) {
+            LanguagePickerView()
         }
         .sheet(isPresented: $showFontPicker) {
             FontPickerView()
