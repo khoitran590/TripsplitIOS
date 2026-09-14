@@ -26,6 +26,9 @@ struct Destination: Identifiable {
     /// leave these nil and continue using the stable city centers below.
     var customLatitude: Double? = nil
     var customLongitude: Double? = nil
+    /// Storage path of a community author's cover photo. Bundled guides use their
+    /// asset-catalog photo instead.
+    var coverImagePath: String? = nil
 }
 
 struct TravelPlanItem: Identifiable {

@@ -478,8 +478,8 @@ struct RecScreen: View {
                 }
             }
             .sheet(item: $communityGuideBeingEdited) { guide in
-                CommunityTripSubmissionView(guide: guide) { draft in
-                    try await communityTrips.update(draft, guideID: guide.id, using: store)
+                CommunityTripSubmissionView(guide: guide) { draft, coverJPEG in
+                    try await communityTrips.update(draft, guideID: guide.id, coverJPEG: coverJPEG, using: store)
                 }
                 .preferredColorScheme(colorScheme)
             }
@@ -502,8 +502,8 @@ struct RecScreen: View {
                     .preferredColorScheme(colorScheme)
             }
             .sheet(isPresented: $showCommunitySubmission) {
-                CommunityTripSubmissionView { draft in
-                    try await communityTrips.publish(draft, using: store)
+                CommunityTripSubmissionView { draft, coverJPEG in
+                    try await communityTrips.publish(draft, coverJPEG: coverJPEG, using: store)
                 }
                 .preferredColorScheme(colorScheme)
             }

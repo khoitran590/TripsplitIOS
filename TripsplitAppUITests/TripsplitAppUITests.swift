@@ -115,12 +115,18 @@ final class TripsplitAppUITests: XCTestCase {
 
         let contribute = app.buttons["Contribute"]
         tapAfterScrolling(contribute)
-        XCTAssertTrue(app.navigationBars["Community guide"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Share a trip"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.textFields["Guide title"].exists)
         XCTAssertTrue(app.textFields["Search city or destination"].exists)
-        XCTAssertTrue(app.textFields["Search for a place"].exists)
-        XCTAssertTrue(app.buttons["Add a place"].exists)
-        XCTAssertTrue(app.buttons["Add a restaurant"].exists)
+        app.buttons["Next: Things to do"].tap()
+        XCTAssertTrue(app.textFields["Search for a place"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Add another place"].exists)
+        app.buttons["Next: Places to eat"].tap()
+        XCTAssertTrue(app.textFields["Search for a restaurant"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Add another restaurant"].exists)
+        app.buttons["Next: Local tips"].tap()
+        app.buttons["Review guide"].tap()
+        XCTAssertTrue(app.buttons["Publish to community"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["Publish to community"].isEnabled)
         app.buttons["Cancel"].tap()
 

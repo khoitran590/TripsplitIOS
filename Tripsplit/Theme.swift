@@ -922,6 +922,28 @@ enum SoftElevation {
     }
 }
 
+/// Scales Wabi-Sabi's elevation for everything below it. `standard` is the theme's own
+/// depth; `gentle` flattens dense forms, where every field, chip and card lifting out of
+/// the ground at full depth reads as too sculpted.
+nonisolated struct SoftElevationTone: Equatable, Sendable {
+    var depth: CGFloat = 1
+    var opacity: Double = 1
+
+    static let standard = SoftElevationTone()
+    static let gentle = SoftElevationTone(depth: 0.5, opacity: 0.6)
+}
+
+private nonisolated struct SoftElevationToneKey: EnvironmentKey {
+    static let defaultValue = SoftElevationTone.standard
+}
+
+extension EnvironmentValues {
+    var softElevationTone: SoftElevationTone {
+        get { self[SoftElevationToneKey.self] }
+        set { self[SoftElevationToneKey.self] = newValue }
+    }
+}
+
 /// A shape made of the ground's own material: raised out of it, or pressed into it.
 struct SoftSurface<S: Shape>: View {
     let shape: S
@@ -933,19 +955,24 @@ struct SoftSurface<S: Shape>: View {
     /// highlight has no matching ground and reads as a glow.
     var highlightStrength: Double = 1
 
+    @Environment(\.softElevationTone) private var tone
+
     var body: some View {
         let fill = fill ?? (pressed ? Theme.fieldBackground : Theme.surface)
+        let depth = depth * tone.depth
+        let highlight = SoftElevation.highlight.opacity(tone.opacity)
+        let shade = SoftElevation.shade.opacity(tone.opacity)
         if pressed {
             shape.fill(
-                fill.shadow(.inner(color: SoftElevation.shade, radius: depth, x: depth, y: depth))
-                    .shadow(.inner(color: SoftElevation.highlight, radius: depth, x: -depth, y: -depth))
+                fill.shadow(.inner(color: shade, radius: depth, x: depth, y: depth))
+                    .shadow(.inner(color: highlight, radius: depth, x: -depth, y: -depth))
             )
         } else {
             // Two fills rather than chained `.shadow`s: a second shadow modifier would
             // also cast the first one's highlight, muddying the shade.
             ZStack {
-                shape.fill(fill).shadow(color: SoftElevation.highlight.opacity(highlightStrength), radius: depth, x: -depth, y: -depth)
-                shape.fill(fill).shadow(color: SoftElevation.shade, radius: depth, x: depth, y: depth)
+                shape.fill(fill).shadow(color: SoftElevation.highlight.opacity(highlightStrength * tone.opacity), radius: depth, x: -depth, y: -depth)
+                shape.fill(fill).shadow(color: shade, radius: depth, x: depth, y: depth)
             }
         }
     }

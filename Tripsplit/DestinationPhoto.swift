@@ -92,26 +92,29 @@ struct DestinationPhoto: View {
     @State private var image: UIImage?
 
     private var request: DestinationImageCache.Request? {
-        guard size.width > 0, size.height > 0 else { return nil }
+        guard destination.coverImagePath == nil, size.width > 0, size.height > 0 else { return nil }
         return .init(name: destination.imageName, size: size, scale: displayScale)
     }
 
     var body: some View {
         Color.clear
             .overlay {
-                if let image {
+                if let coverImagePath = destination.coverImagePath {
+                    CachedStorageImage(path: coverImagePath) { phase in
+                        if case .success(let photo) = phase {
+                            photo
+                                .resizable()
+                                .scaledToFill()
+                        } else {
+                            placeholder
+                        }
+                    }
+                } else if let image {
                     Image(uiImage: image)
                         .resizable()
                         .scaledToFill()
                 } else {
-                    // Also what a destination with no bundled asset falls back to, so
-                    // a future id without a photo still degrades gracefully.
-                    ZStack {
-                        LinearGradient(colors: destination.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
-                        Image(systemName: destination.symbol)
-                            .font(.app(size: symbolSize))
-                            .foregroundStyle(.white.opacity(0.3))
-                    }
+                    placeholder
                 }
             }
             .animation(.easeOut(duration: 0.15), value: image == nil)
@@ -129,5 +132,16 @@ struct DestinationPhoto: View {
                     image = await DestinationImageCache.shared.thumbnail(request)
                 }
             }
+    }
+
+    // Also what a destination with no bundled asset falls back to, so a future id
+    // without a photo still degrades gracefully.
+    private var placeholder: some View {
+        ZStack {
+            LinearGradient(colors: destination.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+            Image(systemName: destination.symbol)
+                .font(.app(size: symbolSize))
+                .foregroundStyle(.white.opacity(0.3))
+        }
     }
 }

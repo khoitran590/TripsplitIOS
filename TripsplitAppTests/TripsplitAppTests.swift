@@ -101,6 +101,38 @@ final class TripsplitAppTests: XCTestCase {
         XCTAssertEqual(draft.preparedRestaurants.first?.cost, "Low")
     }
 
+    func testCommunityGuideStepsTrackWhatStillBlocksPublishing() {
+        var draft = CommunityTripDraft()
+        XCTAssertFalse(draft.basicsComplete)
+        XCTAssertFalse(draft.placesComplete)
+        XCTAssertFalse(draft.restaurantsComplete)
+        XCTAssertFalse(draft.tipsComplete)
+
+        draft.title = "A Local Weekend"
+        draft.city = "Portland"
+        draft.country = "USA"
+        draft.budgetText = "850"
+        XCTAssertTrue(draft.basicsComplete)
+
+        draft.places[0].name = "Forest Park"
+        draft.restaurants[0].name = "Neighborhood food carts"
+        XCTAssertTrue(draft.placesComplete)
+        XCTAssertTrue(draft.restaurantsComplete)
+        XCTAssertFalse(draft.canPublish)
+
+        draft.bestBase = "Pearl District."
+        draft.gettingAround = "MAX and the streetcar."
+        draft.bookFirst = "Timed garden entry."
+        XCTAssertFalse(draft.tipsComplete)
+        draft.plannerNote = "Keep one afternoon open."
+        XCTAssertTrue(draft.tipsComplete)
+        XCTAssertTrue(draft.canPublish)
+
+        draft.places[0].detail = String(repeating: "a", count: 1_001)
+        XCTAssertFalse(draft.placesComplete)
+        XCTAssertFalse(draft.canPublish)
+    }
+
     func testCommunityGuideUsesExistingStarterItineraryFramework() {
         let guide = CommunityTripGuide.preview
         let destination = guide.destination
@@ -173,6 +205,29 @@ final class TripsplitAppTests: XCTestCase {
         XCTAssertEqual(draft.places.map(\.id), guide.places.map(\.id))
         XCTAssertEqual(draft.restaurants.map(\.name), guide.restaurants.map(\.name))
         XCTAssertTrue(draft.canPublish)
+    }
+
+    func testCommunityGuideCoverPhotoPathIsOptionalAndCarriedIntoEdits() throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom(BackendDate.decode)
+        let row = """
+        {"id":"d3000000-0000-0000-0000-000000000001","author_id":"d0000000-0000-0000-0000-000000000002",
+         "author_name":"Jamie","title":"Lisbon","city":"Lisbon","country":"Portugal","style":"Foodie",
+         "days":4,"budget_usd":1350,"places":[],"restaurants":[],"planner_note":"Note","best_base":"Baixa",
+         "getting_around":"Tram","book_first":"Sintra","use_count":0,"created_at":"2026-09-01T12:30:00Z",
+         "latitude":null,"longitude":null}
+        """
+        // Guides published before cover photos existed have no cover_image_path key.
+        let legacy = try decoder.decode(CommunityTripGuide.self, from: Data(row.utf8))
+        XCTAssertNil(legacy.coverImagePath)
+        XCTAssertNil(legacy.destination.coverImagePath)
+
+        var guide = CommunityTripGuide.preview
+        guide.coverImagePath = "d0000000-0000-0000-0000-000000000002/community-d3000000-0000-0000-0000-000000000001.jpg"
+        let draft = CommunityTripDraft(guide: guide)
+        XCTAssertEqual(draft.guideID, guide.id)
+        XCTAssertEqual(draft.coverImagePath, guide.coverImagePath)
+        XCTAssertEqual(guide.destination.coverImagePath, guide.coverImagePath)
     }
 
     private func contrast(_ first: Color, against second: Color, traits: UITraitCollection) -> Double {
