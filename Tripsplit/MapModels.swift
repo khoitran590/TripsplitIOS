@@ -185,8 +185,17 @@ struct ExpenseMapPin: Identifiable {
 }
 
 nonisolated enum ItineraryPinPreview {
+    static func canApplyResolution(from original: ItineraryStop, to current: ItineraryStop) -> Bool {
+        original.id == current.id && original.name == current.name && original.area == current.area
+            && original.kind == current.kind && original.address == current.address
+            && original.placeIdentifier == current.placeIdentifier && original.latitude == current.latitude
+            && original.longitude == current.longitude && original.locationSource == current.locationSource
+            && !current.isUserPlaced && current.locationSource != .userSelected
+    }
+
     static func displayedStop(_ stop: ItineraryStop, previews: [ItineraryStop.ID: ItineraryStop]) -> ItineraryStop {
-        guard !stop.isUserPlaced, let preview = previews[stop.id], preview.name == stop.name else { return stop }
+        guard !stop.isUserPlaced, stop.locationSource != .userSelected,
+              let preview = previews[stop.id], preview.name == stop.name, preview.area == stop.area, preview.kind == stop.kind else { return stop }
         var displayed = stop
         displayed.latitude = preview.latitude
         displayed.longitude = preview.longitude
@@ -246,7 +255,7 @@ extension ItineraryStop {
         if isUserPlaced || locationSource == .userSelected || locationSource == .placeIdentifier {
             return .exact
         }
-        guard let confidence = resolutionConfidence else { return .review }
+        guard let confidence = resolutionConfidence, (resolutionVersion ?? 0) >= 4 else { return .review }
         return confidence >= ItineraryMatchScoring.acceptanceThreshold ? .automatic : .review
     }
 }
@@ -269,7 +278,7 @@ nonisolated struct ResolvedItineraryLocation: Codable, Equatable, Sendable {
     }
 }
 
-/// Converts candidate evidence into a calibrated acceptance score. The top-two
+/// Converts candidate evidence into a heuristic acceptance score (not measured accuracy). The top-two
 /// margin matters: two equally plausible branches of the same chain should be sent
 /// to review even when both names look perfect.
 nonisolated enum ItineraryMatchScoring {
@@ -278,13 +287,16 @@ nonisolated enum ItineraryMatchScoring {
     static func confidence(
         nameScore: Double,
         contextScore: Double,
-        categoryMatches: Bool,
+        categoryMatches: Bool?,
         runnerUpMargin: Double
     ) -> Double {
+        // Nearby branches with identical names remain ambiguous even in a perfect city match.
+        guard runnerUpMargin >= 8 else { return 0.79 }
         let name = min(max(nameScore / 100, 0), 1)
         let context = min(max(contextScore / 42, 0), 1)
         let margin = min(max(runnerUpMargin / 28, 0), 1)
-        let category = categoryMatches ? 1.0 : 0.35
+        // Missing POI metadata is neutral evidence, not a known category mismatch.
+        let category = categoryMatches.map { $0 ? 1.0 : 0.35 } ?? 0.75
         return min(max(name * 0.58 + context * 0.18 + category * 0.12 + margin * 0.12, 0), 0.99)
     }
 }

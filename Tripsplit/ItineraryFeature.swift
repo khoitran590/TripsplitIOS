@@ -143,8 +143,9 @@ nonisolated struct ItineraryStop: Identifiable, Codable, Equatable {
     }
 
     var coordinate: CLLocationCoordinate2D? {
-        guard let latitude, let longitude else { return nil }
-        return CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+        guard let latitude, let longitude, latitude.isFinite, longitude.isFinite else { return nil }
+        let coordinate = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+        return CLLocationCoordinate2DIsValid(coordinate) ? coordinate : nil
     }
 
     /// Minutes past midnight for timeline ordering; compares only the time-of-day

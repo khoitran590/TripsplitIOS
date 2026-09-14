@@ -293,12 +293,15 @@ extension TravelPlanItem {
     /// stops; using that label verbatim makes MapKit return an arbitrary business
     /// nearby. These anchors keep the itinerary wording while making navigation
     /// deterministic and useful.
-    var mapSearchTerm: String {
+    var mapSearchTerm: String { Self.mapSearchTerm(for: name) }
+
+    /// Shared with itinerary imports so a curated multi-place label keeps the same anchor.
+    static func mapSearchTerm(for name: String) -> String {
         let anchors: [String: String] = [
             "Asakusa & Senso-ji": "Sensō-ji",
             "Shibuya + Harajuku": "Meiji Jingu",
             "Toyosu or Tsukiji": "Tsukiji Outer Market",
-            "Shinjuku at night": "Tokyo Metropolitan Government Building",
+            "Shinjuku at night": "Tokyo Metropolitan Government Office",
             "Higashiyama": "Kiyomizu-dera",
             "Arashiyama": "Tenryū-ji",
             "Gyeongbokgung + Bukchon": "Gyeongbokgung Palace",

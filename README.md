@@ -197,3 +197,34 @@ make functions-test FUNCTIONS_ENV=supabase/functions/.env.example
 
 The reserved HTTPS invitation URL in that template is a mock placeholder, not a
 production invitation destination.
+
+## Itinerary map validation
+
+The Map tab uses the same location resolver as `ItineraryMapTests`. Automatic matching uses destination and stop-area context, the supplied street address, normalized venue names, curated navigation anchors, and separation from competing candidates. Its 0.80 confidence threshold is a heuristic, not an observed success rate.
+
+Run the regression tests (use an available simulator OS/device if different):
+
+```sh
+xcodebuild -project Tripsplit.xcodeproj -scheme Tripsplit \
+  -destination 'platform=iOS Simulator,name=iPhone 17,OS=26.5' \
+  -only-testing:TripsplitAppTests/ItineraryMapTests \
+  -only-testing:TripsplitAppTests/PerformanceRegressionTests \
+  -only-testing:TripsplitAppUITests/ItineraryMapUITests test
+```
+
+Run the live Hanoi/Tokyo accuracy gate with Apple Maps network access:
+
+```sh
+xcodebuild -project Tripsplit.xcodeproj -scheme Tripsplit \
+  -destination 'platform=iOS Simulator,name=iPhone 17,OS=26.5' \
+  SWIFT_ACTIVE_COMPILATION_CONDITIONS='DEBUG LIVE_MAP_INTEGRATION' \
+  -only-testing:TripsplitAppTests/ItineraryMapTests/testLiveImportedPinAccuracyAtLeast80Percent test
+```
+
+The fixture contains 10 Hanoi stops and 10 Tokyo stops, including Tokyo's existing curated group labels and accented Hanoi names. A correct result must fall within 500 metres of the fixture landmark's reference coordinate. Missing pins count as failures. At least 8 of 10 must be correct **in each city**, and at least 80% of returned pins must be correct overall. The test report is retained as an XCTest attachment and includes every missing or inaccurate result.
+
+Validation on September 14, 2026 (iPhone 17, iOS 26.5): 10/10 Hanoi pins and 10/10 Tokyo pins were returned within 500 metres of their reference landmarks. All 78 selected unit/integration tests and the Map UI regression test passed.
+
+These are landmark-level checks, not entrance-level verification or a guarantee for arbitrary restaurants and branches. Add the user's exact failing venue names, address context, and independently verified coordinates as new fixtures when available. Do not use confidence-score fixtures or the traveler-confirmation percentage as a substitute for the live gate.
+
+Route ordering minimizes geographic distance using nearest-neighbor and 2-opt candidates, keeping the existing order if neither is shorter. The first stop, last stop, scheduled stops, and missing-location stops stay in place. Pin numbering and the drawer use the same order. Optimization affects the Map preview; Restore order returns to the itinerary order. Walking geometry is fetched separately; a failed leg leaves a dashed estimate and a retryable explanation instead of displaying an invented solid walking route.
