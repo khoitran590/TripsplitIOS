@@ -118,6 +118,7 @@ extension CommunityTripGuide {
             colors: visual.0,
             places: places.map {
                 TravelPlanItem(
+                    id: $0.id,
                     name: $0.name,
                     detail: $0.detail,
                     cost: $0.cost,
@@ -129,6 +130,7 @@ extension CommunityTripGuide {
             },
             restaurants: restaurants.map {
                 TravelPlanItem(
+                    id: $0.id,
                     name: $0.name,
                     detail: $0.detail,
                     cost: $0.cost,

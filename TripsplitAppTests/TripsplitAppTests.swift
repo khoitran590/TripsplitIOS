@@ -73,6 +73,19 @@ final class TripsplitAppTests: XCTestCase {
         XCTAssertTrue(copiedStops.contains { $0.cost > 0 })
     }
 
+    func testEveryCuratedGuideHasBothBrowseSections() {
+        let incomplete = Destination.all.filter { $0.places.isEmpty || $0.restaurants.isEmpty }
+
+        XCTAssertTrue(incomplete.isEmpty, "Incomplete bundled guides: \(incomplete.map(\.id))")
+        for id in ["taipei", "paris"] {
+            let guide = try! XCTUnwrap(Destination.all.first { $0.id == id })
+            XCTAssertFalse(guide.recommendedPlaces.isEmpty, "\(id) has no recommended locations")
+            XCTAssertFalse(guide.recommendedRestaurants.isEmpty, "\(id) has no recommended restaurants")
+        }
+        XCTAssertFalse(CommunityTripGuide.preview.destination.places.isEmpty)
+        XCTAssertFalse(CommunityTripGuide.preview.destination.restaurants.isEmpty)
+    }
+
     func testCommunityGuideDraftRequiresTheCompleteCuratedFramework() {
         var draft = CommunityTripDraft()
         XCTAssertFalse(draft.canPublish)
@@ -145,6 +158,8 @@ final class TripsplitAppTests: XCTestCase {
         XCTAssertEqual(destination.practicalGuide.base, guide.bestBase)
         XCTAssertEqual(destination.practicalGuide.transport, guide.gettingAround)
         XCTAssertEqual(destination.practicalGuide.booking, guide.bookFirst)
+        XCTAssertEqual(destination.places.map(\.id), guide.places.map(\.id))
+        XCTAssertEqual(destination.restaurants.map(\.id), guide.restaurants.map(\.id))
         XCTAssertEqual(trip.name, guide.title)
         XCTAssertEqual(trip.itinerary?.days.count, guide.days)
         XCTAssertFalse(trip.itinerary?.days.flatMap(\.stops).isEmpty ?? true)

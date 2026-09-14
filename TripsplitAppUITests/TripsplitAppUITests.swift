@@ -137,6 +137,20 @@ final class TripsplitAppUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Lisbon"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Use as my starting plan"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Community guide options"].exists)
+
+        // The detail section control must work for community guides as well as the
+        // bundled editorial guides. Use the explicit identifiers so this test checks
+        // the actual tab hit targets rather than an incidental matching label.
+        let thingsToDo = app.buttons["curated-guide-section-things-to-do"]
+        let restaurants = app.buttons["curated-guide-section-restaurants"]
+        XCTAssertTrue(thingsToDo.waitForExistence(timeout: 5))
+        XCTAssertTrue(restaurants.exists)
+        thingsToDo.tap()
+        XCTAssertTrue(app.staticTexts["Recommended locations for this trip"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Alfama at sunrise"].exists)
+        restaurants.tap()
+        XCTAssertTrue(app.staticTexts["Recommended meal picks for this budget"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["O Trevo"].exists)
         captureDesignScreen("Explore-community-guide")
     }
 

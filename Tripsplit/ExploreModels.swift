@@ -32,7 +32,7 @@ struct Destination: Identifiable {
 }
 
 struct TravelPlanItem: Identifiable {
-    let id = UUID()
+    let id: UUID
     let name: String
     let detail: String
     let cost: String
@@ -42,6 +42,26 @@ struct TravelPlanItem: Identifiable {
     var latitude: Double? = nil
     var longitude: Double? = nil
     var placeIdentifier: String? = nil
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        detail: String,
+        cost: String,
+        address: String? = nil,
+        latitude: Double? = nil,
+        longitude: Double? = nil,
+        placeIdentifier: String? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.detail = detail
+        self.cost = cost
+        self.address = address
+        self.latitude = latitude
+        self.longitude = longitude
+        self.placeIdentifier = placeIdentifier
+    }
 }
 
 extension TravelPlanItem {

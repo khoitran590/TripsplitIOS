@@ -168,10 +168,10 @@ struct DestinationDetailView: View {
     @State private var tab: DetailTab = .overview
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                tabBar
+        VStack(spacing: 0) {
+            tabBar
 
+            ScrollView {
                 hero
                     .padding(.horizontal)
                     .padding(.top, 12)
@@ -299,30 +299,35 @@ struct DestinationDetailView: View {
         }
     }
 
-    /// The underlined segmented tab strip below the navigation bar.
+    /// The guide section selector below the navigation bar.
     private var tabBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 24) {
-                ForEach(DetailTab.allCases) { option in
-                    Button {
-                        withAnimation(.snappy(duration: 0.2)) { tab = option }
-                    } label: {
-                        VStack(spacing: 8) {
-                            Text(LocalizedStringKey(option.rawValue))
-                                .font(Theme.Typography.sectionTitle)
-                                .foregroundStyle(tab == option ? .primary : .secondary)
-                            Capsule()
-                                .fill(tab == option ? Color.primary : .clear)
-                                .frame(height: 3)
-                        }
-                        .fixedSize()
+        HStack(spacing: 0) {
+            ForEach(DetailTab.allCases) { option in
+                Button {
+                    withAnimation(.snappy(duration: 0.2)) {
+                        tab = option
                     }
-                    .buttonStyle(.plain)
+                } label: {
+                    VStack(spacing: 8) {
+                        Text(LocalizedStringKey(option.rawValue))
+                            .font(Theme.Typography.sectionTitle)
+                            .foregroundStyle(tab == option ? .primary : .secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                        Capsule()
+                            .fill(tab == option ? Color.primary : .clear)
+                            .frame(height: 3)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel(LocalizedStringKey(option.rawValue))
+                .accessibilityIdentifier("curated-guide-section-\(option.rawValue.lowercased().replacingOccurrences(of: " ", with: "-"))")
             }
-            .padding(.horizontal)
-            .padding(.top, 8)
         }
+        .padding(.horizontal)
+        .padding(.top, 8)
     }
 
     private var hero: some View {
@@ -624,46 +629,56 @@ struct DestinationDetailView: View {
         let recommended = isRestaurant ? destination.recommendedRestaurants : destination.recommendedPlaces
         let recommendedIDs = Set(recommended.map(\.id))
         let remaining = items.filter { !recommendedIDs.contains($0.id) }
+        let emptyStateTitle: LocalizedStringKey = isRestaurant ? "No restaurants yet" : "No things to do yet"
 
         return VStack(alignment: .leading, spacing: 12) {
-            Label {
-                Text(
-                    isRestaurant
-                        ? "Recommended meal picks for this budget"
-                        : "Recommended locations for this trip"
+            if recommended.isEmpty && remaining.isEmpty {
+                ContentUnavailableView(
+                    emptyStateTitle,
+                    systemImage: isRestaurant ? "fork.knife" : "mappin.and.ellipse",
+                    description: Text("This guide does not have any curated recommendations in this section yet.")
                 )
-            } icon: {
-                Image(systemName: "wand.and.stars")
-            }
-                .font(Theme.Typography.metadata)
-                .foregroundStyle(.secondary)
-
-            ForEach(Array(recommended.enumerated()), id: \.element.id) { index, item in
-                Button {
-                    mapModel.showOnMap(item, in: destination)
-                } label: {
-                    planRow(index: index, item: item, isRestaurant: isRestaurant)
+                .frame(maxWidth: .infinity, minHeight: 180)
+            } else {
+                Label {
+                    Text(
+                        isRestaurant
+                            ? "Recommended meal picks for this budget"
+                            : "Recommended locations for this trip"
+                    )
+                } icon: {
+                    Image(systemName: "wand.and.stars")
                 }
-                .buttonStyle(.plain)
-                .contentShape(.rect)
-                .accessibilityHint("Opens \(item.mapSearchTerm) on the map")
-            }
-
-            if !remaining.isEmpty {
-                Label("More curated options", systemImage: "ellipsis.circle")
                     .font(Theme.Typography.metadata)
                     .foregroundStyle(.secondary)
-                    .padding(.top, 8)
 
-                ForEach(Array(remaining.enumerated()), id: \.element.id) { index, item in
+                ForEach(Array(recommended.enumerated()), id: \.element.id) { index, item in
                     Button {
                         mapModel.showOnMap(item, in: destination)
                     } label: {
-                        planRow(index: recommended.count + index, item: item, isRestaurant: isRestaurant)
+                        planRow(index: index, item: item, isRestaurant: isRestaurant)
                     }
                     .buttonStyle(.plain)
                     .contentShape(.rect)
                     .accessibilityHint("Opens \(item.mapSearchTerm) on the map")
+                }
+
+                if !remaining.isEmpty {
+                    Label("More curated options", systemImage: "ellipsis.circle")
+                        .font(Theme.Typography.metadata)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 8)
+
+                    ForEach(Array(remaining.enumerated()), id: \.element.id) { index, item in
+                        Button {
+                            mapModel.showOnMap(item, in: destination)
+                        } label: {
+                            planRow(index: recommended.count + index, item: item, isRestaurant: isRestaurant)
+                        }
+                        .buttonStyle(.plain)
+                        .contentShape(.rect)
+                        .accessibilityHint("Opens \(item.mapSearchTerm) on the map")
+                    }
                 }
             }
         }
