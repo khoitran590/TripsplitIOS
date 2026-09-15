@@ -37,7 +37,8 @@ final class ItineraryLocationResolver {
                 confidence: 0.99, source: .placeIdentifier, resolvedAt: Date()
             )
         }
-        let rawArea = stop.area?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let rawArea = (stop.aiAreaHint ?? stop.area)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         var areaDestination: ResolvedDestination?
         if !rawArea.isEmpty, rawArea.normalizedForSearch != location.normalizedForSearch {
             let resolvedArea = await DestinationResolver.shared.resolve([rawArea, location].filter { !$0.isEmpty }.joined(separator: ", "))
@@ -61,10 +62,11 @@ final class ItineraryLocationResolver {
         let searchRegion = searchAnchor.map {
             itinerarySearchRegion(around: $0, meters: areaDestination == nil ? 180_000 : 90_000)
         }
-        let nameVariants = Self.nameVariants(stop.name)
+        let nameVariants = Self.nameVariants(for: stop)
         // An old automatic match's address is output, not evidence supplied by the
         // traveler. Reusing it could lock a bad branch or wrong-country pin in place.
-        let expectedAddress = stop.locationSource == .automatic ? nil : stop.address
+        let expectedAddress = stop.aiAddressHint
+            ?? (stop.locationSource == .automatic ? nil : stop.address)
         var searchStop = stop
         searchStop.address = expectedAddress
         let searches = Self.searchQueries(for: searchStop, context: searchContext)
@@ -164,10 +166,21 @@ final class ItineraryLocationResolver {
         return values.filter { !$0.isEmpty && seen.insert($0.normalizedForSearch).inserted }
     }
 
+    static func nameVariants(for stop: ItineraryStop) -> [String] {
+        let supplied = [stop.aiCanonicalName]
+            + stop.aiAliases.map(Optional.some)
+            + [stop.name]
+        var seen: Set<String> = []
+        return supplied.compactMap { $0 }
+            .flatMap(nameVariants)
+            .filter { !$0.isEmpty && seen.insert($0.normalizedForSearch).inserted }
+    }
+
     static func searchQueries(for stop: ItineraryStop, context: String) -> [String] {
-        let names = nameVariants(stop.name)
+        let names = nameVariants(for: stop)
         var queries: [String] = []
-        let address = stop.address?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let address = (stop.aiAddressHint ?? stop.address)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !address.isEmpty { queries.append([names.first ?? stop.name, address, context].filter { !$0.isEmpty }.joined(separator: ", ")) }
         queries += names.map { context.isEmpty ? $0 : "\($0), \(context)" }
         queries += names

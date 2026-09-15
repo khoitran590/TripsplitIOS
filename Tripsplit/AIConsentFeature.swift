@@ -27,7 +27,7 @@ enum AIConsentPurpose: String, CaseIterable, Identifiable {
         case .receiptProcessing:
             "TripSplit will send the receipt photo to Anthropic Claude to identify line items, tax, tip, and totals. If Claude cannot complete the scan, TripSplit will send the photo to Google Gemini as a backup. If you decline, Apple Vision will scan entirely on this device and you can enter anything manually."
         case .itineraryGeneration:
-            "TripSplit will send the trip destination, dates, budget, and existing itinerary text to Anthropic Claude, which may search the web to suggest current places and activities. If Claude cannot draft a plan, TripSplit will send the same details to Google Gemini as a backup, which may use Google Search grounding. If you decline, you can continue building the itinerary manually."
+            "TripSplit will send the trip destination, dates, budget, and existing itinerary text to Anthropic Claude, which may search the web to suggest current places and activities or clarify ambiguous place names for Map pins. If Claude cannot draft a plan, TripSplit may send planning details to Google Gemini as a backup, which may use Google Search grounding. Pin coordinates always come from Apple MapKit. If you decline, you can continue building the itinerary manually."
         }
     }
 

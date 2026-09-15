@@ -81,6 +81,37 @@ final class ItineraryMapTests: XCTestCase {
         XCTAssertTrue(request.resultTypes.contains(.address))
     }
 
+    func testClaudeHintsLeadSearchWithoutReplacingTheItineraryLabel() throws {
+        let stopID = UUID()
+        let hint = AIItineraryLocationHint(
+            stopID: stopID,
+            canonicalName: "Thang Long Water Puppet Theater",
+            area: "Hoan Kiem, Hanoi, Vietnam",
+            address: "57B Dinh Tien Hoang Street",
+            aliases: ["Nhà hát Múa rối Thăng Long"],
+            confidence: 0.94
+        )
+        let decoded = try JSONDecoder().decode(
+            AIItineraryLocationHint.self,
+            from: JSONEncoder().encode(hint)
+        )
+        var stop = ItineraryStop(name: "water puppets", kind: .activity)
+        stop.aiCanonicalName = decoded.canonicalName
+        stop.aiAreaHint = decoded.area
+        stop.aiAddressHint = decoded.address
+        stop.aiAliases = decoded.aliases
+        stop.aiHintConfidence = decoded.confidence
+
+        let variants = ItineraryLocationResolver.nameVariants(for: stop)
+        XCTAssertEqual(stop.name, "water puppets")
+        XCTAssertEqual(variants.first, "Thang Long Water Puppet Theater")
+        XCTAssertTrue(variants.contains("Nhà hát Múa rối Thăng Long"))
+        XCTAssertTrue(
+            ItineraryLocationResolver.searchQueries(for: stop, context: stop.aiAreaHint ?? "")
+                .first?.contains("57B Dinh Tien Hoang Street") == true
+        )
+    }
+
     func testNameMatchingHandlesAccentsSpellingAndWordOrder() {
         XCTAssertEqual(ItineraryLocationResolver.nameScore("Hoan Kiem Lake", expected: "Hoàn Kiếm Lake"), 100)
         XCTAssertEqual(ItineraryLocationResolver.nameScore("Thang Long Water Puppet Theater", expected: "Thang Long Water Puppet Theatre"), 100)

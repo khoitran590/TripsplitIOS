@@ -143,6 +143,9 @@ struct MapScreen: View {
     @State private var isLoadingFeedPlaces = false
     @State private var optimizedStopIDs: [ItineraryStop.ID] = []
     @State private var routeFeedback: LocalizedStringKey?
+    @State private var pinAIMessage: String?
+    @State private var showsPinAIConsent = false
+    @State private var isImprovingPinsWithAI = false
     @State private var openNowOnly = false
     @State private var mapStyle: TripMapStyle = .standard
     @State private var locationManager = MapLocationManager()
@@ -158,7 +161,7 @@ struct MapScreen: View {
     @AppStorage("mapRecentSearches") private var recentSearchesData = Data()
     @AppStorage("mapLastSearchCache") private var lastSearchCacheData = Data()
     @AppStorage("mapValidatedItineraryStops") private var validatedItineraryStopsData = Data()
-    @AppStorage("mapResolvedItineraryCacheV4") private var resolvedItineraryCacheData = Data()
+    @AppStorage("mapResolvedItineraryCacheV5") private var resolvedItineraryCacheData = Data()
     // Local-only, opaque review keys measure the confirmation/correction ratio without
     // uploading itinerary names, addresses, or coordinates as analytics.
     @AppStorage("mapConfirmedAutomaticStopsV1") private var confirmedAutomaticStopsData = Data()
@@ -265,6 +268,16 @@ struct MapScreen: View {
 
     private var locatedStopCount: Int { selectedDayStops.filter { $0.coordinate != nil }.count }
 
+    private var claudeCandidateCount: Int {
+        selectedDayStops.filter { stop in
+            !stop.isUserPlaced
+                && stop.locationSource != .userSelected
+                && stop.locationSource != .placeIdentifier
+                && !confirmedAutomaticStopKeys.contains(automaticReviewKey(for: stop))
+                && (stop.coordinate == nil || stop.locationSource == .automatic || stop.mapLocationQuality == .review)
+        }.count
+    }
+
     private var unreviewedAutomaticStop: ItineraryStop? {
         selectedDayStops.first { stop in
             stop.locationSource == .automatic
@@ -286,7 +299,7 @@ struct MapScreen: View {
               let trip = store.myTrips.first(where: { $0.id == selectedTripID }),
               let itinerary = trip.itinerary else { return "none" }
         let stops = itinerary.days.flatMap(\.stops).map { stop in
-            "\(stop.id.uuidString):\(stop.name):\(stop.area ?? ""):\(stop.kind.rawValue):\(stop.isUserPlaced):\(stop.address ?? ""):\(stop.placeIdentifier ?? ""):\(stop.latitude ?? 999),\(stop.longitude ?? 999)"
+            "\(stop.id.uuidString):\(stop.name):\(stop.area ?? ""):\(stop.kind.rawValue):\(stop.isUserPlaced):\(stop.address ?? ""):\(stop.placeIdentifier ?? ""):\(stop.latitude ?? 999),\(stop.longitude ?? 999):\(stop.aiCanonicalName ?? ""):\(stop.aiAreaHint ?? ""):\(stop.aiAddressHint ?? ""):\(stop.aiAliases.joined(separator: ","))"
         }
         return "\(selectedTripID.uuidString)|\(trip.location ?? "")|\(trip.startDate?.timeIntervalSince1970 ?? 0)|\(trip.endDate?.timeIntervalSince1970 ?? 0)|\(itinerary.days.count)|\(stops.joined(separator: "|"))"
     }
@@ -368,6 +381,11 @@ struct MapScreen: View {
             }
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showsPinAIConsent) {
+            AIConsentDisclosureView(purpose: .itineraryGeneration) { granted in
+                if granted { requestClaudePinHelp() }
+            }
         }
         .onChange(of: mapModel.navigateRequest) { recenterOnFocus(force: true) }
         .onChange(of: coordinateKey) { recenterOnFocus() }
@@ -878,6 +896,11 @@ struct MapScreen: View {
             .accessibilityIdentifier("map-optimize-route")
 
             Menu {
+                Button("Improve pins with Claude", systemImage: "sparkles") {
+                    requestClaudePinHelp()
+                }
+                .disabled(claudeCandidateCount == 0 || isImprovingPinsWithAI || isResolvingItineraryLocations)
+
                 Button("Retry missing locations", systemImage: "arrow.clockwise") {
                     mapRefreshRevision += 1
                 }
@@ -1158,6 +1181,18 @@ struct MapScreen: View {
             itineraryControls
             if let routeFeedback {
                 Text(routeFeedback)
+                    .font(.app(.caption2))
+                    .foregroundStyle(.secondary)
+            }
+            if isImprovingPinsWithAI {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Claude is clarifying place names…")
+                }
+                .font(.app(.caption2))
+                .foregroundStyle(.secondary)
+            } else if let pinAIMessage {
+                Text(verbatim: pinAIMessage)
                     .font(.app(.caption2))
                     .foregroundStyle(.secondary)
             }
@@ -1535,6 +1570,101 @@ struct MapScreen: View {
         fitTripCamera(force: true)
     }
 
+    private func requestClaudePinHelp() {
+        guard claudeCandidateCount > 0 else {
+            pinAIMessage = String(localized: "Every automatic pin already has an exact place.")
+            return
+        }
+        guard AIConsentPreferences.isGranted(.itineraryGeneration, userID: store.currentUser.id) else {
+            showsPinAIConsent = true
+            return
+        }
+        Task { await improvePinsWithClaude() }
+    }
+
+    private func improvePinsWithClaude() async {
+        guard !isImprovingPinsWithAI,
+              let tripID = selectedTripID,
+              let trip = store.trip(tripID),
+              let itinerary = trip.itinerary,
+              itinerary.days.indices.contains(selectedItineraryDay) else { return }
+        let dayID = itinerary.days[selectedItineraryDay].id
+        let candidates = itinerary.days[selectedItineraryDay].stops.filter { stop in
+            !stop.isUserPlaced
+                && stop.locationSource != .userSelected
+                && stop.locationSource != .placeIdentifier
+                && !confirmedAutomaticStopKeys.contains(automaticReviewKey(for: stop))
+                && (stop.coordinate == nil || stop.locationSource == .automatic || stop.mapLocationQuality == .review)
+        }
+        guard !candidates.isEmpty else { return }
+
+        isImprovingPinsWithAI = true
+        pinAIMessage = nil
+        defer { isImprovingPinsWithAI = false }
+        do {
+            guard let token = try await store.authorizedAccessToken() else {
+                throw AuthError(message: "Sign in to improve pins with Claude.")
+            }
+            let destination = trip.location?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let tripDestination = destination?.isEmpty == false ? destination! : trip.name
+            let hints = try await store.withFreshTokenIfNeeded(initialToken: token) { freshToken in
+                try await ItineraryPinAI.clarify(
+                    destination: tripDestination,
+                    stops: candidates,
+                    accessToken: freshToken
+                )
+            }
+            guard selectedTripID == tripID,
+                  var latest = store.trip(tripID)?.itinerary,
+                  let dayIndex = latest.days.firstIndex(where: { $0.id == dayID }) else { return }
+
+            let hintsByID = Dictionary(uniqueKeysWithValues: hints.map { ($0.stopID, $0) })
+            var applied = 0
+            for original in candidates {
+                guard let hint = hintsByID[original.id],
+                      let index = latest.days[dayIndex].stops.firstIndex(where: { $0.id == original.id }) else { continue }
+                let current = latest.days[dayIndex].stops[index]
+                guard ItineraryPinPreview.canApplyResolution(from: original, to: current) else { continue }
+                var improved = current
+                improved.aiCanonicalName = hint.canonicalName
+                improved.aiAreaHint = hint.area
+                improved.aiAddressHint = hint.address
+                improved.aiAliases = Array(hint.aliases.prefix(5))
+                improved.aiHintConfidence = hint.confidence
+                // Remove only an automatic result. A Claude hint must pass through
+                // MapKit before a new coordinate or Apple place ID is stored.
+                improved.latitude = nil
+                improved.longitude = nil
+                improved.placeIdentifier = nil
+                improved.resolvedName = nil
+                improved.resolutionConfidence = nil
+                improved.locationSource = nil
+                improved.resolutionVersion = nil
+                latest.days[dayIndex].stops[index] = improved
+                applied += 1
+            }
+            guard applied > 0 else {
+                pinAIMessage = String(localized: "Claude could not identify a more specific place. You can still choose one manually.")
+                return
+            }
+            store.updateItinerary(latest, in: tripID)
+            if applied == 1 {
+                pinAIMessage = String(localized: "Claude clarified one place. MapKit is checking the pin.")
+            } else {
+                pinAIMessage = String(localized: "Claude clarified \(applied) places. MapKit is checking the pins.")
+            }
+            mapRefreshRevision += 1
+        } catch ItineraryAIError.rateLimited(let seconds) {
+            if let seconds {
+                pinAIMessage = String(localized: "Claude is busy. Try again in about \(seconds) seconds.")
+            } else {
+                pinAIMessage = String(localized: "Claude is busy. Try again shortly.")
+            }
+        } catch {
+            pinAIMessage = (error as? AuthError)?.message ?? error.localizedDescription
+        }
+    }
+
     private var detailedRouteKey: String {
         let stops = itineraryMapStops.map {
             "\($0.stop.id.uuidString)@\(String(format: "%.5f,%.5f", $0.coordinate.latitude, $0.coordinate.longitude))"
@@ -1866,7 +1996,7 @@ struct MapScreen: View {
     }
 
     private func itineraryLocationCacheKey(for stop: ItineraryStop, trip: Trip) -> String {
-        "v4|\(stop.name.normalizedForSearch)|\((stop.area ?? "").normalizedForSearch)|\((trip.location ?? "").normalizedForSearch)|\(stop.kind.rawValue)|\((stop.address ?? "").normalizedForSearch)|\(stop.placeIdentifier ?? "")"
+        "v5|\(stop.name.normalizedForSearch)|\((stop.area ?? "").normalizedForSearch)|\((trip.location ?? "").normalizedForSearch)|\(stop.kind.rawValue)|\((stop.address ?? "").normalizedForSearch)|\(stop.placeIdentifier ?? "")|\((stop.aiCanonicalName ?? "").normalizedForSearch)|\((stop.aiAreaHint ?? "").normalizedForSearch)|\((stop.aiAddressHint ?? "").normalizedForSearch)|\(stop.aiAliases.joined(separator: ",").normalizedForSearch)"
     }
 
     private func cacheResolvedItineraryLocation(_ location: ResolvedItineraryLocation, for key: String) {
@@ -1889,7 +2019,7 @@ struct MapScreen: View {
     /// gate instead of being trusted forever.
     private func itineraryValidationKey(for stop: ItineraryStop, trip: Trip) -> String {
         let location = (trip.location ?? "").normalizedForSearch
-        return "v4|\(trip.id.uuidString)|\(stop.id.uuidString)|\(stop.name.normalizedForSearch)|\((stop.area ?? "").normalizedForSearch)|\(stop.kind.rawValue)|\(location)|\((stop.address ?? "").normalizedForSearch)|\(stop.placeIdentifier ?? "")|\(stop.latitude ?? 999),\(stop.longitude ?? 999)"
+        return "v5|\(trip.id.uuidString)|\(stop.id.uuidString)|\(stop.name.normalizedForSearch)|\((stop.area ?? "").normalizedForSearch)|\(stop.kind.rawValue)|\(location)|\((stop.address ?? "").normalizedForSearch)|\(stop.placeIdentifier ?? "")|\(stop.latitude ?? 999),\(stop.longitude ?? 999)|\((stop.aiCanonicalName ?? "").normalizedForSearch)|\((stop.aiAreaHint ?? "").normalizedForSearch)|\((stop.aiAddressHint ?? "").normalizedForSearch)|\(stop.aiAliases.joined(separator: ",").normalizedForSearch)"
     }
 
     private func itineraryNameScore(_ candidateName: String, expected: String) -> Double {

@@ -15,6 +15,7 @@ final class ItineraryMapUITests: XCTestCase {
         let count = pins.count
         XCTAssertGreaterThanOrEqual(count, 3)
         app.buttons["map-route-menu"].tap()
+        XCTAssertTrue(app.buttons["Improve pins with Claude"].waitForExistence(timeout: 3))
         app.buttons["Hide route"].tap()
         XCTAssertEqual(pins.count, count)
         XCTAssertTrue(app.buttons["map-optimize-route"].exists)

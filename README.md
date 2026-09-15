@@ -100,6 +100,7 @@ All Edge Functions require a signed-in user's JWT. Provider secrets stay in loca
 | `ocr-receipt` | Google Cloud Vision | HTTP 503 without a key; deterministic local mock in tests |
 | `parse-receipt` | Anthropic, then Gemini fallback | HTTP 503 without a key; deterministic local mock in tests |
 | `suggest-itinerary` | Anthropic, then Gemini fallback | HTTP 503 without a key; deterministic local mock in tests |
+| `clarify-itinerary-locations` | Anthropic Claude with web search | HTTP 503 without a key; deterministic local mock in tests |
 
 To exercise a paid provider manually, add only a development credential to `.env.local` and restart `supabase functions serve`. Never use production credentials in local automation. `LOCAL_PROVIDER_MOCKS=true` is accepted only by the local HTTP runtime and cannot enable mocks on hosted HTTPS Supabase.
 

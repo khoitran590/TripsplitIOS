@@ -621,6 +621,7 @@ final class TripsplitAppTests: XCTestCase {
         [
             "latitude", "longitude", "address", "area", "placeIdentifier",
             "resolvedName", "resolutionConfidence", "locationSource", "resolutionVersion",
+            "aiCanonicalName", "aiAreaHint", "aiAddressHint", "aiAliases", "aiHintConfidence",
         ].forEach { json.removeValue(forKey: $0) }
 
         let decoded = try JSONDecoder().decode(
@@ -633,6 +634,11 @@ final class TripsplitAppTests: XCTestCase {
         XCTAssertNil(decoded.placeIdentifier)
         XCTAssertNil(decoded.resolutionConfidence)
         XCTAssertNil(decoded.locationSource)
+        XCTAssertNil(decoded.aiCanonicalName)
+        XCTAssertNil(decoded.aiAreaHint)
+        XCTAssertNil(decoded.aiAddressHint)
+        XCTAssertTrue(decoded.aiAliases.isEmpty)
+        XCTAssertNil(decoded.aiHintConfidence)
         XCTAssertEqual(decoded.name, "Museum")
     }
 

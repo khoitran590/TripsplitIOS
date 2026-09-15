@@ -190,6 +190,11 @@ nonisolated enum ItineraryPinPreview {
             && original.kind == current.kind && original.address == current.address
             && original.placeIdentifier == current.placeIdentifier && original.latitude == current.latitude
             && original.longitude == current.longitude && original.locationSource == current.locationSource
+            && original.aiCanonicalName == current.aiCanonicalName
+            && original.aiAreaHint == current.aiAreaHint
+            && original.aiAddressHint == current.aiAddressHint
+            && original.aiAliases == current.aiAliases
+            && original.aiHintConfidence == current.aiHintConfidence
             && !current.isUserPlaced && current.locationSource != .userSelected
     }
 
@@ -206,6 +211,11 @@ nonisolated enum ItineraryPinPreview {
         displayed.resolutionConfidence = preview.resolutionConfidence
         displayed.locationSource = preview.locationSource
         displayed.resolutionVersion = preview.resolutionVersion
+        displayed.aiCanonicalName = preview.aiCanonicalName
+        displayed.aiAreaHint = preview.aiAreaHint
+        displayed.aiAddressHint = preview.aiAddressHint
+        displayed.aiAliases = preview.aiAliases
+        displayed.aiHintConfidence = preview.aiHintConfidence
         return displayed
     }
 }

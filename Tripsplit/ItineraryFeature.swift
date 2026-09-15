@@ -73,6 +73,13 @@ nonisolated struct ItineraryStop: Identifiable, Codable, Equatable {
     var resolutionConfidence: Double? = nil
     var locationSource: ItineraryLocationSource? = nil
     var resolutionVersion: Int? = nil
+    /// Claude may add search-only metadata when a human-readable itinerary label is
+    /// too broad for MapKit. These values never become coordinates by themselves.
+    var aiCanonicalName: String? = nil
+    var aiAreaHint: String? = nil
+    var aiAddressHint: String? = nil
+    var aiAliases: [String] = []
+    var aiHintConfidence: Double? = nil
     /// True when the coordinate came from the traveler tapping a real place (the stop
     /// editor's autocomplete, or "add to itinerary" on the map) rather than from the
     /// Map tab resolving the stop's name. Map keeps its hands off those pins: they are
@@ -95,6 +102,11 @@ nonisolated struct ItineraryStop: Identifiable, Codable, Equatable {
         resolutionConfidence: Double? = nil,
         locationSource: ItineraryLocationSource? = nil,
         resolutionVersion: Int? = nil,
+        aiCanonicalName: String? = nil,
+        aiAreaHint: String? = nil,
+        aiAddressHint: String? = nil,
+        aiAliases: [String] = [],
+        aiHintConfidence: Double? = nil,
         isUserPlaced: Bool = false
     ) {
         self.id = id
@@ -112,12 +124,18 @@ nonisolated struct ItineraryStop: Identifiable, Codable, Equatable {
         self.resolutionConfidence = resolutionConfidence
         self.locationSource = locationSource
         self.resolutionVersion = resolutionVersion
+        self.aiCanonicalName = aiCanonicalName
+        self.aiAreaHint = aiAreaHint
+        self.aiAddressHint = aiAddressHint
+        self.aiAliases = aiAliases
+        self.aiHintConfidence = aiHintConfidence
         self.isUserPlaced = isUserPlaced
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, kind, time, notes, cost, latitude, longitude, address, area
         case placeIdentifier, resolvedName, resolutionConfidence, locationSource, resolutionVersion
+        case aiCanonicalName, aiAreaHint, aiAddressHint, aiAliases, aiHintConfidence
         case isUserPlaced
     }
 
@@ -139,6 +157,11 @@ nonisolated struct ItineraryStop: Identifiable, Codable, Equatable {
         resolutionConfidence = try c.decodeIfPresent(Double.self, forKey: .resolutionConfidence)
         locationSource = try c.decodeIfPresent(ItineraryLocationSource.self, forKey: .locationSource)
         resolutionVersion = try c.decodeIfPresent(Int.self, forKey: .resolutionVersion)
+        aiCanonicalName = try c.decodeIfPresent(String.self, forKey: .aiCanonicalName)
+        aiAreaHint = try c.decodeIfPresent(String.self, forKey: .aiAreaHint)
+        aiAddressHint = try c.decodeIfPresent(String.self, forKey: .aiAddressHint)
+        aiAliases = try c.decodeIfPresent([String].self, forKey: .aiAliases) ?? []
+        aiHintConfidence = try c.decodeIfPresent(Double.self, forKey: .aiHintConfidence)
         isUserPlaced = try c.decodeIfPresent(Bool.self, forKey: .isUserPlaced) ?? false
     }
 
@@ -2482,9 +2505,11 @@ struct ItineraryStopEditorView: View {
     }
 
     private func save() {
+        let savedName = name.trimmingCharacters(in: .whitespaces)
+        let keepsAIHints = !isUserPlaced && savedName == stop?.name && kind == stop?.kind
         let saved = ItineraryStop(
             id: stop?.id ?? UUID(),
-            name: name.trimmingCharacters(in: .whitespaces),
+            name: savedName,
             kind: kind,
             time: hasTime ? time : nil,
             notes: notes.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -2498,6 +2523,11 @@ struct ItineraryStopEditorView: View {
             resolutionConfidence: resolutionConfidence,
             locationSource: locationSource,
             resolutionVersion: locationSource == nil ? stop?.resolutionVersion : 3,
+            aiCanonicalName: keepsAIHints ? stop?.aiCanonicalName : nil,
+            aiAreaHint: keepsAIHints ? stop?.aiAreaHint : nil,
+            aiAddressHint: keepsAIHints ? stop?.aiAddressHint : nil,
+            aiAliases: keepsAIHints ? stop?.aiAliases ?? [] : [],
+            aiHintConfidence: keepsAIHints ? stop?.aiHintConfidence : nil,
             isUserPlaced: isUserPlaced && latitude != nil
         )
         onSave(saved)

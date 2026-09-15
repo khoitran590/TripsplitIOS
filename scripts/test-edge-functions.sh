@@ -180,7 +180,7 @@ set_consent() {
 echo 'Edge Functions: authentication and safe missing-provider checks'
 start_server "$local_env"
 
-functions=(delete-account send-invitation ocr-receipt parse-receipt suggest-itinerary)
+functions=(delete-account send-invitation ocr-receipt parse-receipt suggest-itinerary clarify-itinerary-locations)
 for function_name in "${functions[@]}"; do
   status="$(request_function "$function_name" '' '{}')"
   assert_status 401 "$status" "$function_name rejects a missing JWT"
@@ -220,6 +220,8 @@ status="$(request_function parse-receipt "$owner_token" '{"text":"Coffee 4.50"}'
 assert_status 503 "$status" 'parse-receipt fails safely without an LLM provider'
 status="$(request_function suggest-itinerary "$owner_token" '{"location":"Localhost","days":1,"currency":"USD","totalBudget":10}')"
 assert_status 503 "$status" 'suggest-itinerary fails safely without an LLM provider'
+status="$(request_function clarify-itinerary-locations "$owner_token" '{"destination":"Localhost","stops":[{"stopID":"11111111-1111-4111-8111-111111111111","name":"Old town walk","kind":"activity","area":"Localhost"}]}')"
+assert_status 503 "$status" 'clarify-itinerary-locations fails safely without Claude'
 
 missing_provider_dump="$temporary_dir/missing-provider-data.sql"
 dump_public_data "$missing_provider_dump"
@@ -247,6 +249,10 @@ jq -e '.merchant == "TripSplit Local Cafe" and (.items | length) == 1' "$respons
 status="$(request_function suggest-itinerary "$owner_token" '{"location":"Localhost","days":1,"currency":"USD","totalBudget":10}')"
 assert_status 200 "$status" 'suggest-itinerary authenticated mock path'
 jq -e '(.days | length) == 1 and (.days[0].stops | length) == 1 and .days[0].stops[0].area == "Localhost"' "$response_file" >/dev/null || fail 'suggest-itinerary mock response shape is invalid or lost its location area.'
+
+status="$(request_function clarify-itinerary-locations "$owner_token" '{"destination":"Localhost","stops":[{"stopID":"11111111-1111-4111-8111-111111111111","name":"Old town walk","kind":"activity","area":"Localhost"}]}')"
+assert_status 200 "$status" 'clarify-itinerary-locations authenticated mock path'
+jq -e '.hints[0].stopID == "11111111-1111-4111-8111-111111111111" and .hints[0].canonicalName == "Old town walk" and .hints[0].confidence >= 0.65' "$response_file" >/dev/null || fail 'clarify-itinerary-locations mock response shape is invalid.'
 
 owner_invite_email="edge-invite-$suffix@example.com"
 status="$(request_function send-invitation "$owner_token" "$(jq -nc --arg id "$trip_id" --arg email "$owner_invite_email" '{tripID:$id,email:$email}')")"

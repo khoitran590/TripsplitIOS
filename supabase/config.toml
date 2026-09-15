@@ -11,6 +11,9 @@ verify_jwt = true
 [functions.suggest-itinerary]
 verify_jwt = true
 
+[functions.clarify-itinerary-locations]
+verify_jwt = true
+
 [functions.delete-account]
 verify_jwt = true
 

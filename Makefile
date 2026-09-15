@@ -9,7 +9,8 @@ FUNCTION_ENTRIES = \
 	supabase/functions/send-invitation/index.ts \
 	supabase/functions/ocr-receipt/index.ts \
 	supabase/functions/parse-receipt/index.ts \
-	supabase/functions/suggest-itinerary/index.ts
+	supabase/functions/suggest-itinerary/index.ts \
+	supabase/functions/clarify-itinerary-locations/index.ts
 
 .PHONY: help backend-up backend-status backend-reset backend-test functions-check functions-unit-test functions-serve functions-test backend-down
 
