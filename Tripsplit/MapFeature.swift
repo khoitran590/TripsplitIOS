@@ -874,60 +874,73 @@ struct MapScreen: View {
     }
 
     private var itineraryControls: some View {
-        HStack(spacing: 8) {
-            if isResolvingItineraryLocations {
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.small)
-                    Text("Locating…").font(.app(.caption2, .medium))
-                }
-                .foregroundStyle(.secondary)
-            }
-
-            Spacer(minLength: 0)
-
-            Button {
-                optimizeRouteOrder()
-            } label: {
-                Label(optimizedStopIDs.isEmpty ? "Optimize route" : "Restore order", systemImage: "arrow.triangle.swap")
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.mini)
-            .disabled(locatedStopCount < 3 || isResolvingItineraryLocations)
-            .accessibilityIdentifier("map-optimize-route")
-
-            Menu {
-                Button("Improve pins with Claude", systemImage: "sparkles") {
-                    requestClaudePinHelp()
-                }
-                .disabled(claudeCandidateCount == 0 || isImprovingPinsWithAI || isResolvingItineraryLocations)
-
-                Button("Retry missing locations", systemImage: "arrow.clockwise") {
-                    mapRefreshRevision += 1
-                }
-                .disabled(isResolvingItineraryLocations)
-
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
                 Button {
-                    showsItineraryPath.toggle()
-                    if showsItineraryPath { fitTripCamera(force: true) }
+                    optimizeRouteOrder()
                 } label: {
-                    Label(showsItineraryPath ? "Hide route" : "Show route", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+                    Label(LocalizedStringKey(optimizedStopIDs.isEmpty ? "Optimize order" : "Restore order"),
+                          systemImage: "arrow.triangle.swap")
+                        .font(.app(.caption, .semibold))
                 }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(locatedStopCount < 3 || isResolvingItineraryLocations)
+                .accessibilityIdentifier("map-optimize-route")
 
-                if itineraryMapStops.count > 1 {
+                Menu {
                     Button {
-                        Task { await loadDetailedRoute() }
+                        requestClaudePinHelp()
                     } label: {
-                        Label(detailedRouteCoordinates.isEmpty ? "Load walking route" : "Walking route ready", systemImage: "figure.walk")
+                        Label("Improve pins with Claude", systemImage: "sparkles")
                     }
-                    .disabled(isLoadingDetailedRoute)
+                    .disabled(claudeCandidateCount == 0 || isImprovingPinsWithAI || isResolvingItineraryLocations)
+
+                    Button("Retry missing locations", systemImage: "arrow.clockwise") {
+                        mapRefreshRevision += 1
+                    }
+                    .disabled(isResolvingItineraryLocations)
+
+                    Button {
+                        showsItineraryPath.toggle()
+                        if showsItineraryPath { fitTripCamera(force: true) }
+                    } label: {
+                        Label(showsItineraryPath ? "Hide route" : "Show route", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+                    }
+
+                    if itineraryMapStops.count > 1 {
+                        Button {
+                            Task { await loadDetailedRoute() }
+                        } label: {
+                            Label(detailedRouteCoordinates.isEmpty ? "Load walking route" : "Walking route ready", systemImage: "figure.walk")
+                        }
+                        .disabled(isLoadingDetailedRoute)
+                    }
+                } label: {
+                    Label("Route & pins", systemImage: "ellipsis.circle")
+                        .font(.app(.caption, .semibold))
                 }
-            } label: {
-                Label("Route", systemImage: "ellipsis.circle")
-                    .font(.app(.caption2, .semibold))
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityIdentifier("map-route-menu")
+                Spacer(minLength: 0)
             }
-            .buttonStyle(.bordered)
-            .controlSize(.mini)
-            .accessibilityIdentifier("map-route-menu")
+
+            if isResolvingItineraryLocations {
+                Label("Finding pins for your stops…", systemImage: "mappin.and.ellipse")
+                    .font(.app(.caption2))
+                    .foregroundStyle(.secondary)
+            } else if locatedStopCount < 3 {
+                Text("At least 3 pinned stops are needed to optimize this day.")
+                    .font(.app(.caption2))
+                    .foregroundStyle(.secondary)
+            } else if isTripDrawerExpanded {
+                Text(LocalizedStringKey(optimizedStopIDs.isEmpty
+                     ? "Optimize reorders flexible stops; timed stops stay put."
+                     : "Suggested order shown. Tap Restore order to undo."))
+                    .font(.app(.caption2))
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -1133,49 +1146,92 @@ struct MapScreen: View {
     }
 
     private var tripMapDrawer: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
                 Image(systemName: "map.fill")
-                    .font(.app(.caption2, .semibold))
+                    .font(.app(.subheadline, .semibold))
                     .foregroundStyle(.indigo)
-                    .frame(width: 26, height: 26)
+                    .frame(width: 38, height: 38)
                     .background(Color.indigo.opacity(0.1), in: .circle)
 
-                VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Trip places")
+                        .font(.app(.caption, .semibold))
+                        .foregroundStyle(.secondary)
                     Text(verbatim: selectedTripName)
-                        .font(.app(.subheadline, .semibold))
+                        .font(.app(.headline, .semibold))
                         .lineLimit(1)
-                    Text("Day \(selectedItineraryDay + 1)  ·  \(locatedStopCount)/\(selectedDayStops.count) pinned")
-                        .font(.app(.caption2))
+                    Text("Day \(selectedItineraryDay + 1) · \(selectedDayStops.count) stops · \(locatedStopCount) pinned")
+                        .font(.app(.caption))
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-
-                if let stop = selectedDayStops.first(where: {
-                    $0.mapLocationQuality == .missing || $0.mapLocationQuality == .review
-                }) {
-                    Button { correctingStop = stop } label: {
-                        Image(systemName: "mappin.and.ellipse")
-                            .font(.app(.caption, .semibold))
-                            .frame(width: 28, height: 28)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.orange)
-                    .accessibilityLabel("Fix a stop location")
-                }
 
                 Button {
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.86)) {
                         isTripDrawerExpanded.toggle()
                     }
                 } label: {
-                    Image(systemName: isTripDrawerExpanded ? "chevron.down" : "chevron.up")
-                        .font(.app(.caption2, .bold))
-                        .frame(width: 28, height: 28)
-                        .background(Theme.fieldBackground, in: .circle)
+                    Label(LocalizedStringKey(isTripDrawerExpanded ? "Hide stops" : "Show stops"),
+                          systemImage: isTripDrawerExpanded ? "chevron.down" : "chevron.up")
+                        .font(.app(.caption, .semibold))
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(isTripDrawerExpanded ? "Collapse trip controls" : "Expand trip controls")
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+
+            if let itinerary = selectedItinerary, itinerary.days.count > 1 {
+                HStack(spacing: 8) {
+                    Text("Choose day")
+                        .font(.app(.caption, .semibold))
+                    Spacer(minLength: 0)
+                    Button {
+                        selectItineraryDay(selectedItineraryDay - 1)
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .frame(width: 30, height: 30)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(selectedItineraryDay == 0)
+                    .accessibilityLabel("Previous day")
+                    .accessibilityIdentifier("map-previous-day")
+
+                    Menu {
+                        ForEach(itinerary.days.indices, id: \.self) { index in
+                            Button {
+                                selectItineraryDay(index)
+                            } label: {
+                                if index == selectedItineraryDay {
+                                    Label("Day \(index + 1)", systemImage: "checkmark")
+                                } else {
+                                    Text("Day \(index + 1)")
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text("Day \(selectedItineraryDay + 1) of \(itinerary.days.count)")
+                            Image(systemName: "chevron.down").font(.app(.caption2, .semibold))
+                        }
+                        .font(.app(.caption, .semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .accessibilityIdentifier("map-day-picker")
+
+                    Button {
+                        selectItineraryDay(selectedItineraryDay + 1)
+                    } label: {
+                        Image(systemName: "chevron.right")
+                            .frame(width: 30, height: 30)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(selectedItineraryDay == itinerary.days.count - 1)
+                    .accessibilityLabel("Next day")
+                    .accessibilityIdentifier("map-next-day")
+                }
             }
 
             itineraryControls
@@ -1198,34 +1254,10 @@ struct MapScreen: View {
             }
 
             if isTripDrawerExpanded {
-                HStack(spacing: 8) {
-                    if let itinerary = selectedItinerary, itinerary.days.count > 1 {
-                        Menu {
-                            ForEach(itinerary.days.indices, id: \.self) { index in
-                                Button {
-                                    selectItineraryDay(index)
-                                } label: {
-                                    if index == selectedItineraryDay {
-                                        Label("Day \(index + 1)", systemImage: "checkmark")
-                                    } else {
-                                        Text("Day \(index + 1)")
-                                    }
-                                }
-                            }
-                        } label: {
-                            Label("Day \(selectedItineraryDay + 1)", systemImage: "calendar")
-                                .font(.app(.caption2, .semibold))
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.mini)
-                    }
-
-                    if let summary = automaticAccuracySummary {
-                        Label("\(summary.percent)% verified", systemImage: "checkmark.seal")
-                            .font(.app(.caption2))
-                            .foregroundStyle(.secondary)
-                    }
-
+                if let summary = automaticAccuracySummary {
+                    Label("\(summary.percent)% verified", systemImage: "checkmark.seal")
+                        .font(.app(.caption2))
+                        .foregroundStyle(.secondary)
                 }
 
                 if let stop = unreviewedAutomaticStop {
@@ -1250,25 +1282,33 @@ struct MapScreen: View {
                 }
 
                 if !selectedDayStops.isEmpty {
+                    Text("Tap a stop to review or correct its map pin")
+                        .font(.app(.caption))
+                        .foregroundStyle(.secondary)
                     ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 6) {
+                        HStack(spacing: 8) {
                             ForEach(Array(selectedDayStops.enumerated()), id: \.element.id) { index, stop in
                                 Button { correctingStop = stop } label: {
-                                    HStack(spacing: 5) {
+                                    HStack(spacing: 8) {
                                         Text(verbatim: "\(index + 1)")
-                                            .font(.app(size: 10, weight: .bold))
-                                            .frame(width: 17, height: 17)
+                                            .font(.app(.caption, .bold))
+                                            .frame(width: 26, height: 26)
                                             .background(stop.mapLocationQuality.tint.opacity(0.18), in: .circle)
-                                        Text(verbatim: stop.name)
-                                            .lineLimit(1)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(verbatim: stop.name)
+                                                .font(.app(.subheadline, .medium))
+                                                .lineLimit(1)
+                                            Text(stop.mapLocationQuality.title)
+                                                .font(.app(.caption2))
+                                                .foregroundStyle(.secondary)
+                                        }
                                         Image(systemName: stop.mapLocationQuality.icon)
-                                            .font(.app(size: 10))
+                                            .font(.app(.caption))
                                             .foregroundStyle(stop.mapLocationQuality.tint)
                                     }
-                                    .font(.app(.caption2, .medium))
-                                    .padding(.horizontal, 7)
-                                    .padding(.vertical, 5)
-                                    .background(Theme.fieldBackground, in: .capsule)
+                                    .padding(.horizontal, 12)
+                                    .frame(minHeight: 52)
+                                    .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
                                 }
                                 .buttonStyle(.plain)
                                 .accessibilityElement(children: .combine)
@@ -1280,9 +1320,9 @@ struct MapScreen: View {
                 if showsSpending { spendingControls }
             }
         }
-        .padding(.horizontal, 11)
-        .padding(.vertical, 9)
-        .readableSurface(cornerRadius: 16)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .readableSurface(cornerRadius: 20)
     }
 
     // MARK: Search + saved state

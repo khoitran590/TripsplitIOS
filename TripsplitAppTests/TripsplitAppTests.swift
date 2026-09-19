@@ -900,6 +900,158 @@ final class TripsplitAppTests: XCTestCase {
                               selected: selected, noSplitAssignee: assignee,
                               percentages: percentages, amounts: amounts)
     }
+
+    // MARK: - Onboarding & Auth Intent Tests
+
+    func testOnboardingCoordinatorSuppressesOnColdLaunchRestore() {
+        let coordinator = OnboardingCoordinator()
+        let testID = UUID()
+
+        // First update simulates cold launch bootstrap with restored session
+        coordinator.update(userID: testID, displayName: "Alice", authIntent: .sessionRestored)
+
+        XCTAssertNil(coordinator.step, "Cold launch must never present onboarding steps")
+        XCTAssertNil(coordinator.visibleStep)
+        XCTAssertNil(coordinator.returningUserSummary)
+        XCTAssertFalse(coordinator.isFirstRunFlow)
+    }
+
+    func testOnboardingCoordinatorTriggersNewUserFlowOnRegistration() {
+        let coordinator = OnboardingCoordinator()
+        let testID = UUID()
+
+        // Simulate launch without session
+        coordinator.update(userID: nil, displayName: "")
+
+        // Simulate new user registration
+        coordinator.update(userID: testID, displayName: "", authIntent: .newRegistration)
+
+        XCTAssertEqual(coordinator.step, .newUserFlow)
+        XCTAssertEqual(coordinator.visibleStep, .newUserFlow)
+        XCTAssertNil(coordinator.returningUserSummary)
+
+        // Complete new user onboarding
+        coordinator.newUserOnboardingFinished()
+        XCTAssertNil(coordinator.step)
+        XCTAssertFalse(coordinator.isFirstRunFlow)
+    }
+
+    func testOnboardingCoordinatorTriggersReturningSummaryOnExistingSignIn() {
+        let coordinator = OnboardingCoordinator()
+        let testID = UUID()
+
+        // Bootstrap as existing onboarded user
+        coordinator.update(userID: testID, displayName: "Alice", authIntent: .sessionRestored)
+
+        // Simulate sign-out
+        coordinator.update(userID: nil, displayName: "")
+        XCTAssertNil(coordinator.step)
+        XCTAssertNil(coordinator.returningUserSummary)
+
+        // Simulate sign back in
+        coordinator.update(userID: testID, displayName: "Alice", authIntent: .existingSignIn)
+
+        XCTAssertNil(coordinator.step)
+        XCTAssertNotNil(coordinator.returningUserSummary)
+        XCTAssertEqual(coordinator.returningUserSummary?.displayName, "Alice")
+        XCTAssertEqual(coordinator.returningUserSummary?.tripsCount, 0)
+
+        // Simulate cloud sync completion
+        coordinator.didFinishCloudSync(
+            tripsCount: 3,
+            netBalanceOwed: 45.50,
+            currencyCode: "USD",
+            avatarURL: "path/to/avatar.jpg"
+        )
+
+        XCTAssertEqual(coordinator.returningUserSummary?.tripsCount, 3)
+        XCTAssertEqual(coordinator.returningUserSummary?.netBalanceOwed, 45.50)
+        XCTAssertEqual(coordinator.returningUserSummary?.currencyCode, "USD")
+        XCTAssertEqual(coordinator.returningUserSummary?.avatarURL, "path/to/avatar.jpg")
+
+        // Dismiss summary
+        coordinator.dismissReturningSummary()
+        XCTAssertNil(coordinator.returningUserSummary)
+    }
+
+    func testOnboardingCoordinatorPauseHidesVisibleElements() {
+        let coordinator = OnboardingCoordinator()
+        let testID = UUID()
+
+        coordinator.update(userID: nil, displayName: "")
+        coordinator.update(userID: testID, displayName: "", authIntent: .newRegistration)
+
+        XCTAssertEqual(coordinator.visibleStep, .newUserFlow)
+
+        // Pausing hides the visible step from presenting sheets
+        coordinator.isPaused = true
+        XCTAssertNil(coordinator.visibleStep)
+        XCTAssertEqual(coordinator.step, .newUserFlow)
+
+        coordinator.isPaused = false
+        XCTAssertEqual(coordinator.visibleStep, .newUserFlow)
+    }
+
+    func testAuthStoreIntentConsumption() {
+        let auth = AuthStore(restorePersistedSession: false)
+        XCTAssertNil(auth.lastAuthIntent)
+
+        // Consuming when nil remains nil
+        XCTAssertNil(auth.consumeAuthIntent())
+    }
+
+    func testOnboardingCoordinatorReturningUserMissingNameShowsProfileSetup() {
+        let coordinator = OnboardingCoordinator()
+        let testID = UUID()
+
+        // Bootstrap as existing user without a name
+        coordinator.update(userID: testID, displayName: "", authIntent: .sessionRestored)
+
+        // Sign out
+        coordinator.update(userID: nil, displayName: "")
+
+        // Sign in without a display name
+        coordinator.update(userID: testID, displayName: "", authIntent: .existingSignIn)
+
+        // Should present profileSetup to gather name
+        XCTAssertEqual(coordinator.step, .profileSetup)
+        XCTAssertEqual(coordinator.visibleStep, .profileSetup)
+        XCTAssertNil(coordinator.returningUserSummary)
+
+        coordinator.profileSetupFinished()
+        XCTAssertNil(coordinator.step)
+    }
+
+    func testQuickStartActionAndNewUserStepIntegrity() {
+        XCTAssertEqual(NewUserStep.allCases, [.identity, .featureTour, .quickStart])
+        XCTAssertEqual(NewUserStep.identity.rawValue, 1)
+        XCTAssertEqual(NewUserStep.featureTour.rawValue, 2)
+        XCTAssertEqual(NewUserStep.quickStart.rawValue, 3)
+
+        let actions: [QuickStartAction] = [.createTrip, .sampleTrip, .explore]
+        XCTAssertEqual(actions.count, 3)
+    }
+
+    func testReturningUserSummaryBalanceVariations() {
+        let positive = ReturningUserSummary(
+            displayName: "Bob",
+            avatarURL: nil,
+            tripsCount: 2,
+            netBalanceOwed: 150.00,
+            currencyCode: "EUR"
+        )
+        XCTAssertGreaterThan(positive.netBalanceOwed, 0)
+
+        let negative = ReturningUserSummary(
+            displayName: "Bob",
+            avatarURL: nil,
+            tripsCount: 1,
+            netBalanceOwed: -75.50,
+            currencyCode: "USD"
+        )
+        XCTAssertLessThan(negative.netBalanceOwed, 0)
+        XCTAssertEqual(negative.currencyCode, "USD")
+    }
 }
 
 private actor RemoteSignOutProbe {

@@ -119,23 +119,24 @@ struct FloatingDock: View {
                     .frame(minWidth: 44, minHeight: 44)
                     .padding(.horizontal, dynamicTypeSize.isAccessibilitySize ? 4 : 8)
                     .background {
-                        // Scale the button backing with the same visibility the outer
-                        // capsule uses, so the navbar-transparency slider still reaches
-                        // the button area. `backgroundVisibility` pins to 1 under Reduce
-                        // Transparency / Increased Contrast, keeping the ink's backing
-                        // fully opaque in the modes that need the contrast.
-                        Capsule()
-                            .fill(Theme.surface.opacity(backgroundVisibility))
-                            .overlay {
-                                if isActive {
-                                    if softElevation {
-                                        SoftSurface(shape: Capsule(), fill: Theme.background, depth: 3, pressed: true)
-                                            .opacity(backgroundVisibility)
-                                    } else {
-                                        Capsule().fill(Theme.accent.opacity(0.13))
+                        // Light mode keeps the tabs visually unified inside the
+                        // single outer dock instead of giving every icon its own
+                        // filled capsule. Preserve the existing backing in dark mode,
+                        // where it provides the contrast needed over darker surfaces.
+                        if colorScheme == .dark {
+                            Capsule()
+                                .fill(Theme.surface.opacity(backgroundVisibility))
+                                .overlay {
+                                    if isActive {
+                                        if softElevation {
+                                            SoftSurface(shape: Capsule(), fill: Theme.background, depth: 3, pressed: true)
+                                                .opacity(backgroundVisibility)
+                                        } else {
+                                            Capsule().fill(Theme.accent.opacity(0.13))
+                                        }
                                     }
                                 }
-                            }
+                        }
                     }
                     .contentShape(.capsule)
                 }

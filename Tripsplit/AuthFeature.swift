@@ -90,6 +90,18 @@ enum SupabaseConfig {
 
 // MARK: - Auth models
 
+/// Describes the manner in which the current session was authenticated,
+/// allowing coordinators (such as onboarding) to differentiate between brand
+/// new user registrations, returning logins, and cold session restores.
+enum AuthIntent: Equatable, Sendable {
+    /// A brand new user account was registered on this device.
+    case newRegistration
+    /// An existing user actively signed into their account on this device.
+    case existingSignIn
+    /// An existing session was restored from Keychain at launch (silent, non-blocking).
+    case sessionRestored
+}
+
 /// A simple typed auth error whose message is safe to show to the user.
 struct AuthError: Error, LocalizedError {
     let message: String
@@ -584,6 +596,8 @@ final class AuthStore {
     private let storageKey = "tripsplit.authSession"
 
     var session: AuthSession?
+    /// The intent behind the most recent authentication change, consumed by coordinators.
+    private(set) var lastAuthIntent: AuthIntent?
 
     /// Injectable only so the local-first sign-out contract can be tested without
     /// contacting Docker or production. App instances use Supabase global revocation.
@@ -612,17 +626,21 @@ final class AuthStore {
                 refreshToken: "local-demo-only",
                 email: "reviewer@tripsplit.app"
             )
+            lastAuthIntent = .sessionRestored
         } else if let saved = AuthSessionStore.load() {
             session = saved
+            lastAuthIntent = .sessionRestored
         } else if let data = UserDefaults.standard.data(forKey: storageKey),
                   let saved = try? JSONDecoder().decode(AuthSession.self, from: data) {
             // One-time migration from the previous UserDefaults storage.
             persist(saved)
             UserDefaults.standard.removeObject(forKey: storageKey)
+            lastAuthIntent = .sessionRestored
         }
     }
 
     func signIn(email: String, password: String) async throws {
+        lastAuthIntent = .existingSignIn
         persist(try await AuthService.shared.signIn(email: email, password: password))
     }
 
@@ -631,6 +649,7 @@ final class AuthStore {
     func signUp(email: String, password: String) async throws -> Bool {
         switch try await AuthService.shared.signUp(email: email, password: password) {
         case .signedIn(let session):
+            lastAuthIntent = .newRegistration
             persist(session)
             return true
         case .needsConfirmation:
@@ -643,7 +662,16 @@ final class AuthStore {
     }
 
     func signInWithApple(identityToken: String, nonce: String) async throws {
+        let isNewAppleUser = UserDefaults.standard.string(forKey: "pendingAppleDisplayName") != nil
+        lastAuthIntent = isNewAppleUser ? .newRegistration : .existingSignIn
         persist(try await AuthService.shared.signInWithApple(identityToken: identityToken, nonce: nonce))
+    }
+
+    /// Reads and clears the last recorded auth intent so it is not processed twice.
+    func consumeAuthIntent() -> AuthIntent? {
+        let intent = lastAuthIntent
+        lastAuthIntent = nil
+        return intent
     }
 
     func refreshSession() async throws -> AuthSession {
@@ -724,6 +752,7 @@ final class AuthStore {
         refreshTask?.cancel()
         refreshTask = nil
         session = nil
+        lastAuthIntent = nil
         AuthSessionStore.delete()
         UserDefaults.standard.removeObject(forKey: storageKey)
     }

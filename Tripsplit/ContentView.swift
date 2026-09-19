@@ -129,6 +129,9 @@ struct ContentView: View {
     /// restored at launch.
     @State private var onboarding = OnboardingCoordinator()
     @State private var showProfileSetup = false
+    @State private var showNewUserOnboarding = false
+    @State private var pendingQuickStartAction: QuickStartAction?
+    @State private var showAddTripFromOnboarding = false
     /// Sign-in sheet opened straight from the welcome flow.
     @State private var showWelcomeSignIn = false
     /// An invite link opened while signed out, held until the user signs in.
@@ -167,12 +170,28 @@ struct ContentView: View {
         .animation(.snappy, value: store.syncState)
         // A returning account gets this instead of the first-run sequence.
         .overlay(alignment: .top) {
-            if let name = onboarding.welcomeBackName {
+            if let summary = onboarding.visibleReturningSummary {
+                ReturningUserBanner(
+                    summary: summary,
+                    onViewTrips: {
+                        withAnimation(.snappy) {
+                            selectedTab = .trips
+                            onboarding.dismissReturningSummary()
+                        }
+                    },
+                    onDismiss: {
+                        onboarding.dismissReturningSummary()
+                    }
+                )
+                .padding(.top, 8)
+                .transition(.move(edge: .top).combined(with: .opacity))
+            } else if let name = onboarding.welcomeBackName {
                 WelcomeBackToast(name: name)
                     .padding(.top, 8)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
+        .animation(.snappy, value: onboarding.visibleReturningSummary)
         .animation(.snappy, value: onboarding.welcomeBackName)
         .onChange(of: selectedTab) { _, tab in visitedTabs.insert(tab) }
         // Keep the user on the tab that requested authentication so the presenting
@@ -211,6 +230,31 @@ struct ContentView: View {
         .sheet(isPresented: $showProfileSetup, onDismiss: { onboarding.profileSetupFinished() }) {
             ProfileSetupView(isFirstRun: onboarding.isFirstRunFlow)
         }
+        .sheet(isPresented: $showNewUserOnboarding, onDismiss: {
+            onboarding.newUserOnboardingFinished()
+            if let action = pendingQuickStartAction {
+                pendingQuickStartAction = nil
+                switch action {
+                case .createTrip:
+                    selectedTab = .trips
+                    showAddTripFromOnboarding = true
+                case .sampleTrip:
+                    store.installAppStoreDemoData()
+                    friends.store = store
+                    selectedTab = .trips
+                case .explore:
+                    selectedTab = .explore
+                }
+            }
+        }) {
+            NewUserOnboardingView { action in
+                pendingQuickStartAction = action
+                showNewUserOnboarding = false
+            }
+        }
+        .sheet(isPresented: $showAddTripFromOnboarding) {
+            AddTripView()
+        }
         .sheet(isPresented: $showWelcomeSignIn) {
             WelcomeSignInSheet()
         }
@@ -235,12 +279,13 @@ struct ContentView: View {
         // the read in the body's observation scope, so a queued step reliably presents.
         .task(id: onboarding.visibleStep) {
             showProfileSetup = onboarding.visibleStep == .profileSetup
+            showNewUserOnboarding = onboarding.visibleStep == .newUserFlow
         }
         .task(id: auth.session?.accessToken) {
             if AppStoreDemoData.isEnabled {
                 store.installAppStoreDemoData()
                 friends.store = store
-                onboarding.update(userID: AppStoreDemoData.userID, displayName: store.currentUser.name)
+                onboarding.update(userID: AppStoreDemoData.userID, displayName: store.currentUser.name, authIntent: .sessionRestored)
                 return
             }
             // Keep the trip store's token + identity in sync with the auth session and
@@ -261,13 +306,15 @@ struct ContentView: View {
             // Load the cloud profile first so `loadFromCloud`'s member healing uses
             // the authoritative name/avatar rather than the local cache.
             await store.loadProfileFromCloud()
+            let intent = auth.consumeAuthIntent()
             // Hand the settled identity to onboarding before the (slower) trip load,
             // so a new account isn't left staring at an empty app first. Called on
             // every token change; the coordinator ignores everything but a real
             // sign-in, sign-out, or account switch.
             onboarding.update(
                 userID: auth.isAuthenticated ? store.currentUser.id : nil,
-                displayName: store.currentUser.name
+                displayName: store.currentUser.name,
+                authIntent: intent
             )
             // Friends are secondary to painting the user's cached/current trips. Run
             // that independent fetch alongside trip synchronization so it does not add
@@ -275,6 +322,13 @@ struct ContentView: View {
             async let friendsRefresh: Void = friends.refresh()
             await store.loadFromCloud()
             await friendsRefresh
+            let totals = store.homeTotals(in: "USD")
+            onboarding.didFinishCloudSync(
+                tripsCount: store.myTrips.count,
+                netBalanceOwed: totals.owedToYou - totals.youOwe,
+                currencyCode: "USD",
+                avatarURL: store.currentUser.avatarURL
+            )
         }
         .onOpenURL { url in
             // Profile share links open a viewable profile card; they don't need to be
