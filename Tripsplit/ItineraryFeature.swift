@@ -85,6 +85,12 @@ nonisolated struct ItineraryStop: Identifiable, Codable, Equatable {
     /// Map tab resolving the stop's name. Map keeps its hands off those pins: they are
     /// deliberate, even when they sit far outside the trip's destination.
     var isUserPlaced: Bool = false
+    /// The trip creator's "why this spot" note, shown to every member. Only the
+    /// creator can write it (enforced in the UI; the trip blob itself is member-writable).
+    var creatorNote: String = ""
+    /// Tripmates' feedback on this stop. Lives on the stop so removing the stop
+    /// removes its thread too.
+    var comments: [ExpenseComment] = []
 
     init(
         id: UUID = UUID(),
@@ -107,7 +113,9 @@ nonisolated struct ItineraryStop: Identifiable, Codable, Equatable {
         aiAddressHint: String? = nil,
         aiAliases: [String] = [],
         aiHintConfidence: Double? = nil,
-        isUserPlaced: Bool = false
+        isUserPlaced: Bool = false,
+        creatorNote: String = "",
+        comments: [ExpenseComment] = []
     ) {
         self.id = id
         self.name = name
@@ -130,13 +138,15 @@ nonisolated struct ItineraryStop: Identifiable, Codable, Equatable {
         self.aiAliases = aiAliases
         self.aiHintConfidence = aiHintConfidence
         self.isUserPlaced = isUserPlaced
+        self.creatorNote = creatorNote
+        self.comments = comments
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, kind, time, notes, cost, latitude, longitude, address, area
         case placeIdentifier, resolvedName, resolutionConfidence, locationSource, resolutionVersion
         case aiCanonicalName, aiAreaHint, aiAddressHint, aiAliases, aiHintConfidence
-        case isUserPlaced
+        case isUserPlaced, creatorNote, comments
     }
 
     // Every field decodes with a default so trips stored before a field existed keep loading.
@@ -163,6 +173,8 @@ nonisolated struct ItineraryStop: Identifiable, Codable, Equatable {
         aiAliases = try c.decodeIfPresent([String].self, forKey: .aiAliases) ?? []
         aiHintConfidence = try c.decodeIfPresent(Double.self, forKey: .aiHintConfidence)
         isUserPlaced = try c.decodeIfPresent(Bool.self, forKey: .isUserPlaced) ?? false
+        creatorNote = try c.decodeIfPresent(String.self, forKey: .creatorNote) ?? ""
+        comments = try c.decodeIfPresent([ExpenseComment].self, forKey: .comments) ?? []
     }
 
     var coordinate: CLLocationCoordinate2D? {
@@ -354,6 +366,39 @@ extension TripStore {
         guard var trip = trip(tripID) else { return }
         trip.itinerary = itinerary
         updateTrip(trip)
+    }
+
+    /// Applies `change` to the stop with `stopID`, wherever it sits in the plan.
+    private func updateStop(_ stopID: ItineraryStop.ID, in tripID: Trip.ID, _ change: (inout ItineraryStop) -> Void) {
+        guard var itinerary = trip(tripID)?.itinerary else { return }
+        for day in itinerary.days.indices {
+            if let index = itinerary.days[day].stops.firstIndex(where: { $0.id == stopID }) {
+                change(&itinerary.days[day].stops[index])
+                updateItinerary(itinerary, in: tripID)
+                return
+            }
+        }
+    }
+
+    /// Sets a stop's "why this spot" note. Creator-only.
+    func setCreatorNote(_ note: String, forStop stopID: ItineraryStop.ID, in tripID: Trip.ID) {
+        guard let trip = trip(tripID), isCreator(of: trip) else { return }
+        updateStop(stopID, in: tripID) { $0.creatorNote = note }
+    }
+
+    func addStopComment(_ text: String, toStop stopID: ItineraryStop.ID, in tripID: Trip.ID) {
+        let comment = ExpenseComment(authorID: currentUser.id, authorName: currentUser.name, text: text)
+        updateStop(stopID, in: tripID) { $0.comments.append(comment) }
+    }
+
+    /// Mirrors expense comments: the author or the trip creator may delete.
+    func deleteStopComment(_ commentID: ExpenseComment.ID, fromStop stopID: ItineraryStop.ID, in tripID: Trip.ID) {
+        guard let trip = trip(tripID) else { return }
+        let canDeleteAny = isCreator(of: trip)
+        let me = currentUser.id
+        updateStop(stopID, in: tripID) { stop in
+            stop.comments.removeAll { $0.id == commentID && (canDeleteAny || $0.authorID == me) }
+        }
     }
 
     /// Detaches the day-by-day plan from a trip; the trip and its expenses are kept.
@@ -891,7 +936,8 @@ struct ItineraryDetailView: View {
 
     @State private var selectedDayIndex = 0
     @State private var isAddingStop = false
-    @State private var editingStop: ItineraryStop?
+    /// The stop whose details sheet (note, comments, edit) is open.
+    @State private var viewingStop: ItineraryStop?
     @State private var expenseStop: ItineraryStop?
     @State private var isEditingBudget = false
     @State private var budgetText = ""
@@ -904,6 +950,9 @@ struct ItineraryDetailView: View {
     // Trip photo state. The itinerary shares `Trip.coverImageURL` with the trip
     // detail screen, so a photo set on either side shows on both.
     @State private var coverPick: PhotosPickerItem?
+    /// Drives `.photosPicker` — a `PhotosPicker` nested in the camera `Menu` never
+    /// presents, because the menu tears its items down as it dismisses.
+    @State private var showCoverPicker = false
     @State private var cropCandidate: CoverCropCandidate?
     @State private var isUploadingCover = false
     @State private var isLoadingCurrentCover = false
@@ -1022,6 +1071,7 @@ struct ItineraryDetailView: View {
                 performGenerateSuggestion(currentTrip, currentItinerary)
             }
         }
+        .photosPicker(isPresented: $showCoverPicker, selection: $coverPick, matching: .images)
         .onChange(of: coverPick) { _, pick in
             guard let pick else { return }
             coverPick = nil
@@ -1062,8 +1112,8 @@ struct ItineraryDetailView: View {
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
-        .sheet(item: $editingStop) { stop in
-            ItineraryStopEditorView(stop: stop, currencyCode: trip.currencyCode, locationHint: trip.location ?? trip.name) { updated in
+        .sheet(item: $viewingStop) { stop in
+            ItineraryStopDetailView(tripID: tripID, stopID: stop.id) { updated in
                 replaceStop(updated, inDay: dayIndex)
             }
             .presentationDetents([.medium, .large])
@@ -1155,7 +1205,7 @@ struct ItineraryDetailView: View {
         .shadow(color: Theme.elevatedShadow, radius: 10, y: 4)
         .overlay(alignment: .topTrailing) {
             Menu {
-                PhotosPicker(selection: $coverPick, matching: .images) {
+                Button { showCoverPicker = true } label: {
                     Label(hasCover(trip) ? "Replace photo" : "Add photo", systemImage: "photo")
                 }
                 if hasCover(trip) {
@@ -1518,7 +1568,7 @@ struct ItineraryDetailView: View {
                                 removeStop(stop.id, fromDay: dayIndex)
                             } content: {
                                 Button {
-                                    editingStop = stop
+                                    viewingStop = stop
                                 } label: {
                                     stopRow(stop, currencyCode: trip.currencyCode)
                                 }
@@ -1613,14 +1663,26 @@ struct ItineraryDetailView: View {
                     .font(.app(.subheadline, .bold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                if !stop.notes.isEmpty {
-                    Text(verbatim: stop.notes)
+                let subtitle = stop.notes.isEmpty ? stop.creatorNote : stop.notes
+                if !subtitle.isEmpty {
+                    Text(verbatim: subtitle)
                         .font(Theme.Typography.metadata)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
             }
             Spacer(minLength: 0)
+            if !stop.comments.isEmpty {
+                Label {
+                    Text(verbatim: "\(stop.comments.count)")
+                } icon: {
+                    Image(systemName: "bubble.left.fill")
+                }
+                .labelStyle(.titleAndIcon)
+                .font(.app(.caption2, .semibold))
+                .foregroundStyle(.secondary)
+                .accessibilityLabel(stop.comments.count == 1 ? Text("1 comment") : Text("\(stop.comments.count) comments"))
+            }
             if stop.cost > 0 {
                 Text(verbatim: money(stop.cost, currencyCode))
                     .font(.app(.caption, .bold))
@@ -1635,7 +1697,7 @@ struct ItineraryDetailView: View {
         .frame(minHeight: 50)
         .contentShape(.rect)
         .accessibilityElement(children: .combine)
-        .accessibilityHint("Edits this stop")
+        .accessibilityHint("Shows notes and comments for this stop")
     }
 
     // MARK: AI planner
@@ -2134,6 +2196,10 @@ struct ItineraryDetailView: View {
         guard var itinerary = store.trip(tripID)?.itinerary,
               itinerary.days.indices.contains(dayIndex),
               let stopIndex = itinerary.days[dayIndex].stops.firstIndex(where: { $0.id == stop.id }) else { return }
+        // Keep the live note and thread: comments may have synced in while the editor was open.
+        var stop = stop
+        stop.creatorNote = itinerary.days[dayIndex].stops[stopIndex].creatorNote
+        stop.comments = itinerary.days[dayIndex].stops[stopIndex].comments
         itinerary.days[dayIndex].stops[stopIndex] = stop
         store.updateItinerary(itinerary, in: tripID)
     }
@@ -2166,6 +2232,250 @@ struct ItineraryDetailView: View {
               let amount = Double(budgetText.trimmingCharacters(in: .whitespaces)) else { return }
         itinerary.totalBudget = SplitEngine.roundToTwo(max(amount, 0))
         store.updateItinerary(itinerary, in: tripID)
+    }
+}
+
+// MARK: - Stop details
+
+/// One stop's details: the trip creator's "why this spot" note (editable by the
+/// creator only) and a comment thread where tripmates can suggest changes. Reads
+/// the stop live from the store so new comments appear as they sync.
+struct ItineraryStopDetailView: View {
+    @Environment(TripStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    let tripID: Trip.ID
+    let stopID: ItineraryStop.ID
+    let onSave: (ItineraryStop) -> Void
+
+    @State private var noteDraft = ""
+    @State private var commentText = ""
+    @State private var isEditing = false
+    @FocusState private var commentFieldFocused: Bool
+
+    private var trip: Trip? { store.trip(tripID) }
+
+    private var stop: ItineraryStop? {
+        trip?.itinerary?.days.lazy.flatMap(\.stops).first { $0.id == stopID }
+    }
+
+    private var isCreator: Bool { trip.map { store.isCreator(of: $0) } ?? false }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                AppBackground()
+                if let trip, let stop {
+                    ScrollView {
+                        VStack(spacing: Theme.Space.section) {
+                            summaryCard(stop, currencyCode: trip.currencyCode)
+                            noteCard(stop, trip: trip)
+                            commentsCard(stop, trip: trip)
+                        }
+                        .padding()
+                        .padding(.bottom, 24)
+                    }
+                    .sheet(isPresented: $isEditing) {
+                        ItineraryStopEditorView(stop: stop, currencyCode: trip.currencyCode, locationHint: trip.location ?? trip.name) { updated in
+                            onSave(updated)
+                        }
+                        .presentationDetents([.medium, .large])
+                        .presentationDragIndicator(.visible)
+                    }
+                } else {
+                    ContentUnavailableView("Stop removed", systemImage: "mappin.slash")
+                }
+            }
+            .navigationTitle(stop?.name ?? "")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+                if stop != nil {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Edit") { isEditing = true }
+                    }
+                }
+            }
+            .onAppear { noteDraft = stop?.creatorNote ?? "" }
+        }
+    }
+
+    private func summaryCard(_ stop: ItineraryStop, currencyCode: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: stop.kind.icon)
+                .font(Theme.Typography.rowTitle)
+                .foregroundStyle(.white)
+                .frame(width: 40, height: 40)
+                .background(stop.kind.tint, in: .circle)
+                .accessibilityLabel(stop.kind.label)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(verbatim: stop.name)
+                    .font(.app(.headline, .bold))
+                if let address = stop.address, !address.isEmpty {
+                    Text(verbatim: address)
+                        .font(Theme.Typography.metadata)
+                        .foregroundStyle(.secondary)
+                }
+                HStack(spacing: 8) {
+                    if let time = stop.time {
+                        Label {
+                            Text(verbatim: time.formatted(date: .omitted, time: .shortened))
+                        } icon: {
+                            Image(systemName: "clock")
+                        }
+                    }
+                    if stop.cost > 0 {
+                        Text(verbatim: money(stop.cost, currencyCode))
+                            .monospacedDigit()
+                    }
+                }
+                .font(.app(.caption, .semibold))
+                .foregroundStyle(.secondary)
+                if !stop.notes.isEmpty {
+                    Text(verbatim: stop.notes)
+                        .font(Theme.Typography.secondary)
+                        .padding(.top, 4)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(Theme.Space.card)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .homePanel(cornerRadius: Theme.cardRadius)
+    }
+
+    @ViewBuilder
+    private func noteCard(_ stop: ItineraryStop, trip: Trip) -> some View {
+        TripCard(title: "Why this spot", icon: "text.bubble.fill") {
+            if isCreator {
+                TextField("Tell your tripmates why you picked this place…", text: $noteDraft, axis: .vertical)
+                    .lineLimit(3...8)
+                    .font(Theme.Typography.secondary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+                let trimmed = noteDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed != stop.creatorNote {
+                    Button {
+                        store.setCreatorNote(trimmed, forStop: stop.id, in: tripID)
+                        noteDraft = trimmed
+                    } label: {
+                        Text("Save note")
+                            .font(Theme.Typography.rowTitle)
+                            .foregroundStyle(Theme.onAccent)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 11)
+                    }
+                    .buttonStyle(.plain)
+                    .actionFill(tint: Theme.accent)
+                }
+            } else if stop.creatorNote.isEmpty {
+                Text("The trip creator hasn't added a note for this stop yet.")
+                    .font(Theme.Typography.secondary)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    if let creator = trip.members.first(where: { $0.id == trip.creatorID }) {
+                        HStack(spacing: 8) {
+                            avatar(creator, size: 24)
+                            Text(verbatim: creator.name)
+                                .font(.app(.caption, .semibold))
+                        }
+                    }
+                    Text(verbatim: stop.creatorNote)
+                        .font(Theme.Typography.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+    }
+
+    private func commentsCard(_ stop: ItineraryStop, trip: Trip) -> some View {
+        let comments = stop.comments
+        let canSend = !commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return TripCard(title: "Comments (\(comments.count))", icon: "bubble.left.and.bubble.right.fill") {
+            if comments.isEmpty {
+                Text("Suggest a change or share your thoughts on this stop.")
+                    .font(Theme.Typography.secondary)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .multilineTextAlignment(.center)
+                    .padding(.vertical, 8)
+            } else {
+                ForEach(comments) { comment in
+                    commentRow(comment, stopID: stop.id, trip: trip)
+                    if comment.id != comments.last?.id {
+                        Divider()
+                    }
+                }
+            }
+
+            Divider()
+
+            HStack(spacing: 10) {
+                TextField("Add a comment…", text: $commentText, axis: .vertical)
+                    .lineLimit(1...4)
+                    .font(Theme.Typography.secondary)
+                    .focused($commentFieldFocused)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Theme.fieldBackground, in: .rect(cornerRadius: 12))
+
+                Button {
+                    addComment(to: stop.id)
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.app(size: 32))
+                        .foregroundStyle(Theme.accent)
+                }
+                .buttonStyle(.plain)
+                .disabled(!canSend)
+                .opacity(canSend ? 1 : 0.4)
+                .accessibilityLabel("Send comment")
+            }
+        }
+    }
+
+    private func commentRow(_ comment: ExpenseComment, stopID: ItineraryStop.ID, trip: Trip) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                if let member = trip.members.first(where: { $0.id == comment.authorID }) {
+                    avatar(member, size: 24)
+                }
+                Text(LocalizedStringKey(comment.authorID == store.currentUser.id ? "You" : comment.authorName))
+                    .font(.app(.caption, .semibold))
+                Spacer()
+                Text(comment.date.formatted(date: .abbreviated, time: .shortened))
+                    .font(.app(.caption2))
+                    .foregroundStyle(.tertiary)
+
+                if comment.authorID == store.currentUser.id || isCreator {
+                    Button {
+                        store.deleteStopComment(comment.id, fromStop: stopID, in: tripID)
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.app(.caption2))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Delete comment")
+                }
+            }
+
+            Text(verbatim: comment.text)
+                .font(Theme.Typography.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func addComment(to stopID: ItineraryStop.ID) {
+        let text = commentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        store.addStopComment(text, toStop: stopID, in: tripID)
+        commentText = ""
+        commentFieldFocused = false
     }
 }
 
@@ -2528,7 +2838,9 @@ struct ItineraryStopEditorView: View {
             aiAddressHint: keepsAIHints ? stop?.aiAddressHint : nil,
             aiAliases: keepsAIHints ? stop?.aiAliases ?? [] : [],
             aiHintConfidence: keepsAIHints ? stop?.aiHintConfidence : nil,
-            isUserPlaced: isUserPlaced && latitude != nil
+            isUserPlaced: isUserPlaced && latitude != nil,
+            creatorNote: stop?.creatorNote ?? "",
+            comments: stop?.comments ?? []
         )
         onSave(saved)
         dismiss()

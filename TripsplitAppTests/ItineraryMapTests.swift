@@ -58,6 +58,17 @@ final class ItineraryMapTests: XCTestCase {
         XCTAssertFalse(ItineraryPinPreview.canApplyResolution(from: original, to: changed))
     }
 
+    func testStopNoteAndCommentsDecodeFromOldTripsAndRoundTrip() throws {
+        let legacy = try JSONDecoder().decode(ItineraryStop.self, from: Data(#"{"name":"Old stop"}"#.utf8))
+        XCTAssertEqual(legacy.creatorNote, "")
+        XCTAssertTrue(legacy.comments.isEmpty)
+
+        var stop = ItineraryStop(name: "Senso-ji", creatorNote: "Best at sunrise")
+        stop.comments = [ExpenseComment(authorID: UUID(), authorName: "Sam", text: "Can we go later?")]
+        let decoded = try JSONDecoder().decode(ItineraryStop.self, from: JSONEncoder().encode(stop))
+        XCTAssertEqual(decoded, stop)
+    }
+
     func testInvalidImportedCoordinatesDoNotBecomePins() {
         XCTAssertNil(stop("Invalid", 91, 2).coordinate)
         XCTAssertNil(stop("Invalid", 48, .infinity).coordinate)
