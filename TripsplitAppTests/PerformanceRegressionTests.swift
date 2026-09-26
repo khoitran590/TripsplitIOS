@@ -94,6 +94,20 @@ final class PerformanceRegressionTests: XCTestCase {
         XCTAssertFalse(allowed)
     }
 
+    func testMapLookupPacerStaysWithinRollingWindowBudget() async {
+        let pacer = MapLookupPacer(interval: .milliseconds(1), windowLimit: 3, window: .milliseconds(300))
+        let clock = ContinuousClock()
+        let started = clock.now
+        for _ in 0..<3 {
+            let allowed = await pacer.waitForTurn()
+            XCTAssertTrue(allowed)
+        }
+        XCTAssertLessThan(clock.now - started, .milliseconds(250))
+        let fourth = await pacer.waitForTurn()
+        XCTAssertTrue(fourth)
+        XCTAssertGreaterThanOrEqual(clock.now - started, .milliseconds(300))
+    }
+
     func testMapLookupPacerCapsParallelWorkWithoutDroppingRequests() async {
         let pacer = MapLookupPacer(interval: .milliseconds(1), maximumConcurrent: 2)
         let probe = LookupConcurrencyProbe()

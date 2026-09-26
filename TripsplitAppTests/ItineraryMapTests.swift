@@ -92,35 +92,32 @@ final class ItineraryMapTests: XCTestCase {
         XCTAssertTrue(request.resultTypes.contains(.address))
     }
 
-    func testClaudeHintsLeadSearchWithoutReplacingTheItineraryLabel() throws {
-        let stopID = UUID()
-        let hint = AIItineraryLocationHint(
-            stopID: stopID,
-            canonicalName: "Thang Long Water Puppet Theater",
-            area: "Hoan Kiem, Hanoi, Vietnam",
-            address: "57B Dinh Tien Hoang Street",
-            aliases: ["Nhà hát Múa rối Thăng Long"],
-            confidence: 0.94
-        )
-        let decoded = try JSONDecoder().decode(
-            AIItineraryLocationHint.self,
-            from: JSONEncoder().encode(hint)
-        )
-        var stop = ItineraryStop(name: "water puppets", kind: .activity)
-        stop.aiCanonicalName = decoded.canonicalName
-        stop.aiAreaHint = decoded.area
-        stop.aiAddressHint = decoded.address
-        stop.aiAliases = decoded.aliases
-        stop.aiHintConfidence = decoded.confidence
+    func testPlannerResearchLeadsTheMapKitSearchForAppliedStops() throws {
+        let wire = """
+        {"kind": "activity", "name": "Thang Long Water Puppet Theater", "area": "Hoan Kiem, Hanoi, Vietnam",
+         "address": "57B Dinh Tien Hoang Street", "mapNames": ["Nhà hát Múa rối Thăng Long"],
+         "time": "19:00", "notes": "Book ahead.", "cost": 5}
+        """
+        let suggested = try JSONDecoder().decode(ItinerarySuggestionStop.self, from: Data(wire.utf8))
+        let stop = suggested.plannedStop(time: nil)
 
         let variants = ItineraryLocationResolver.nameVariants(for: stop)
-        XCTAssertEqual(stop.name, "water puppets")
+        XCTAssertEqual(stop.name, "Thang Long Water Puppet Theater")
+        XCTAssertNil(stop.coordinate)
         XCTAssertEqual(variants.first, "Thang Long Water Puppet Theater")
         XCTAssertTrue(variants.contains("Nhà hát Múa rối Thăng Long"))
         XCTAssertTrue(
-            ItineraryLocationResolver.searchQueries(for: stop, context: stop.aiAreaHint ?? "")
+            ItineraryLocationResolver.searchQueries(for: stop, context: stop.area ?? "")
                 .first?.contains("57B Dinh Tien Hoang Street") == true
         )
+
+        // Plans drafted before the planner returned research still decode and apply.
+        let legacy = try JSONDecoder().decode(
+            ItinerarySuggestionStop.self,
+            from: Data(#"{"kind": "restaurant", "name": "Bun Cha Huong Lien"}"#.utf8)
+        ).plannedStop(time: nil)
+        XCTAssertNil(legacy.aiAddressHint)
+        XCTAssertEqual(legacy.aiAliases, [])
     }
 
     func testNameMatchingHandlesAccentsSpellingAndWordOrder() {

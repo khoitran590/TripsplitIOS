@@ -270,6 +270,19 @@ extension ItineraryStop {
     }
 }
 
+extension ItineraryStop {
+    mutating func applyResolvedLocation(_ match: ResolvedItineraryLocation) {
+        latitude = match.latitude
+        longitude = match.longitude
+        address = match.address ?? address
+        placeIdentifier = match.placeIdentifier
+        resolvedName = match.resolvedName
+        resolutionConfidence = match.confidence
+        locationSource = match.source
+        resolutionVersion = 4
+    }
+}
+
 /// A Sendable, persistable subset of MapKit's result. `MKMapItem` itself is not a
 /// durable cache value; these fields are enough to render immediately and preserve
 /// the Place ID used for an exact refresh.

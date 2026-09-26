@@ -26,7 +26,7 @@ final class ItineraryMapUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Optimize reorders flexible stops; timed stops stay put."].exists)
         XCTAssertTrue(app.staticTexts["Tap a stop to review or correct its map pin"].exists)
         app.buttons["map-route-menu"].tap()
-        XCTAssertTrue(app.buttons["Improve pins with Claude"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Retry missing locations"].waitForExistence(timeout: 3))
         app.buttons["Hide route"].tap()
         XCTAssertEqual(pins.count, count)
         XCTAssertTrue(app.buttons["map-optimize-route"].exists)

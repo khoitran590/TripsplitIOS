@@ -73,8 +73,8 @@ nonisolated struct ItineraryStop: Identifiable, Codable, Equatable {
     var resolutionConfidence: Double? = nil
     var locationSource: ItineraryLocationSource? = nil
     var resolutionVersion: Int? = nil
-    /// Claude may add search-only metadata when a human-readable itinerary label is
-    /// too broad for MapKit. These values never become coordinates by themselves.
+    /// The AI planner's researched venue name, address, and map listing names. They are
+    /// MapKit search hints only and never become coordinates by themselves.
     var aiCanonicalName: String? = nil
     var aiAreaHint: String? = nil
     var aiAddressHint: String? = nil
@@ -226,18 +226,24 @@ nonisolated struct ItinerarySuggestionStop: Identifiable, Codable, Equatable {
     var kind: ItineraryStopKind = .activity
     var name: String = ""
     var area: String? = nil
+    /// The planner's researched street address and map listing names. They are
+    /// MapKit search evidence for placing the pin, never coordinates themselves.
+    var address: String? = nil
+    var mapNames: [String] = []
     /// 24-hour "HH:mm" as returned by the model; nil when untimed.
     var time: String? = nil
     var notes: String = ""
     var cost: Double = 0
 
-    private enum CodingKeys: String, CodingKey { case id, kind, name, area, time, notes, cost }
+    private enum CodingKeys: String, CodingKey { case id, kind, name, area, address, mapNames, time, notes, cost }
 
-    init(id: UUID = UUID(), kind: ItineraryStopKind = .activity, name: String = "", area: String? = nil, time: String? = nil, notes: String = "", cost: Double = 0) {
+    init(id: UUID = UUID(), kind: ItineraryStopKind = .activity, name: String = "", area: String? = nil, address: String? = nil, mapNames: [String] = [], time: String? = nil, notes: String = "", cost: Double = 0) {
         self.id = id
         self.kind = kind
         self.name = name
         self.area = area
+        self.address = address
+        self.mapNames = mapNames
         self.time = time
         self.notes = notes
         self.cost = cost
@@ -252,9 +258,28 @@ nonisolated struct ItinerarySuggestionStop: Identifiable, Codable, Equatable {
         kind = ItineraryStopKind(rawValue: kindRaw) ?? .activity
         name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
         area = try c.decodeIfPresent(String.self, forKey: .area)
+        address = try c.decodeIfPresent(String.self, forKey: .address)
+        mapNames = try c.decodeIfPresent([String].self, forKey: .mapNames) ?? []
         time = try c.decodeIfPresent(String.self, forKey: .time)
         notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
         cost = try c.decodeIfPresent(Double.self, forKey: .cost) ?? 0
+    }
+
+    /// The plan stop this suggestion becomes, carrying the planner's research as
+    /// MapKit search hints so `ItineraryPinPlacer` can pin it right away.
+    func plannedStop(time: Date?) -> ItineraryStop {
+        let trimmedAddress = address?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return ItineraryStop(
+            name: name,
+            kind: kind,
+            time: time,
+            notes: notes,
+            cost: SplitEngine.roundToTwo(cost),
+            area: area,
+            aiCanonicalName: name,
+            aiAddressHint: trimmedAddress.isEmpty ? nil : trimmedAddress,
+            aiAliases: mapNames
+        )
     }
 }
 
@@ -1846,6 +1871,21 @@ struct ItineraryDetailView: View {
                     .foregroundStyle(Theme.negative)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            if let pins = ItineraryPinPlacer.shared.progress[tripID], pins.total > 0 {
+                HStack(spacing: 6) {
+                    if ItineraryPinPlacer.shared.isPlacing(tripID) {
+                        ProgressView().controlSize(.small)
+                        Text("Pinning places on the map… \(pins.done) of \(pins.total)")
+                    } else {
+                        Image(systemName: "mappin.and.ellipse")
+                        Text("\(pins.placed) of \(pins.total) places pinned on the map")
+                    }
+                }
+                .font(Theme.Typography.metadata)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityIdentifier("itinerary-pin-progress")
+            }
             if aiCooldownSecondsRemaining > 0 {
                 Text("Planner available in \(aiCooldownSecondsRemaining) seconds")
                     .font(.app(.caption2).monospacedDigit())
@@ -2083,7 +2123,8 @@ struct ItineraryDetailView: View {
 
     /// Fills the suggestion into the user's plan: the suggested stops replace whatever
     /// is currently in each day (extra suggested days are added at the end, extra
-    /// existing days are cleared), then the draft is cleared.
+    /// existing days are cleared), then the draft is cleared and every stop is pinned
+    /// on the map from the planner's researched address and map names.
     private func applySuggestion() {
         guard var itinerary = store.trip(tripID)?.itinerary,
               let suggestion = itinerary.suggestion else { return }
@@ -2095,20 +2136,11 @@ struct ItineraryDetailView: View {
                 itinerary.days.append(ItineraryDay())
             }
             guard itinerary.days.indices.contains(index) else { break }
-            let stops = day.stops.map { suggested in
-                ItineraryStop(
-                    name: suggested.name,
-                    kind: suggested.kind,
-                    time: Self.timeDate(suggested.time),
-                    notes: suggested.notes,
-                    cost: SplitEngine.roundToTwo(suggested.cost),
-                    area: suggested.area
-                )
-            }
-            itinerary.days[index].stops = stops
+            itinerary.days[index].stops = day.stops.map { $0.plannedStop(time: Self.timeDate($0.time)) }
         }
         itinerary.suggestion = nil
         store.updateItinerary(itinerary, in: tripID)
+        ItineraryPinPlacer.shared.placePins(in: tripID, store: store)
     }
 
     private func discardSuggestion() {

@@ -3,7 +3,8 @@ import MapKit
 
 /// Shares MapKit lookup capacity across destinations, itinerary stops, and companion
 /// places. Two unrelated requests may run together; starts are gently staggered and
-/// only a real MapKit throttle response introduces a longer adaptive backoff.
+/// kept under MapKit's per-app burst limit (50 requests per 60 s). A real throttle
+/// response still backs off, honouring MapKit's reported reset time, and is retried.
 @MainActor
 final class MapLookupPacer {
     static let shared = MapLookupPacer()
@@ -14,10 +15,16 @@ final class MapLookupPacer {
     private var activeCount = 0
     private var throttleDelay: Duration = .seconds(1)
     private var throttleUntil: ContinuousClock.Instant?
+    private let windowLimit: Int
+    private let window: Duration
+    private var recentStarts: [ContinuousClock.Instant] = []
 
-    init(interval: Duration = .milliseconds(300), maximumConcurrent: Int = 2) {
+    init(interval: Duration = .milliseconds(300), maximumConcurrent: Int = 2,
+         windowLimit: Int = 45, window: Duration = .seconds(60)) {
         self.interval = interval
         self.maximumConcurrent = max(1, maximumConcurrent)
+        self.windowLimit = max(1, windowLimit)
+        self.window = window
     }
 
     /// Retained as a small, directly testable primitive. Production searches should
@@ -25,7 +32,15 @@ final class MapLookupPacer {
     func waitForTurn() async -> Bool {
         guard !Task.isCancelled else { return false }
         let throttledStart = throttleUntil.map { max($0, clock.now) } ?? clock.now
-        let start = max(nextStart ?? throttledStart, throttledStart)
+        var start = max(nextStart ?? throttledStart, throttledStart)
+        // Starts are scheduled in order, so the window is a sorted list: once it is
+        // full, wait until the oldest start in it ages out.
+        recentStarts.removeAll { $0 <= start - window }
+        if recentStarts.count >= windowLimit {
+            start = max(start, recentStarts[recentStarts.count - windowLimit].advanced(by: window))
+            recentStarts.removeAll { $0 <= start - window }
+        }
+        recentStarts.append(start)
         nextStart = start.advanced(by: interval)
         do {
             try await clock.sleep(until: start)
@@ -35,26 +50,46 @@ final class MapLookupPacer {
         }
     }
 
-    func perform<T>(_ operation: () async throws -> T) async -> Result<T, Error>? {
-        guard await acquireSlot() else { return nil }
-        guard await waitForTurn() else {
-            activeCount -= 1
-            return nil
-        }
-        defer { activeCount -= 1 }
-        do {
-            let value = try await operation()
-            throttleDelay = .seconds(1)
-            return .success(value)
-        } catch {
-            let nsError = error as NSError
-            if nsError.domain == MKError.errorDomain,
-               nsError.code == MKError.Code.loadingThrottled.rawValue {
-                throttleUntil = clock.now.advanced(by: throttleDelay)
-                throttleDelay = min(throttleDelay * 2, .seconds(8))
+    /// A throttled request is retried after the backoff rather than reported as an
+    /// empty result, so a busy moment never turns into "no match found".
+    func perform<T>(maxThrottleRetries: Int = 2, _ operation: () async throws -> T) async -> Result<T, Error>? {
+        var attempt = 0
+        while true {
+            guard await acquireSlot() else { return nil }
+            guard await waitForTurn() else {
+                activeCount -= 1
+                return nil
             }
-            return .failure(error)
+            do {
+                let value = try await operation()
+                activeCount -= 1
+                throttleDelay = .seconds(1)
+                return .success(value)
+            } catch {
+                activeCount -= 1
+                guard Self.isThrottle(error) else { return .failure(error) }
+                let reported = Self.reportedResetDelay(in: error as NSError)
+                throttleUntil = clock.now.advanced(by: max(throttleDelay, reported ?? .zero))
+                throttleDelay = min(throttleDelay * 2, .seconds(8))
+                guard attempt < maxThrottleRetries else { return .failure(error) }
+                attempt += 1
+            }
         }
+    }
+
+    private static func isThrottle(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return (nsError.domain == MKError.errorDomain && nsError.code == MKError.Code.loadingThrottled.rawValue)
+            || (nsError.domain == "GEOErrorDomain" && nsError.code == -3)
+    }
+
+    /// MapKit nests GeoServices' `timeUntilReset` (seconds) in the underlying error.
+    private static func reportedResetDelay(in error: NSError) -> Duration? {
+        if let seconds = (error.userInfo["timeUntilReset"] as? NSNumber)?.doubleValue {
+            return .seconds(min(max(seconds, 0), 60))
+        }
+        guard let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError else { return nil }
+        return reportedResetDelay(in: underlying)
     }
 
     private func acquireSlot() async -> Bool {

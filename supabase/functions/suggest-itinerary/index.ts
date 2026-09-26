@@ -478,12 +478,15 @@ RESEARCH — you have a web search tool; use it
 
 OUTPUT RULES
 - Reply with the JSON object and nothing else — no prose before or after, no explanation of your reasoning.
-- Shape: {"destinationArea": string, "days": [{"title": string, "stops": [{"kind": string, "name": string, "area": string, "time": string, "notes": string, "cost": number}]}]}
+- Shape: {"destinationArea": string, "days": [{"title": string, "stops": [{"kind": string, "name": string, "area": string, "address": string, "mapNames": [string], "time": string, "notes": string, "cost": number}]}]}
 - "destinationArea" is your reading of the destination as "<city>, <country>" (e.g. "Hanoi, Vietnam") — it anchors the scope check below.
 - Output exactly ${input.days} days, in order.
 - Give each day a short theme title, 2–4 words (e.g. "Old town & markets").
-- 4 to 6 stops per day. Every stop must be a real, verifiable place — never invent names. Use the place's common name only, no street address.
+- 4 to 6 stops per day. Every stop must be a real, verifiable place — never invent names. "name" is the place's common name only, no street address.
 - "area" is where that stop physically is, written as "<neighborhood or town>, <city>, <country>" (e.g. "Hoan Kiem, Hanoi, Vietnam"). It must name ${input.location} or a place within ${SCOPE_RADIUS_MILES} miles of it; a stop whose area is elsewhere is dropped from the plan before the client sees it.
+- The app drops a map pin for every stop straight from these fields, so they must identify the exact venue:
+  - "address" is the venue's street address as your search results list it (e.g. "57B Dinh Tien Hoang, Hoan Kiem, Hanoi"). For a park, lake, viewpoint, or neighborhood with no street address, give the street or landmark it sits on. Use "" only if you truly cannot find one — never guess a house number.
+  - "mapNames" lists up to 3 other names the exact venue is listed under on Apple/Google Maps: its official full name, its local-language or native-script name, a romanization. [] if there are none. Never list a different venue or a chain's other branch.
 - "kind" must be exactly one of: "location" (a sight, viewpoint, neighborhood, or landmark to go see), "activity" (a museum, show, tour, class, hike, or experience to do), "restaurant" (anywhere to eat or drink).
 - "time" is 24-hour "HH:mm", strictly increasing within each day.
 - "notes" is ONE short sentence (under 15 words): the single best reason to go, or the one tip that matters most (book ahead, go at sunset, cash only). No filler like "a must-see".
@@ -519,11 +522,13 @@ const PLAN_JSON_SCHEMA = {
                 kind: { type: "string", enum: ["location", "activity", "restaurant"] },
                 name: { type: "string" },
                 area: { type: "string" },
+                address: { type: "string" },
+                mapNames: { type: "array", items: { type: "string" } },
                 time: { type: "string" },
                 notes: { type: "string" },
                 cost: { type: "number" },
               },
-              required: ["kind", "name", "area", "time", "notes", "cost"],
+              required: ["kind", "name", "area", "address", "mapNames", "time", "notes", "cost"],
               additionalProperties: false,
             },
           },
@@ -673,6 +678,8 @@ async function callGemini(
                             kind: { type: "STRING" },
                             name: { type: "STRING" },
                             area: { type: "STRING" },
+                            address: { type: "STRING" },
+                            mapNames: { type: "ARRAY", items: { type: "STRING" } },
                             time: { type: "STRING" },
                             notes: { type: "STRING" },
                             cost: { type: "NUMBER" },
@@ -832,6 +839,15 @@ function normalizePlan(input: unknown): Record<string, unknown> | null {
         // Where the place physically is, as the model reports it. The scope gate checks
         // it and the client keeps it as neighborhood context for accurate MapKit lookup.
         area: typeof stop.area === "string" ? stop.area.slice(0, 160) : "",
+        // Search evidence for the client's MapKit lookup, which places the pin. The
+        // model never supplies coordinates: MapKit stays the location authority.
+        address: typeof stop.address === "string" ? stop.address.trim().slice(0, 240) : "",
+        mapNames: Array.isArray(stop.mapNames)
+          ? stop.mapNames
+            .filter((name): name is string => typeof name === "string" && name.trim().length > 0)
+            .slice(0, 3)
+            .map((name) => name.trim().slice(0, 120))
+          : [],
         time,
         notes: typeof stop.notes === "string" ? stop.notes.slice(0, 240) : "",
         cost: Math.min(Math.max(toNumber(stop.cost), 0), 100_000),

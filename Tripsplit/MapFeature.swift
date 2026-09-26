@@ -137,15 +137,17 @@ struct MapScreen: View {
     @State private var hasInitializedTripSelection = false
     @State private var isResolvingItineraryLocations = false
     @State private var itineraryResolutionGeneration = UUID()
+    /// Validation keys MapKit found no confident match for in this session. Every
+    /// resolved pin changes the resolution key and restarts the task; without this,
+    /// each restart re-searched every unmatched stop and exhausted MapKit's quota.
+    /// "Retry missing locations" clears it; an edited stop gets a new key.
+    @State private var unmatchedItineraryStopKeys: Set<String> = []
     @State private var showsTripPlaces = true
     @State private var showsFeedPlaces = false
     @State private var feedPins: [FeedMapPin] = []
     @State private var isLoadingFeedPlaces = false
     @State private var optimizedStopIDs: [ItineraryStop.ID] = []
     @State private var routeFeedback: LocalizedStringKey?
-    @State private var pinAIMessage: String?
-    @State private var showsPinAIConsent = false
-    @State private var isImprovingPinsWithAI = false
     @State private var openNowOnly = false
     @State private var mapStyle: TripMapStyle = .standard
     @State private var locationManager = MapLocationManager()
@@ -268,16 +270,6 @@ struct MapScreen: View {
 
     private var locatedStopCount: Int { selectedDayStops.filter { $0.coordinate != nil }.count }
 
-    private var claudeCandidateCount: Int {
-        selectedDayStops.filter { stop in
-            !stop.isUserPlaced
-                && stop.locationSource != .userSelected
-                && stop.locationSource != .placeIdentifier
-                && !confirmedAutomaticStopKeys.contains(automaticReviewKey(for: stop))
-                && (stop.coordinate == nil || stop.locationSource == .automatic || stop.mapLocationQuality == .review)
-        }.count
-    }
-
     private var unreviewedAutomaticStop: ItineraryStop? {
         selectedDayStops.first { stop in
             stop.locationSource == .automatic
@@ -381,11 +373,6 @@ struct MapScreen: View {
             }
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
-        }
-        .sheet(isPresented: $showsPinAIConsent) {
-            AIConsentDisclosureView(purpose: .itineraryGeneration) { granted in
-                if granted { requestClaudePinHelp() }
-            }
         }
         .onChange(of: mapModel.navigateRequest) { recenterOnFocus(force: true) }
         .onChange(of: coordinateKey) { recenterOnFocus() }
@@ -889,14 +876,8 @@ struct MapScreen: View {
                 .accessibilityIdentifier("map-optimize-route")
 
                 Menu {
-                    Button {
-                        requestClaudePinHelp()
-                    } label: {
-                        Label("Improve pins with Claude", systemImage: "sparkles")
-                    }
-                    .disabled(claudeCandidateCount == 0 || isImprovingPinsWithAI || isResolvingItineraryLocations)
-
                     Button("Retry missing locations", systemImage: "arrow.clockwise") {
+                        unmatchedItineraryStopKeys = []
                         mapRefreshRevision += 1
                     }
                     .disabled(isResolvingItineraryLocations)
@@ -1240,17 +1221,14 @@ struct MapScreen: View {
                     .font(.app(.caption2))
                     .foregroundStyle(.secondary)
             }
-            if isImprovingPinsWithAI {
+            if let tripID = selectedTripID, ItineraryPinPlacer.shared.isPlacing(tripID),
+               let pins = ItineraryPinPlacer.shared.progress[tripID] {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
-                    Text("Claude is clarifying place names…")
+                    Text("Pinning places from your plan… \(pins.done) of \(pins.total)")
                 }
                 .font(.app(.caption2))
                 .foregroundStyle(.secondary)
-            } else if let pinAIMessage {
-                Text(verbatim: pinAIMessage)
-                    .font(.app(.caption2))
-                    .foregroundStyle(.secondary)
             }
 
             if isTripDrawerExpanded {
@@ -1610,101 +1588,6 @@ struct MapScreen: View {
         fitTripCamera(force: true)
     }
 
-    private func requestClaudePinHelp() {
-        guard claudeCandidateCount > 0 else {
-            pinAIMessage = String(localized: "Every automatic pin already has an exact place.")
-            return
-        }
-        guard AIConsentPreferences.isGranted(.itineraryGeneration, userID: store.currentUser.id) else {
-            showsPinAIConsent = true
-            return
-        }
-        Task { await improvePinsWithClaude() }
-    }
-
-    private func improvePinsWithClaude() async {
-        guard !isImprovingPinsWithAI,
-              let tripID = selectedTripID,
-              let trip = store.trip(tripID),
-              let itinerary = trip.itinerary,
-              itinerary.days.indices.contains(selectedItineraryDay) else { return }
-        let dayID = itinerary.days[selectedItineraryDay].id
-        let candidates = itinerary.days[selectedItineraryDay].stops.filter { stop in
-            !stop.isUserPlaced
-                && stop.locationSource != .userSelected
-                && stop.locationSource != .placeIdentifier
-                && !confirmedAutomaticStopKeys.contains(automaticReviewKey(for: stop))
-                && (stop.coordinate == nil || stop.locationSource == .automatic || stop.mapLocationQuality == .review)
-        }
-        guard !candidates.isEmpty else { return }
-
-        isImprovingPinsWithAI = true
-        pinAIMessage = nil
-        defer { isImprovingPinsWithAI = false }
-        do {
-            guard let token = try await store.authorizedAccessToken() else {
-                throw AuthError(message: "Sign in to improve pins with Claude.")
-            }
-            let destination = trip.location?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let tripDestination = destination?.isEmpty == false ? destination! : trip.name
-            let hints = try await store.withFreshTokenIfNeeded(initialToken: token) { freshToken in
-                try await ItineraryPinAI.clarify(
-                    destination: tripDestination,
-                    stops: candidates,
-                    accessToken: freshToken
-                )
-            }
-            guard selectedTripID == tripID,
-                  var latest = store.trip(tripID)?.itinerary,
-                  let dayIndex = latest.days.firstIndex(where: { $0.id == dayID }) else { return }
-
-            let hintsByID = Dictionary(uniqueKeysWithValues: hints.map { ($0.stopID, $0) })
-            var applied = 0
-            for original in candidates {
-                guard let hint = hintsByID[original.id],
-                      let index = latest.days[dayIndex].stops.firstIndex(where: { $0.id == original.id }) else { continue }
-                let current = latest.days[dayIndex].stops[index]
-                guard ItineraryPinPreview.canApplyResolution(from: original, to: current) else { continue }
-                var improved = current
-                improved.aiCanonicalName = hint.canonicalName
-                improved.aiAreaHint = hint.area
-                improved.aiAddressHint = hint.address
-                improved.aiAliases = Array(hint.aliases.prefix(5))
-                improved.aiHintConfidence = hint.confidence
-                // Remove only an automatic result. A Claude hint must pass through
-                // MapKit before a new coordinate or Apple place ID is stored.
-                improved.latitude = nil
-                improved.longitude = nil
-                improved.placeIdentifier = nil
-                improved.resolvedName = nil
-                improved.resolutionConfidence = nil
-                improved.locationSource = nil
-                improved.resolutionVersion = nil
-                latest.days[dayIndex].stops[index] = improved
-                applied += 1
-            }
-            guard applied > 0 else {
-                pinAIMessage = String(localized: "Claude could not identify a more specific place. You can still choose one manually.")
-                return
-            }
-            store.updateItinerary(latest, in: tripID)
-            if applied == 1 {
-                pinAIMessage = String(localized: "Claude clarified one place. MapKit is checking the pin.")
-            } else {
-                pinAIMessage = String(localized: "Claude clarified \(applied) places. MapKit is checking the pins.")
-            }
-            mapRefreshRevision += 1
-        } catch ItineraryAIError.rateLimited(let seconds) {
-            if let seconds {
-                pinAIMessage = String(localized: "Claude is busy. Try again in about \(seconds) seconds.")
-            } else {
-                pinAIMessage = String(localized: "Claude is busy. Try again shortly.")
-            }
-        } catch {
-            pinAIMessage = (error as? AuthError)?.message ?? error.localizedDescription
-        }
-    }
-
     private var detailedRouteKey: String {
         let stops = itineraryMapStops.map {
             "\($0.stop.id.uuidString)@\(String(format: "%.5f,%.5f", $0.coordinate.latitude, $0.coordinate.longitude))"
@@ -1921,6 +1804,11 @@ struct MapScreen: View {
     /// than taking MapKit's first result: a weak same-region match is worse than no pin.
     /// Revalidation also repairs coordinates persisted by the original loose resolver.
     private func resolveMissingItineraryCoordinates() async {
+        // The planner is already pinning this trip; its store writes re-run this task.
+        if let tripID = selectedTripID, ItineraryPinPlacer.shared.isPlacing(tripID) {
+            isResolvingItineraryLocations = false
+            return
+        }
         guard let tripID = selectedTripID,
               let trip = store.myTrips.first(where: { $0.id == tripID }),
               var itinerary = trip.itinerary else {
@@ -1947,6 +1835,7 @@ struct MapScreen: View {
             !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 && !(($0.isUserPlaced || $0.locationSource == .userSelected) && $0.coordinate != nil)
                 && ($0.coordinate == nil || !validatedItineraryStopKeys.contains(itineraryValidationKey(for: $0, trip: trip)))
+                && !unmatchedItineraryStopKeys.contains(itineraryValidationKey(for: $0, trip: trip))
         }
         isResolvingItineraryLocations = !jobs.isEmpty
         defer {
@@ -1954,7 +1843,14 @@ struct MapScreen: View {
         }
         guard !jobs.isEmpty else { fitTripCamera(); return }
         let destination = await itineraryDestination(for: trip)
-        for original in jobs {
+        // A pin the current resolver already verified (the AI planner's, or one placed
+        // on another device) is trusted while it stays inside the trip's destination.
+        let pending = jobs.filter { stop in
+            guard let coordinate = stop.coordinate, (stop.resolutionVersion ?? 0) >= 4,
+                  let destination else { return true }
+            return !ItineraryPinScope.isInScope(candidate: coordinate, candidateRegion: stop.address, destination: destination)
+        }
+        for original in pending {
             guard !Task.isCancelled, requestKey == activeItineraryResolutionKey else { return }
             let match = await bestItineraryLocation(for: original, trip: trip, destination: destination)
             guard !Task.isCancelled, requestKey == activeItineraryResolutionKey,
@@ -1964,6 +1860,7 @@ struct MapScreen: View {
             let current = latest.days[currentDay].stops[index]
             guard ItineraryPinPreview.canApplyResolution(from: original, to: current) else { continue }
             guard let match else {
+                unmatchedItineraryStopKeys.insert(itineraryValidationKey(for: current, trip: trip))
                 if current.locationSource != .placeIdentifier,
                    let coordinate = current.coordinate, let destination,
                    !ItineraryPinScope.isInScope(candidate: coordinate, candidateRegion: current.address, destination: destination) {
@@ -1977,19 +1874,13 @@ struct MapScreen: View {
                     unresolved.locationSource = nil
                     unresolved.resolutionVersion = nil
                     latest.days[currentDay].stops[index] = unresolved
+                    unmatchedItineraryStopKeys.insert(itineraryValidationKey(for: unresolved, trip: trip))
                     store.updateItinerary(latest, in: tripID)
                 }
                 continue
             }
             var resolved = current
-            resolved.latitude = match.latitude
-            resolved.longitude = match.longitude
-            resolved.address = match.address ?? current.address
-            resolved.placeIdentifier = match.placeIdentifier
-            resolved.resolvedName = match.resolvedName
-            resolved.resolutionConfidence = match.confidence
-            resolved.locationSource = match.source
-            resolved.resolutionVersion = 4
+            resolved.applyResolvedLocation(match)
             latest.days[currentDay].stops[index] = resolved
             // Merge only this stop's location into the latest itinerary; edits made
             // while Apple Maps was searching must never be replaced by an old copy.

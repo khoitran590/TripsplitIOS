@@ -1,5 +1,6 @@
 import Foundation
 import MapKit
+import Observation
 
 /// The same resolver is used by Map and the import accuracy integration tests.
 @MainActor
@@ -292,4 +293,66 @@ final class ItineraryLocationResolver {
         )
     }
 
+}
+
+/// Puts every stop of an AI-planned itinerary on the map as soon as the plan is
+/// applied. The planner supplies each stop's researched address and map listing
+/// names; MapKit confirms the exact venue and supplies the coordinate. Runs outside
+/// any view so pins keep landing while the traveler moves between tabs.
+@MainActor
+@Observable
+final class ItineraryPinPlacer {
+    static let shared = ItineraryPinPlacer()
+
+    struct Progress: Equatable {
+        var done = 0
+        var total = 0
+        var placed = 0
+    }
+
+    /// Latest placement per trip. A finished entry keeps its counts so the planner
+    /// can report how many stops were pinned.
+    private(set) var progress: [Trip.ID: Progress] = [:]
+    private var tasks: [Trip.ID: Task<Void, Never>] = [:]
+
+    func isPlacing(_ tripID: Trip.ID) -> Bool { tasks[tripID] != nil }
+
+    func placePins(in tripID: Trip.ID, store: TripStore) {
+        tasks[tripID]?.cancel()
+        tasks[tripID] = Task {
+            await run(tripID: tripID, store: store)
+            // A replaced placement is cancelled and must not clear its successor.
+            if !Task.isCancelled { tasks[tripID] = nil }
+        }
+    }
+
+    private func run(tripID: Trip.ID, store: TripStore) async {
+        guard let trip = store.trip(tripID), let itinerary = trip.itinerary else { return }
+        let jobs = itinerary.days.flatMap(\.stops).filter {
+            $0.coordinate == nil && !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        progress[tripID] = Progress(total: jobs.count)
+        guard !jobs.isEmpty else { return }
+        let location = trip.location?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let destination = location.isEmpty ? nil : await DestinationResolver.shared.resolve(location)
+        for original in jobs {
+            guard !Task.isCancelled else { return }
+            let match = await ItineraryLocationResolver.shared.resolve(
+                for: original, tripLocation: trip.location, destination: destination
+            )
+            guard !Task.isCancelled else { return }
+            progress[tripID]?.done += 1
+            // Merge only this stop into the latest plan; an edit made while MapKit
+            // was searching wins over the pin found for the old version.
+            guard let match,
+                  var latest = store.trip(tripID)?.itinerary,
+                  let day = latest.days.firstIndex(where: { $0.stops.contains { $0.id == original.id } }),
+                  let index = latest.days[day].stops.firstIndex(where: { $0.id == original.id }),
+                  ItineraryPinPreview.canApplyResolution(from: original, to: latest.days[day].stops[index])
+            else { continue }
+            latest.days[day].stops[index].applyResolvedLocation(match)
+            store.updateItinerary(latest, in: tripID)
+            progress[tripID]?.placed += 1
+        }
+    }
 }
