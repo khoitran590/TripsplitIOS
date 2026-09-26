@@ -36,6 +36,17 @@ struct RecScreen: View {
     @State private var communityGuideBeingEdited: CommunityTripGuide?
     @State private var communityReportTarget: ModerationTarget?
     @FocusState private var isSearchFocused: Bool
+    /// Set by the toolbar's magnifying glass. The field only exists while search is
+    /// open, and focus can't land on a field that isn't in the hierarchy yet — so the
+    /// button opens search first, then focuses the field once it's there.
+    @State private var isSearchSummoned = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The selected region chip's highlight slides between chips (see the directory).
+    @Namespace private var regionChipNamespace
+    /// Haptic triggers bumped only by the user's own taps, so a filter changed from the
+    /// sheet, or a save made elsewhere, doesn't buzz through these controls too.
+    @State private var quickFilterTaps = 0
+    @State private var savedTileUnsaves = 0
 
     // Filters. Every facet here is edited by *both* the quick chips and the filter
     // sheet — the chips used to be a parallel set of predicates, which let a chip and
@@ -241,6 +252,12 @@ struct RecScreen: View {
         }
     }
 
+    /// Filter and save changes reflow the page; they settle quickly, and apply instantly
+    /// under Reduce Motion so nothing slides.
+    private var layoutAnimation: Animation? {
+        reduceMotion ? nil : .snappy(duration: 0.2)
+    }
+
     private func resetFilters() {
         tripLength = .any
         selectedContinent = nil
@@ -301,7 +318,9 @@ struct RecScreen: View {
             } else {
                 ids.append(id)
             }
-            store.updateSavedPlaces(destinationIDs: ids)
+            withAnimation(layoutAnimation) {
+                store.updateSavedPlaces(destinationIDs: ids)
+            }
             // Saving presents nothing, so onboarding can carry on immediately; the
             // other two cases resume when their screen closes.
             onboarding.isPaused = false
@@ -367,14 +386,17 @@ struct RecScreen: View {
                     // Each of these derived collections is computed once here and handed
                     // down. Read as properties from inside the section builders, they
                     // were re-derived several times per render (and on every keystroke).
-                    if isSearchFocused && !isSearching {
+                    if isSearchFocused || isSearchSummoned || isSearching {
                         // Active search: the field jumps up under the header and the trips
-                        // step aside — the user is browsing now, not resuming a plan.
+                        // step aside — the user is browsing now, not resuming a plan. One
+                        // field for both states: separate branches rebuilt it on the first
+                        // keystroke, which dropped focus and the keyboard.
                         discoveryControls(showsHeading: false)
-                        searchShortcuts
-                    } else if isSearching {
-                        discoveryControls(showsHeading: false)
-                        searchResultsList(searchResults)
+                        if isSearching {
+                            searchResultsList(searchResults)
+                        } else {
+                            searchShortcuts
+                        }
                     } else {
                         // A returning user's own plans lead: the next trip at hero scale,
                         // the rest as an upcoming rail, then any saved guides.
@@ -411,9 +433,20 @@ struct RecScreen: View {
                         }
                     }
                 }
+                // Focusing search swaps the trips for shortcuts; fade that instead of
+                // cutting. Keyed on focus alone, so keystrokes never animate the page.
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: isSearchFocused || isSearchSummoned)
                 .padding(.horizontal, Theme.contentInset)
                 .padding(.top, 16)
                 .padding(.bottom, 96)
+            }
+            // Attached to the scroll view rather than the tiles: unsaving the last saved
+            // guide removes the whole Saved section in the same update.
+            .sensoryFeedback(.selection, trigger: quickFilterTaps)
+            .sensoryFeedback(.impact(flexibility: .soft), trigger: savedTileUnsaves)
+            // Leaving the field (scroll, Cancel, a sheet) closes search as before.
+            .onChange(of: isSearchFocused) { _, focused in
+                if !focused { isSearchSummoned = false }
             }
             .background { AppBackground() }
             .navigationTitle("")
@@ -424,7 +457,8 @@ struct RecScreen: View {
                         // Search now lives below the fold; this brings the field back up
                         // and focuses it so the top toolbar still gets you there in one tap.
                         withAnimation { proxy.scrollTo(Self.topAnchor, anchor: .top) }
-                        isSearchFocused = true
+                        isSearchSummoned = true
+                        Task { isSearchFocused = true }
                     } label: {
                         Image(systemName: "magnifyingglass")
                     }
@@ -437,8 +471,6 @@ struct RecScreen: View {
                         Image(systemName: "questionmark.circle")
                     }
                     .accessibilityLabel("How Explore works")
-
-                    AppearanceToggle()
 
                     Button {
                         isSearchFocused = false
@@ -634,7 +666,7 @@ struct RecScreen: View {
 
     @ViewBuilder
     private func discoveryControls(showsHeading: Bool) -> some View {
-        let showsField = isSearchFocused || isSearching
+        let showsField = isSearchFocused || isSearchSummoned || isSearching
         VStack(alignment: .leading, spacing: 12) {
             if showsHeading {
                 // The heading carries the filter button, so the field only has to
@@ -688,17 +720,17 @@ struct RecScreen: View {
                     .padding(.horizontal, 16)
                     .frame(minHeight: 42)
                     .contentShape(.capsule)
+                    .background(
+                        LinearGradient(
+                            colors: [Theme.accent, Theme.accentSecondary],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        ),
+                        in: .capsule
+                    )
+                    .shadow(color: Theme.elevatedShadow, radius: 8, y: 4)
             }
-            .buttonStyle(.plain)
-            .background(
-                LinearGradient(
-                    colors: [Theme.accent, Theme.accentSecondary],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                ),
-                in: .capsule
-            )
-            .shadow(color: Theme.elevatedShadow, radius: 8, y: 4)
+            .buttonStyle(PressableStyle())
             .accessibilityLabel("Create your own trip")
             .accessibilityHint("Opens the trip builder")
         }
@@ -728,7 +760,7 @@ struct RecScreen: View {
         NavigationLink(value: trip.id) {
             NextTripHeroCard(trip: trip)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableStyle())
         .accessibilityHint("Opens the itinerary")
     }
 
@@ -742,7 +774,7 @@ struct RecScreen: View {
                         NavigationLink(value: trip.id) {
                             UpcomingTripCard(trip: trip)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(PressableStyle())
                     }
                 }
                 .scrollTargetLayout()
@@ -762,14 +794,16 @@ struct RecScreen: View {
         VStack(alignment: .leading, spacing: 12) {
             sectionTitle("Saved", subtitle: "Revisit a destination you saved.", trailing: "\(saved.count)")
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: 12) {
+                LazyHStack(alignment: .top, spacing: 12) {
                     ForEach(saved) { destination in
                         savedTile(destination)
                     }
                 }
+                .scrollTargetLayout()
                 .padding(.horizontal, 16)
                 .padding(.bottom, 6)
             }
+            .scrollTargetBehavior(.viewAligned)
             .padding(.horizontal, -16)
         }
     }
@@ -783,11 +817,14 @@ struct RecScreen: View {
                     .accessibilityLabel(Text(verbatim: destination.city))
                     .accessibilityHint("Opens the curated guide")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableStyle())
             // Outside the link, as everywhere else on this screen, so VoiceOver can
             // reach it.
             .overlay(alignment: .bottomTrailing) {
-                Button { requireAccount(.save(destinationID: destination.id)) } label: {
+                Button {
+                    savedTileUnsaves += 1
+                    requireAccount(.save(destinationID: destination.id))
+                } label: {
                     Image(systemName: "heart.fill")
                         .font(.app(size: 11, weight: .bold))
                         .foregroundStyle(.red)
@@ -797,7 +834,7 @@ struct RecScreen: View {
                         .frame(width: 44, height: 44)
                         .contentShape(.circle)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableStyle())
                 .accessibilityLabel("Remove from saved")
                 .offset(x: 14, y: 14)
             }
@@ -823,7 +860,7 @@ struct RecScreen: View {
                     showsCTA: true
                 )
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableStyle())
         }
     }
 
@@ -862,7 +899,7 @@ struct RecScreen: View {
                             NavigationLink(value: CommunityTripRoute(guideID: guide.id)) {
                                 CommunityGuideCard(guide: guide)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(PressableStyle())
                         }
                     }
                     .scrollTargetLayout()
@@ -891,9 +928,9 @@ struct RecScreen: View {
                             .font(Theme.Typography.rowTitle)
                             .foregroundStyle(Theme.accent)
                             .frame(maxWidth: .infinity, minHeight: 52)
+                            .readableSurface(cornerRadius: Theme.cardRadius)
                     }
-                    .buttonStyle(.plain)
-                    .readableSurface(cornerRadius: Theme.cardRadius)
+                    .buttonStyle(PressableStyle())
                 case .failed(let message):
                     HStack(spacing: 12) {
                         Image(systemName: "wifi.exclamationmark")
@@ -992,7 +1029,7 @@ struct RecScreen: View {
                                 onToggleSave: { requireAccount(.save(destinationID: destination.id)) }
                             )
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(PressableStyle())
                     }
                 }
                 .scrollTargetLayout()
@@ -1063,7 +1100,7 @@ struct RecScreen: View {
                     ForEach(sections, id: \.continent) { section in
                         let isOn = section.continent == current?.continent
                         Button {
-                            withAnimation(.snappy(duration: 0.2)) { browseContinent = section.continent }
+                            withAnimation(layoutAnimation) { browseContinent = section.continent }
                         } label: {
                             HStack(spacing: 6) {
                                 Text(LocalizedStringKey(section.continent))
@@ -1075,11 +1112,20 @@ struct RecScreen: View {
                             .foregroundStyle(isOn ? Theme.surface : .primary)
                             .padding(.horizontal, 14)
                             .frame(height: 34)
-                            .background(isOn ? Color.primary : Theme.fieldBackground, in: .capsule)
+                            .background {
+                                ZStack {
+                                    Capsule().fill(Theme.fieldBackground)
+                                    if isOn {
+                                        Capsule()
+                                            .fill(Color.primary)
+                                            .matchedGeometryEffect(id: "selectedRegion", in: regionChipNamespace)
+                                    }
+                                }
+                            }
                             .frame(minHeight: 44)
                             .contentShape(.rect)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(PressableStyle())
                         .accessibilityAddTraits(isOn ? [.isSelected] : [])
                     }
                 }
@@ -1111,7 +1157,7 @@ struct RecScreen: View {
                 NavigationLink(value: destination.id) {
                     MatchingTripCard(destination: destination)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableStyle())
                 // The heart lives outside the NavigationLink on purpose: nested
                 // inside it, VoiceOver folded it into the link and saving from the
                 // grid became impossible.
@@ -1137,16 +1183,17 @@ struct RecScreen: View {
                 ForEach(ExploreQuickFilter.allCases) { filter in
                     let isOn = isQuickFilterOn(filter)
                     Button {
-                        toggleQuickFilter(filter)
+                        quickFilterTaps += 1
+                        withAnimation(layoutAnimation) { toggleQuickFilter(filter) }
                     } label: {
                         Label(filter.title, systemImage: filter.systemImage)
                             .font(.app(.subheadline, .medium))
                             .foregroundStyle(isOn ? Theme.onAccent : .primary)
                             .padding(.horizontal, 14)
                             .frame(minHeight: 44)
+                            .controlSurface(tint: isOn ? Theme.accent : nil, in: .capsule)
                     }
-                    .buttonStyle(.plain)
-                    .controlSurface(tint: isOn ? Theme.accent : nil, in: .capsule)
+                    .buttonStyle(PressableStyle())
                     .accessibilityAddTraits(isOn ? [.isSelected] : [])
                 }
             }
@@ -1177,7 +1224,9 @@ struct RecScreen: View {
                             filterToken("Up to $\(Int(maxBudget))") { maxBudget = Self.budgetCap }
                         }
 
-                        Button("Clear all", action: resetFilters)
+                        Button("Clear all") {
+                            withAnimation(layoutAnimation) { resetFilters() }
+                        }
                             .font(.app(.subheadline, .semibold))
                             .foregroundStyle(Theme.accent)
                             .buttonStyle(.plain)
@@ -1194,7 +1243,9 @@ struct RecScreen: View {
     }
 
     private func filterToken(_ label: LocalizedStringKey, remove: @escaping () -> Void) -> some View {
-        Button(action: remove) {
+        Button {
+            withAnimation(layoutAnimation) { remove() }
+        } label: {
             HStack(spacing: 5) {
                 Text(label)
                 Image(systemName: "xmark")
@@ -1211,7 +1262,7 @@ struct RecScreen: View {
             .frame(minHeight: 36)
             .contentShape(.rect)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableStyle())
         .accessibilityLabel(Text(label))
         .accessibilityHint("Removes this filter")
     }
@@ -1255,10 +1306,11 @@ struct RecScreen: View {
             // be a way back that doesn't rely on the user guessing that scrolling
             // dismisses the keyboard. The clear (x) button only appears once there is
             // text to clear, so it can't serve this purpose.
-            if isSearchFocused {
+            if isSearchFocused || isSearchSummoned {
                 Button("Cancel") {
                     searchText = ""
                     isSearchFocused = false
+                    isSearchSummoned = false
                 }
                 .font(Theme.Typography.rowTitle)
                 .foregroundStyle(Theme.accent)
@@ -1284,9 +1336,9 @@ struct RecScreen: View {
                 .foregroundStyle(activeFilterCount > 0 ? Theme.onAccent : .primary)
                 .frame(width: 48, height: 48)
                 .contentShape(.circle)
+                .controlSurface(tint: activeFilterCount > 0 ? Theme.accent : nil, in: .circle)
         }
-        .buttonStyle(.plain)
-        .controlSurface(tint: activeFilterCount > 0 ? Theme.accent : nil, in: .circle)
+        .buttonStyle(PressableStyle())
         // The count sits on the disc instead of in a label next to it.
         .overlay(alignment: .topTrailing) {
             if activeFilterCount > 0 {
@@ -1345,7 +1397,7 @@ struct RecScreen: View {
                             in: AnyShape(.capsule)
                         )
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableStyle())
                 }
             }
         }
@@ -1380,9 +1432,9 @@ struct RecScreen: View {
                             .foregroundStyle(Theme.onAccent)
                             .padding(.horizontal, 18)
                             .frame(minHeight: 44)
+                            .exploreActionFill(tint: Theme.accent)
                     }
-                    .buttonStyle(.plain)
-                    .exploreActionFill(tint: Theme.accent)
+                    .buttonStyle(PressableStyle())
                 }
             }
             .frame(maxWidth: .infinity)
@@ -1407,7 +1459,7 @@ struct RecScreen: View {
                                 : matchedStop(in: destination, query: query)?.name
                         )
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableStyle())
                 }
             }
         }

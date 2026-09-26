@@ -8,6 +8,7 @@ struct HomeScreen: View {
     @Environment(TripStore.self) private var store
     @Environment(AuthStore.self) private var auth
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showAddTrip = false
     @State private var showSignInAlert = false
     @State private var resumeAddTripAfterSignIn = false
@@ -45,7 +46,7 @@ struct HomeScreen: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Space.section) {
                     syncBanner
-                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .transition(.topBanner(reduceMotion: reduceMotion))
                         .animation(.snappy, value: store.syncState)
                     BalanceCard()
                     quickActions
@@ -58,7 +59,12 @@ struct HomeScreen: View {
             .background { AppBackground() }
             .navigationTitle("Your trips")
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { AppearanceToggle() }
+                if store.syncState == .syncing {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        ProgressView()
+                            .accessibilityLabel("Saving to cloud…")
+                    }
+                }
             }
             .refreshable {
                 // A deliberate refresh must bypass the repository's short-lived launch
@@ -171,15 +177,17 @@ struct HomeScreen: View {
                 Button {
                     requestAddTrip()
                 } label: {
+                    // Tinted rather than filled, so "Add expense" stays the one filled
+                    // primary action on screen.
                     Label("Add Trip", systemImage: "plus")
                         .font(Theme.Typography.rowTitle)
-                        .foregroundStyle(Theme.onAccent)
+                        .foregroundStyle(Theme.accent)
                         .padding(.horizontal, 14)
                         .frame(minHeight: 44)
                         .contentShape(.capsule)
+                        .background(Theme.accent.opacity(0.14), in: .capsule)
                 }
-                .buttonStyle(.plain)
-                .actionFill(tint: Theme.accent)
+                .buttonStyle(PressableStyle())
 
             }
 
@@ -205,7 +213,7 @@ struct HomeScreen: View {
                                 TripRow(trip: trip, currentUserID: store.currentUser.id)
                                     .frame(width: 300)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(PressableStyle())
                             .accessibilityIdentifier("trip-card-\(trip.id.uuidString)")
                             .contentShape(.contextMenuPreview, .rect(cornerRadius: 24))
                             .contextMenu {
@@ -254,9 +262,9 @@ struct HomeScreen: View {
                     .padding(.horizontal, 14)
                     .frame(minHeight: 48)
                     .contentShape(.rect(cornerRadius: 16))
+                    .cardOnlyGlass(cornerRadius: 16)
                 }
-                .buttonStyle(.plain)
-                .cardOnlyGlass(cornerRadius: 16)
+                .buttonStyle(PressableStyle())
             }
         }
 
@@ -286,9 +294,9 @@ struct HomeScreen: View {
                     .padding(.horizontal, 18)
                     .frame(minHeight: 44)
                     .contentShape(.capsule)
+                    .actionFill(tint: Theme.accent)
             }
-            .buttonStyle(.plain)
-            .actionFill(tint: Theme.accent)
+            .buttonStyle(PressableStyle())
 
             .padding(.top, 4)
 
@@ -303,7 +311,7 @@ struct HomeScreen: View {
                     .background(highContrastSurface, in: .capsule)
                     .contentShape(.rect)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableStyle())
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 28)
@@ -333,21 +341,15 @@ struct HomeScreen: View {
         .homeGlassPanel(cornerRadius: 16)
     }
 
-    /// Surfaces cloud-sync status so a failed save isn't silent: a spinner while saving
-    /// and a retryable error banner when a save couldn't reach Supabase.
+    /// Surfaces a failed cloud save inline so it isn't silent: a retryable error banner
+    /// when a save couldn't reach Supabase. (In-progress saves show in the toolbar.)
     @ViewBuilder
     private var syncBanner: some View {
         switch store.syncState {
-        case .idle:
+        case .idle, .syncing:
+            // Saving shows as a toolbar spinner instead: inserted here, it pushed the
+            // whole page down and back up around every slow save.
             EmptyView()
-        case .syncing:
-            HStack(spacing: 8) {
-                ProgressView()
-                Text("Saving to cloud…").font(.app(.caption, .medium)).foregroundStyle(.secondary)
-                Spacer()
-            }
-            .panelPadding(horizontal: 14, vertical: 10)
-            .homeGlassPanel(cornerRadius: 14)
         case .failed:
             SyncFailureBanner()
         }
@@ -421,10 +423,12 @@ struct HomeScreen: View {
                 Spacer()
                 if isSelectingTransactions {
                     Button(selectedTransactionIDs.count == visibleDeletableTransactions.count ? "Deselect All" : "Select All") {
-                        if selectedTransactionIDs.count == visibleDeletableTransactions.count {
-                            selectedTransactionIDs.removeAll()
-                        } else {
-                            selectedTransactionIDs = Set(visibleDeletableTransactions.map(\.id))
+                        withAnimation(.snappy(duration: 0.2)) {
+                            if selectedTransactionIDs.count == visibleDeletableTransactions.count {
+                                selectedTransactionIDs.removeAll()
+                            } else {
+                                selectedTransactionIDs = Set(visibleDeletableTransactions.map(\.id))
+                            }
                         }
                     }
                     .font(Theme.Typography.rowTitle)
@@ -434,8 +438,10 @@ struct HomeScreen: View {
                     .contentShape(.rect)
 
                     Button("Cancel") {
-                        isSelectingTransactions = false
-                        selectedTransactionIDs.removeAll()
+                        withAnimation(.snappy(duration: 0.2)) {
+                            isSelectingTransactions = false
+                            selectedTransactionIDs.removeAll()
+                        }
                     }
                     .font(Theme.Typography.rowTitle)
                     .foregroundStyle(.secondary)
@@ -445,7 +451,7 @@ struct HomeScreen: View {
                     .padding(.leading, 12)
                 } else if !visibleDeletableTransactions.isEmpty {
                     Button("Select") {
-                        isSelectingTransactions = true
+                        withAnimation(.snappy(duration: 0.2)) { isSelectingTransactions = true }
                     }
                     .font(Theme.Typography.rowTitle)
                     .foregroundStyle(Theme.accent)
@@ -502,6 +508,7 @@ struct HomeScreen: View {
                     .tint(Theme.negative)
                     .disabled(selectedTransactionIDs.isEmpty)
                     .padding(.top, 4)
+                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .bottom)))
                 }
             }
         }
@@ -602,17 +609,19 @@ struct HomeScreen: View {
     @ViewBuilder
     private func transactionRow(_ transaction: Transaction) -> some View {
         if isSelectingTransactions {
+            // Rows the user can't delete get no tap action, so they aren't exposed as
+            // buttons that do nothing.
             TransactionRow(
                 transaction: transaction,
-                isSelected: transaction.canDelete ? selectedTransactionIDs.contains(transaction.id) : nil
-            ) {
-                guard transaction.canDelete else { return }
-                if selectedTransactionIDs.contains(transaction.id) {
-                    selectedTransactionIDs.remove(transaction.id)
-                } else {
-                    selectedTransactionIDs.insert(transaction.id)
-                }
-            }
+                isSelected: transaction.canDelete ? selectedTransactionIDs.contains(transaction.id) : nil,
+                onTap: transaction.canDelete ? {
+                    if selectedTransactionIDs.contains(transaction.id) {
+                        selectedTransactionIDs.remove(transaction.id)
+                    } else {
+                        selectedTransactionIDs.insert(transaction.id)
+                    }
+                } : nil
+            )
             .opacity(transaction.canDelete ? 1 : 0.5)
         } else if transaction.canDelete {
             SwipeToDeleteRow {
@@ -631,8 +640,10 @@ struct HomeScreen: View {
         for (tripID, tripTransactions) in groupedByTrip {
             store.deleteExpenses(Set(tripTransactions.map(\.expenseID)), from: tripID)
         }
-        selectedTransactionIDs.removeAll()
-        isSelectingTransactions = false
+        withAnimation(.snappy(duration: 0.2)) {
+            selectedTransactionIDs.removeAll()
+            isSelectingTransactions = false
+        }
     }
 }
 
@@ -834,6 +845,7 @@ struct BalanceCard: View {
                                 .foregroundStyle(isOver ? statusColor : Theme.ink)
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.72)
+                                .contentTransition(.numericText())
 
                             Group {
                                 if hasConvertedBudget {
@@ -848,7 +860,11 @@ struct BalanceCard: View {
                             .font(Theme.Typography.secondary)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.leading)
+                            .contentTransition(.numericText())
                         }
+                        // The currency picker sets this without a transaction, so the
+                        // figures above only roll if the change is animated here.
+                        .animation(.snappy, value: displayCurrency)
 
                         if hasConvertedBudget {
                             Spacer(minLength: 8)
@@ -1166,7 +1182,7 @@ private struct BudgetByTripSheet: View {
                         Button { onSelect(trip.id) } label: {
                             budgetRow(trip)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(PressableStyle())
                     }
 
                     let missingCount = totalTripCount - trips.count
@@ -1689,7 +1705,7 @@ struct TripPickerSheet: View {
 
                     ForEach(trips) { trip in
                         Button { onSelect(trip) } label: { row(trip) }
-                            .buttonStyle(.plain)
+                            .buttonStyle(PressableStyle())
                     }
                 }
                 .padding()
@@ -1762,7 +1778,7 @@ struct ArchivedTripsSheet: View {
                         ForEach(store.archivedTrips) { trip in
                             SwipeActionsRow(actions: swipeActions(for: trip)) {
                                 Button { openTrip = trip } label: { row(trip) }
-                                    .buttonStyle(.plain)
+                                    .buttonStyle(PressableStyle())
                             }
                         }
                     }
@@ -1842,7 +1858,7 @@ struct ArchivedTripsSheet: View {
                     .background(Theme.accent.opacity(0.14), in: .capsule)
                     .contentShape(.capsule)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableStyle())
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1900,6 +1916,16 @@ struct TransactionRow: View {
     var onTap: (() -> Void)? = nil
 
     var body: some View {
+        if let onTap {
+            Button(action: onTap) { row }
+                .buttonStyle(PressableStyle())
+                .accessibilityAddTraits(isSelected == true ? .isSelected : [])
+        } else {
+            row
+        }
+    }
+
+    private var row: some View {
         HStack(spacing: 12) {
             if let isSelected {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
@@ -1936,7 +1962,6 @@ struct TransactionRow: View {
         }
         .padding(14)
         .contentShape(.rect)
-        .onTapGesture { onTap?() }
     }
 }
 

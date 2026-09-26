@@ -518,6 +518,9 @@ struct DestinationRow: View {
 struct HeartButton: View {
     let isSaved: Bool
     let action: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Bumped only when a guide becomes saved, so unsaving swaps the glyph without the bounce.
+    @State private var saveBounces = 0
 
     private var mark: AnyShapeStyle {
         isSaved ? AnyShapeStyle(.red) : AnyShapeStyle(.black)
@@ -528,13 +531,18 @@ struct HeartButton: View {
             Image(systemName: isSaved ? "heart.fill" : "heart")
                 .font(.app(size: 16, weight: .semibold))
                 .foregroundStyle(mark)
+                .contentTransition(.symbolEffect(.replace))
+                .symbolEffect(.bounce, value: saveBounces)
                 .frame(width: 44, height: 44)
                 .background {
                     Circle().fill(.white.opacity(0.95))
                 }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableStyle())
         .sensoryFeedback(.impact(flexibility: .soft), trigger: isSaved)
+        .onChange(of: isSaved) { _, saved in
+            if saved && !reduceMotion { saveBounces += 1 }
+        }
         .accessibilityLabel(Text(isSaved ? "Remove from saved" : "Save"))
     }
 }

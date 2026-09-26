@@ -784,7 +784,7 @@ struct MeterBar: View {
     let colors: [Color]
     var track: Color = Color.primary.opacity(0.08)
     var height: CGFloat = 8
-
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let clamped = min(1, max(0, fraction))
@@ -796,6 +796,8 @@ struct MeterBar: View {
                     shape.fill(track)
                 }
                 shape.fill(fill).frame(width: geo.size.width * clamped)
+                    // Only a change animates, never the first appearance.
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: clamped)
             }
         }
         // Thin enough to read as a rule rather than as a bar, which is the point.
@@ -980,10 +982,33 @@ struct SoftSurface<S: Shape>: View {
 
 // MARK: - Shared action hierarchy
 
+/// Touch-down feedback for cards, tiles and chips: a slight shrink that lands the moment
+/// the finger does and releases quickly. The label must carry its own background, or
+/// the background stays put while the content shrinks. Reduce Motion swaps the scale
+/// for a dim.
+struct PressableStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.97 : 1)
+            .opacity(configuration.isPressed && reduceMotion ? 0.8 : 1)
+            .animation(.easeOut(duration: 0.16), value: configuration.isPressed)
+    }
+}
+
+extension AnyTransition {
+    /// Banners drop in from the top edge; under Reduce Motion they only fade.
+    static func topBanner(reduceMotion: Bool) -> AnyTransition {
+        reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity)
+    }
+}
+
 /// The same action geometry in every palette, with readable disabled/pressed states.
 struct AppActionStyle: ButtonStyle {
     var primary = true
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeBody(configuration: Configuration) -> some View {
         let soft = ThemeManager.shared.selection.usesSoftElevation
@@ -1007,7 +1032,11 @@ struct AppActionStyle: ButtonStyle {
                         .strokeBorder(Theme.separator, lineWidth: 1)
                 }
             }
-            .opacity(!isEnabled ? 0.45 : (configuration.isPressed && !soft ? 0.75 : 1))
+            // A fade reads as "disabled"; a slight shrink reads as "heard you". Reduce
+            // Motion keeps the old dim instead.
+            .scaleEffect(configuration.isPressed && !soft && !reduceMotion ? 0.97 : 1)
+            .opacity(!isEnabled ? 0.45 : (configuration.isPressed && !soft && reduceMotion ? 0.75 : 1))
+            .animation(.easeOut(duration: 0.16), value: configuration.isPressed)
     }
 }
 

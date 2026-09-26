@@ -191,7 +191,6 @@ struct ProfileDetailView: View {
                         .accessibilityLabel("Share profile")
                 }
             }
-            ToolbarItem(placement: .topBarTrailing) { AppearanceToggle() }
             // Settings used to be reachable only from the Explore tab, which left the
             // Profile tab with no route to sign-out, currency, appearance or language.
             ToolbarItem(placement: .topBarTrailing) {

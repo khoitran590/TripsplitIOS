@@ -109,6 +109,7 @@ struct ContentView: View {
     /// sign-in sheet opens as the app appears.
     var startsAtSignIn = false
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var selectedTab: DockTab = .explore
     /// Curated guides have their own sticky bottom action bar. Hide the floating
     /// dock while one is open so the two controls never overlap.
@@ -164,7 +165,7 @@ struct ContentView: View {
             if store.syncState == .failed && selectedTab != .trips {
                 SyncFailureBanner()
                     .padding(.horizontal)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .transition(.topBanner(reduceMotion: reduceMotion))
             }
         }
         .animation(.snappy, value: store.syncState)
@@ -184,11 +185,11 @@ struct ContentView: View {
                     }
                 )
                 .padding(.top, 8)
-                .transition(.move(edge: .top).combined(with: .opacity))
+                .transition(.topBanner(reduceMotion: reduceMotion))
             } else if let name = onboarding.welcomeBackName {
                 WelcomeBackToast(name: name)
                     .padding(.top, 8)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .transition(.topBanner(reduceMotion: reduceMotion))
             }
         }
         .animation(.snappy, value: onboarding.visibleReturningSummary)
