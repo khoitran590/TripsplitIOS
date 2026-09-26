@@ -119,6 +119,10 @@ struct DestinationPhoto: View {
             }
             .animation(.easeOut(duration: 0.15), value: image == nil)
             .clipped()
+            // `.clipped()` only clips drawing: a portrait photo filled into a wide frame
+            // still hit-tests its full overflow, which let the Explore hero card swallow
+            // taps on the Discover filter button and chips above it.
+            .contentShape(.rect)
             // Measured rather than read from a GeometryReader so the view keeps its
             // existing, layout-neutral shape at all seven call sites.
             .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
