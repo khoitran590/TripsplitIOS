@@ -8,11 +8,13 @@ import MapKit
 struct ProfileScreen: View {
     @Environment(AuthStore.self) private var auth
     @State private var showSignIn = false
+    /// Switches the dock to the Trips tab, where balances live.
+    var onOpenTrips: (() -> Void)? = nil
 
     var body: some View {
         NavigationStack {
             if auth.isAuthenticated {
-                ProfileDetailView()
+                ProfileDetailView(onOpenTrips: onOpenTrips)
             } else {
                 ZStack {
                     AppBackground()
@@ -50,8 +52,9 @@ struct ProfileScreen: View {
 
 // MARK: - Profile page ("Show profile")
 
-/// The user's public-facing profile card: photo, name, bio, birthday, and the
-/// places they've been (their own list merged with locations from their trips).
+/// The user's own profile: the same showcase friends see (cover, identity, travel notes,
+/// places, badges, trips) plus the owner-only parts — setup checklist, stats, friends,
+/// saved places and balances. "Viewing as Friends" swaps in exactly the friends' page.
 struct ProfileDetailView: View {
     @Environment(TripStore.self) private var store
     @Environment(FriendsStore.self) private var friends
@@ -66,76 +69,47 @@ struct ProfileDetailView: View {
     @State private var showCoverPicker = false
     /// The passport cover share cards are printed on, shared with `ProfileShareSheet`.
     @AppStorage("shareCardCover") private var shareCardCover: ShareCardCover = .unitedStates
-    @State private var geocoder = VisitedPlaceGeocoder.shared
+    @State private var audience: ProfileAudience = .me
+    @State private var showMomentsPicker = false
     @AppStorage("displayCurrency") private var displayCurrency = "USD"
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.colorScheme) private var colorScheme
+    @State private var tripFilter: ProfileTripFilter = .all
+    /// Opens the Trips tab from the private balances row. Nil where the profile is pushed
+    /// from Settings rather than hosted by the dock, which hides the row.
+    var onOpenTrips: (() -> Void)? = nil
 
-    /// The user's own list first, then any trip locations not already in it.
-    /// A trip's start (or end) date is attached so the cards can show when they went.
-    private var visitedPlaces: [VisitedPlace] {
-        var places = store.userProfile.visitedPlaces.map { VisitedPlace(name: $0, date: nil) }
-        for trip in store.trips {
-            guard let location = trip.location?.trimmingCharacters(in: .whitespaces),
-                  !location.isEmpty else { continue }
-            let tripDate = trip.startDate ?? trip.endDate
-            if let index = places.firstIndex(where: { $0.name.caseInsensitiveCompare(location) == .orderedSame }) {
-                // Fill in a date for a place the user typed manually, if the trip has one.
-                if places[index].date == nil, let tripDate {
-                    places[index] = VisitedPlace(name: places[index].name, date: tripDate)
-                }
-            } else {
-                places.append(VisitedPlace(name: location, date: tripDate))
-            }
-        }
-        return places
-    }
+    private var visitedPlaces: [VisitedPlace] { store.profileVisitedPlaces }
 
-    /// Trips the signed-in user created, newest first — the profile's "My trips" rail,
-    /// and the set the "Trips" stat counts. Archived trips are excluded (via
-    /// `store.myTrips`) so the rail matches the Trips tab; the creator filter matches
-    /// what `profile_by_token` shows friends, so the profile reads the same either way.
+    /// Every trip the user is on — organized or joined — newest first: the profile's
+    /// trips rail, and the one set both the "Trips" and "Days away" stats count, so the
+    /// two can't disagree. Archived trips are excluded (via `store.myTrips`) so the rail
+    /// matches the Trips tab. Friends still see only trips the user created
+    /// (`profile_by_token`), until the shared profile gains joined trips too.
     private var myTrips: [Trip] {
         store.myTrips
-            .filter { $0.creatorID == store.currentUser.id }
             .sorted { ($0.startDate ?? .distantPast) > ($1.startDate ?? .distantPast) }
     }
 
-    /// The numbers behind the stats card. Money comes from `homeTotals`, the same
-    /// aggregation the Trips tab shows, so the two screens can never disagree.
+    private var organizedTrips: [Trip] { myTrips.filter { $0.creatorID == store.currentUser.id } }
+    private var joinedTrips: [Trip] { myTrips.filter { $0.creatorID != store.currentUser.id } }
+
+    private var filteredTrips: [Trip] {
+        switch tripFilter {
+        case .all: myTrips
+        case .organized: organizedTrips
+        case .joined: joinedTrips
+        }
+    }
+
+    /// The numbers behind the stats card.
     private var stats: ProfileStats {
         var stats = ProfileStats()
         stats.places = visitedPlaces.count
         stats.countries = Set(visitedPlaces.compactMap { PlaceRegion.isoCode(forRegionIn: $0.name) }).count
         stats.trips = myTrips.count
-        for trip in store.myTrips {
-            guard let start = trip.startDate, let end = trip.endDate, end >= start else { continue }
-            // Inclusive of both ends: a Friday-to-Sunday trip is three days away.
-            stats.days += (Calendar.current.dateComponents([.day], from: start, to: end).day ?? 0) + 1
-        }
-        let totals = store.homeTotals(in: displayCurrency)
-        stats.spent = totals.spent
-        stats.owed = totals.owedToYou
-        stats.owe = totals.youOwe
-        stats.currency = displayCurrency
+        stats.days = ProfileStats.daysAway(in: myTrips)
         return stats
-    }
-
-    /// Places on the profile that have a coordinate to plot: bookmarked map places
-    /// exactly, visited place names once the geocoder has resolved them.
-    private var mappedPlaces: [MappedPlace] {
-        var mapped = store.userProfile.savedMapPlaces.map {
-            MappedPlace(name: $0.name, latitude: $0.latitude, longitude: $0.longitude)
-        }
-        var seen = Set(mapped.map { $0.name.lowercased() })
-        for place in visitedPlaces {
-            guard seen.insert(place.name.lowercased()).inserted,
-                  let coordinate = geocoder.coordinate(for: place.name) else { continue }
-            mapped.append(MappedPlace(name: place.name,
-                                      latitude: coordinate.latitude,
-                                      longitude: coordinate.longitude))
-        }
-        return mapped
     }
 
     /// Curated guides the user saved on Explore, resolved back to their catalog entries.
@@ -152,25 +126,60 @@ struct ProfileDetailView: View {
             // 16pt of card padding on either side of every gap, which read as windows
             // stacked inside windows.
             VStack(spacing: 22) {
-                identityHeader
+                switch audience {
+                case .friends:
+                    ProfileShowcaseContent(profile: friendsPreview) {
+                        VStack(spacing: 10) {
+                            audiencePicker
+                            Label("This is what friends see when they open your link. Balances, friends and saved places stay private.",
+                                  systemImage: "eye.fill")
+                                .font(.app(.footnote))
+                                .foregroundStyle(Theme.textSecondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                case .me:
+                    ProfileHeader(person: store.currentUser, imageData: store.profileImageData,
+                                  name: displayName, showcase: store.userProfile.showcase,
+                                  bio: store.userProfile.bio,
+                                  birthday: store.userProfile.dateOfBirth.map {
+                                      MonthDay(date: $0, calendar: UserProfile.dobCalendar)
+                                  },
+                                  onEditPhoto: { showEditor = true })
 
-                statsCard
+                    profileActions
 
-                moneyCard
+                    audiencePicker
 
-                milestoneRail
+                    setupChecklist
 
-                FriendsSection { token in
-                    viewingProfile = SharedProfileLink(token: token)
+                    if !stats.isEmpty {
+                        statsCard
+                    }
+
+                    let notes = store.userProfile.showcase.answeredPrompts
+                    if !notes.isEmpty {
+                        TravelNotesSection(notes: notes)
+                    }
+
+                    badgesSection
+
+                    FriendsSection { token in
+                        viewingProfile = SharedProfileLink(token: token)
+                    }
+
+                    placesSection
+
+                    momentsSection
+
+                    bucketListSection
+
+                    savedSection
+
+                    tripsSection
+
+                    balancesRow
                 }
-
-                placesSection
-
-                travelMapCard
-
-                savedSection
-
-                tripsSection
             }
             .padding()
             .padding(.bottom, 80) // Clearance for the floating dock.
@@ -179,18 +188,6 @@ struct ProfileDetailView: View {
         .navigationTitle("Profile")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            // Trailing, where iOS puts sharing — and always present: while the share
-            // token is still loading the button is disabled rather than absent, which
-            // previously read as "this profile can't be shared".
-            ToolbarItem(placement: .topBarTrailing) {
-                if friends.shareURL() != nil {
-                    shareMenu
-                } else {
-                    Button {} label: { Image(systemName: "square.and.arrow.up") }
-                        .disabled(true)
-                        .accessibilityLabel("Share profile")
-                }
-            }
             // Settings used to be reachable only from the Explore tab, which left the
             // Profile tab with no route to sign-out, currency, appearance or language.
             ToolbarItem(placement: .topBarTrailing) {
@@ -201,10 +198,6 @@ struct ProfileDetailView: View {
                 }
                 .accessibilityLabel("Settings")
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { showEditor = true } label: { Image(systemName: "pencil") }
-                    .accessibilityLabel("Edit profile")
-            }
         }
         .refreshable {
             await store.loadProfileFromCloud()
@@ -212,10 +205,17 @@ struct ProfileDetailView: View {
             await friends.refresh()
         }
         .task { await friends.refresh() }
-        // Rates back the money on the stats card; geocoding fills in the map's pins.
+        // Rates back the converted figure on the balances row.
         .task { await store.refreshRates() }
-        .task(id: visitedPlaces.map(\.name)) {
-            await geocoder.resolve(visitedPlaces.map(\.name))
+        // The profile's cover is the share card's cover too. `ProfileShareSheet` reads the
+        // device setting, so it follows the profile; a cover picked on this device before
+        // covers were saved to the profile is carried up once.
+        .onChange(of: store.userProfile.showcase.cover, initial: true) { _, cover in
+            if cover != nil {
+                shareCardCover = store.userProfile.showcase.passportCover
+            } else if shareCardCover != .unitedStates {
+                store.updateShowcase { $0.cover = shareCardCover.rawValue }
+            }
         }
         .sheet(isPresented: $showEditor) {
             EditProfileView()
@@ -236,11 +236,14 @@ struct ProfileDetailView: View {
                 SharedProfileView(token: link.token)
             }
         }
+        .sheet(isPresented: $showMomentsPicker) {
+            MomentsPicker()
+        }
         .sheet(item: $shareCard) { card in
             ProfileShareSheet(card: card)
         }
         .sheet(isPresented: $showCoverPicker) {
-            ShareCardCoverPicker(cover: $shareCardCover)
+            ShareCardCoverPicker(cover: coverBinding)
                 .presentationDetents([.height(320)])
         }
     }
@@ -250,12 +253,12 @@ struct ProfileDetailView: View {
     @ViewBuilder
     private var shareMenu: some View {
         Menu {
-            if let token = sharedProfileToken {
-                Button {
-                    viewingProfile = SharedProfileLink(token: token)
-                } label: {
-                    Label("Preview shared profile", systemImage: "eye")
-                }
+            // The old "Preview shared profile" fetched the owner's own link, which the
+            // server answers unfiltered for its owner — it showed hidden sections.
+            Button {
+                audience = .friends
+            } label: {
+                Label("See what friends see", systemImage: "eye")
             }
             if let url = friends.shareURL() {
                 ShareLink(item: url, subject: Text(verbatim: store.currentUser.name),
@@ -280,86 +283,235 @@ struct ProfileDetailView: View {
             Button {
                 showCoverPicker = true
             } label: {
-                Label("Card cover", systemImage: "paintpalette")
+                Label("Cover", systemImage: "paintpalette")
             }
         } label: {
-            Image(systemName: "square.and.arrow.up")
+            Label("Share", systemImage: "square.and.arrow.up")
+                .font(.app(.subheadline, .semibold))
+                .foregroundStyle(Theme.accent)
+                .frame(maxWidth: .infinity, minHeight: 44)
         }
+        .controlSurface(in: .capsule)
+        // Always present: while the share token is still loading the button is disabled
+        // rather than absent, which previously read as "this profile can't be shared".
+        .disabled(friends.shareURL() == nil)
         .accessibilityLabel("Share profile")
     }
 
-    private var sharedProfileToken: String? {
-        guard let url = friends.shareURL(),
-              let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
-        return components.queryItems?.first { $0.name == "token" }?.value
-    }
-
-    /// Identity, unboxed: ringed photo (tap to edit), name, birthday pill, bio.
-    private var identityHeader: some View {
-        VStack(spacing: 12) {
+    /// Labeled Edit and Share, under the identity. They replaced two unlabeled toolbar
+    /// glyphs that sat beside Settings.
+    private var profileActions: some View {
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(spacing: 10))
+            : AnyLayout(HStackLayout(spacing: 10))
+        return layout {
             Button { showEditor = true } label: {
-                AvatarView(person: store.currentUser, imageData: store.profileImageData, size: 92)
-                    .padding(4)
-                    .background(Theme.surfaceSubtle, in: .circle)
-                    .padding(3)
-                    .background(
-                        LinearGradient(colors: [Theme.accent, Theme.accentSecondary],
-                                       startPoint: .topLeading, endPoint: .bottomTrailing),
-                        in: .circle
-                    )
-                    .overlay(alignment: .bottomTrailing) {
-                        Image(systemName: "camera.fill")
-                            .font(.app(.caption, .semibold))
-                            .foregroundStyle(.primary)
-                            .frame(width: 30, height: 30)
-                            .background(Theme.surface, in: .circle)
-                            .overlay(Circle().stroke(Theme.separator, lineWidth: 0.5))
-                            .shadow(color: Theme.elevatedShadow, radius: 4, y: 2)
-                    }
+                Text("Edit profile")
+                    .font(.app(.subheadline, .semibold))
+                    .foregroundStyle(Theme.onAccent)
+                    .frame(maxWidth: .infinity, minHeight: 44)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Profile photo")
-            .accessibilityHint("Opens profile editing")
+            .actionFill(tint: Theme.accent)
 
-            VStack(spacing: 8) {
-                Group {
-                    if store.currentUser.name.isEmpty {
-                        Text("TripSplit User")
-                    } else {
-                        Text(verbatim: store.currentUser.name)
-                    }
-                }
-                .font(.app(size: 26, weight: .bold))
-                .foregroundStyle(Theme.ink)
-                .multilineTextAlignment(.center)
+            shareMenu
+        }
+    }
 
-                if let dob = store.userProfile.dateOfBirth {
-                    infoPill(Text(verbatim: dob.formatted(date: .abbreviated, time: .omitted)),
-                             icon: "birthday.cake.fill")
-                }
-
-                if !store.userProfile.bio.trimmingCharacters(in: .whitespaces).isEmpty {
-                    Text(verbatim: store.userProfile.bio)
+    /// Steps a new profile is still missing, shown until every one is done so a fresh
+    /// account gets a to-do list instead of a page of zeros.
+    @ViewBuilder
+    private var setupChecklist: some View {
+        let steps: [(title: LocalizedStringKey, done: Bool)] = [
+            ("Add a photo", store.profileImageData != nil || store.currentUser.avatarURL != nil),
+            ("Pick your travel style", !store.userProfile.showcase.knownStyles.isEmpty),
+            ("Answer a travel prompt", !store.userProfile.showcase.answeredPrompts.isEmpty),
+            ("Add 3 places you've been", visitedPlaces.count >= 3),
+        ]
+        let hasFriend = !friends.friends.isEmpty
+        let doneCount = steps.filter(\.done).count + (hasFriend ? 1 : 0)
+        let total = steps.count + 1
+        if doneCount < total {
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Make it yours")
+                        .font(.app(.title3, .bold))
+                        .foregroundStyle(Theme.ink)
+                    Text("Friends see this page when you share your link.")
                         .font(.app(.subheadline))
                         .foregroundStyle(Theme.textSecondary)
-                        .multilineTextAlignment(.center)
-                        .lineLimit(3)
-                        .padding(.horizontal, 24)
+                }
+                HStack(spacing: 10) {
+                    ProgressView(value: Double(doneCount), total: Double(total))
+                        .tint(Theme.accent)
+                    Text("\(doneCount) of \(total)")
+                        .font(.app(.footnote, .semibold))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                VStack(spacing: 0) {
+                    ForEach(Array(steps.enumerated()), id: \.offset) { _, step in
+                        Button { showEditor = true } label: {
+                            checklistRow(step.title, done: step.done)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(step.done)
+                        Divider()
+                    }
+                    if let url = friends.shareURL(), !hasFriend {
+                        ShareLink(item: url, subject: Text(verbatim: store.currentUser.name),
+                                  message: Text(profileInvite)) {
+                            checklistRow("Add a friend", done: false)
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        checklistRow("Add a friend", done: hasFriend)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .panelPadding(horizontal: 16, vertical: 16)
+            .homePanel(cornerRadius: Theme.cardRadius)
+        }
+    }
+
+    private func checklistRow(_ title: LocalizedStringKey, done: Bool) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: done ? "checkmark.circle.fill" : "circle")
+                .font(.app(.title3))
+                .foregroundStyle(done ? Theme.positive : Color.secondary)
+            Text(title)
+                .font(.app(.body, done ? .regular : .semibold))
+                .foregroundStyle(done ? Theme.textSecondary : Theme.ink)
+                .strikethrough(done)
+            Spacer(minLength: 0)
+            if !done {
+                Image(systemName: "chevron.right")
+                    .font(.app(.footnote, .bold))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .frame(minHeight: 48)
+        .contentShape(.rect)
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(done ? Text("Done") : Text(""))
+    }
+
+    private var displayName: String {
+        store.currentUser.name.isEmpty ? String(localized: "TripSplit User") : store.currentUser.name
+    }
+
+    /// This profile exactly as `profile_by_token` would hand it to a friend.
+    private var friendsPreview: PublicProfile {
+        PublicProfile.preview(of: store.userProfile, user: store.currentUser, trips: store.trips)
+    }
+
+    private var audiencePicker: some View {
+        Picker("Viewing as", selection: $audience.animation(.snappy)) {
+            Text("Me").tag(ProfileAudience.me)
+            Text("Friends").tag(ProfileAudience.friends)
+        }
+        .pickerStyle(.segmented)
+        .accessibilityLabel("Viewing as")
+    }
+
+    /// Picking a cover saves it to the profile (friends see it on the banner) and to the
+    /// device setting the share card is printed from.
+    private var coverBinding: Binding<ShareCardCover> {
+        Binding {
+            store.userProfile.showcase.passportCover
+        } set: { cover in
+            shareCardCover = cover
+            store.updateShowcase { $0.cover = cover.rawValue }
+        }
+    }
+
+    /// Picked trip-feed photos, or — once there are trips to post from — an invitation to
+    /// pick some.
+    @ViewBuilder
+    private var momentsSection: some View {
+        let moments = store.userProfile.showcase.moments
+        if !moments.isEmpty {
+            MomentsSection(moments: moments) {
+                Button("Edit") { showMomentsPicker = true }
+                    .font(.app(.subheadline, .semibold))
+                    .frame(minHeight: 44)
+            }
+        } else if !store.trips.isEmpty {
+            HStack(spacing: 14) {
+                Image(systemName: "photo.stack.fill")
+                    .font(.app(.title3))
+                    .foregroundStyle(Theme.accent)
+                    .frame(width: 44, height: 44)
+                    .background(Theme.accent.opacity(0.12), in: .circle)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Moments")
+                        .font(.app(.headline))
+                        .foregroundStyle(Theme.ink)
+                    Text("Pick photos from your trip feeds to show on your profile.")
+                        .font(.app(.footnote))
+                        .foregroundStyle(Theme.textSecondary)
+                }
+                Spacer(minLength: 8)
+                Button("Choose") { showMomentsPicker = true }
+                    .font(.app(.subheadline, .semibold))
+                    .frame(minHeight: 44)
+            }
+            .panelPadding(horizontal: 16, vertical: 12)
+            .homePanel(cornerRadius: Theme.cardRadius)
+        }
+    }
+
+    /// Places the user wants to go, with a one-tap switch for whether friends see it
+    /// (hidden by default).
+    @ViewBuilder
+    private var bucketListSection: some View {
+        let places = store.userProfile.showcase.bucketList
+        if !places.isEmpty {
+            let shared = store.userProfile.visibility.bucketList
+            BucketListSection(places: places) {
+                Button {
+                    store.updateVisibility { $0.bucketList.toggle() }
+                } label: {
+                    Label(shared ? "Friends can see" : "Only you",
+                          systemImage: shared ? "eye.fill" : "eye.slash.fill")
+                        .font(.app(.caption, .semibold))
+                        .foregroundStyle(shared ? Theme.accent : Theme.textSecondary)
+                        .padding(.horizontal, 10)
+                        .frame(minHeight: 32)
+                        .background(Theme.fieldBackground, in: .capsule)
+                        .frame(minHeight: 44)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Bucket list visibility")
+                .accessibilityValue(shared ? Text("Friends can see") : Text("Only you"))
+                .accessibilityHint(shared ? Text("Hides it from friends") : Text("Shows it to friends"))
+            }
+        }
+    }
+
+    /// Every earned badge, the one closest to done, and pins for what friends see.
+    @ViewBuilder
+    private var badgesSection: some View {
+        let stats = stats
+        let earned = ProfileBadge.earned(for: stats)
+        let next = ProfileBadge.nextUp(for: stats).map { badge in
+            let progress = badge.progress(stats)
+            return (badge: badge, current: progress.current, target: progress.target)
+        }
+        if !earned.isEmpty || next != nil {
+            BadgesSection(badges: earned, pinned: store.userProfile.showcase.pinned, next: next) { badge in
+                store.updateShowcase { showcase in
+                    if let index = showcase.pinnedBadges.firstIndex(of: badge.rawValue) {
+                        showcase.pinnedBadges.remove(at: index)
+                    } else if showcase.pinnedBadges.count < ProfileBadge.pinLimit {
+                        showcase.pinnedBadges.append(badge.rawValue)
+                    }
                 }
             }
         }
-        .frame(maxWidth: .infinity)
-    }
-
-    private func infoPill(_ label: Text, icon: String) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: icon).font(.app(.caption2, .semibold))
-            label.font(.app(.caption, .semibold))
-        }
-        .foregroundStyle(Theme.textSecondary)
-        .padding(.horizontal, 10)
-        .frame(minHeight: 26)
-        .background(Theme.fieldBackground, in: .capsule)
     }
 
     /// The four counts as icon tiles in one card.
@@ -399,93 +551,50 @@ struct ProfileDetailView: View {
         .accessibilityElement(children: .combine)
     }
 
-    /// Spent, plus the standing as two arrow chips — the same figures the Trips tab
-    /// reports (`homeTotals`), in the user's home currency.
-    private var moneyCard: some View {
-        let stats = stats
-        return VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Spent on trips")
-                        .font(.app(.caption2, .semibold))
-                        .textCase(.uppercase)
-                        .tracking(0.4)
-                        .foregroundStyle(.secondary)
-                    (Text(verbatim: formattedMoney(stats.spent, displayCurrency))
-                        .font(.app(size: 28, weight: .bold))
-                        .foregroundStyle(Theme.ink)
-                     + Text(verbatim: " " + displayCurrency)
-                        .font(.app(.footnote, .semibold))
-                        .foregroundStyle(.secondary))
-                        .monospacedDigit()
-                }
-                Spacer()
-                Image(systemName: stats.owe > 0 ? "exclamationmark" : "checkmark")
-                    .font(.app(.subheadline, .bold))
-                    .foregroundStyle(stats.owe > 0 ? Theme.negative : Theme.positive)
-                    .frame(width: 36, height: 36)
-                    .background((stats.owe > 0 ? Theme.negative : Theme.positive).opacity(0.14), in: .circle)
-                    .accessibilityLabel(stats.owe > 0 ? "You still owe money" : "You're settled up")
-            }
-            let chips = dynamicTypeSize.isAccessibilitySize
-                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
-                : AnyLayout(HStackLayout(spacing: 8))
-            chips {
-                moneyChip(Text(verbatim: formattedMoney(stats.owed, displayCurrency)) + Text(" owed to you"),
-                          icon: "arrow.up", color: Theme.positive)
-                moneyChip(Text(verbatim: formattedMoney(stats.owe, displayCurrency)) + Text(" you owe"),
-                          icon: "arrow.down", color: Theme.negative)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .panelPadding(horizontal: 16, vertical: 16)
-        .homePanel(cornerRadius: Theme.cardRadius)
-    }
-
-    private func moneyChip(_ label: Text, icon: String, color: Color) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: icon).font(.app(.caption2, .bold))
-            label.font(.app(.caption, .semibold)).monospacedDigit()
-        }
-        .foregroundStyle(color)
-        .padding(.horizontal, 10)
-        .frame(minHeight: 26)
-        .background(color.opacity(0.12), in: .capsule)
-        .accessibilityElement(children: .combine)
-    }
-
-    /// Milestones the numbers have already earned, as a rail of medal pills.
+    /// Balances, private to the owner and out of the way: the profile used to lead with
+    /// a spent / owed / you-owe card, above anything about the person. The figures are
+    /// the Trips tab's own (`homeTotals`), and tapping goes there.
     @ViewBuilder
-    private var milestoneRail: some View {
-        let earned = milestones(for: stats)
-        if !earned.isEmpty {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(earned, id: \.self) { milestone in
-                        HStack(spacing: 6) {
-                            Image(systemName: "star.fill")
-                                .font(.app(size: 9, weight: .bold))
-                                .foregroundStyle(.white)
-                                .frame(width: 18, height: 18)
-                                .background(
-                                    LinearGradient(colors: [Color(hex: 0xF59E0B), Color(hex: 0xFBBF24)],
-                                                   startPoint: .topLeading, endPoint: .bottomTrailing),
-                                    in: .circle
-                                )
-                            Text(LocalizedStringKey(milestone))
-                                .font(.app(.caption, .semibold))
+    private var balancesRow: some View {
+        if let onOpenTrips, !myTrips.isEmpty {
+            let totals = store.homeTotals(in: displayCurrency)
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Only you see this", systemImage: "lock.fill")
+                    .font(.app(.footnote, .semibold))
+                    .foregroundStyle(.secondary)
+                Button(action: onOpenTrips) {
+                    HStack(spacing: 12) {
+                        Text("Balances")
+                            .font(.app(.body))
+                            .foregroundStyle(Theme.ink)
+                        Spacer(minLength: 8)
+                        Group {
+                            if totals.youOwe > 0 {
+                                Text("You owe \(formattedMoney(totals.youOwe, displayCurrency))")
+                                    .foregroundStyle(Theme.negative)
+                            } else if totals.owedToYou > 0 {
+                                Text("Owed to you \(formattedMoney(totals.owedToYou, displayCurrency))")
+                                    .foregroundStyle(Theme.positive)
+                            } else {
+                                Text("Settled up")
+                                    .foregroundStyle(.secondary)
+                            }
                         }
-                        .padding(.leading, 6)
-                        .padding(.trailing, 12)
-                        .frame(minHeight: 30)
-                        .background(Theme.surface, in: .capsule)
-                        .overlay(Capsule().stroke(Theme.separator, lineWidth: 0.5))
+                        .font(.app(.subheadline, .semibold))
+                        .monospacedDigit()
+                        Image(systemName: "chevron.right")
+                            .font(.app(.footnote, .bold))
+                            .foregroundStyle(.tertiary)
                     }
+                    .frame(minHeight: 52)
+                    .padding(.horizontal, 16)
+                    .contentShape(.rect)
                 }
-                .padding(.horizontal, 16)
+                .buttonStyle(.plain)
+                .homePanel(cornerRadius: Theme.cardRadius)
+                .accessibilityHint("Opens the Trips tab")
             }
-            .padding(.horizontal, -16)
-            .accessibilityLabel("Milestones")
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -517,72 +626,8 @@ struct ProfileDetailView: View {
             .background(Theme.fieldBackground, in: .circle)
     }
 
-    /// Milestones the numbers have already earned. English keys the catalog localizes.
-    private func milestones(for stats: ProfileStats) -> [String] {
-        var earned: [String] = []
-        if stats.trips >= 1 { earned.append("First trip") }
-        if stats.trips >= 10 { earned.append("10 trips") }
-        if stats.countries >= 3 { earned.append("3 countries") }
-        if stats.countries >= 10 { earned.append("Globetrotter") }
-        if stats.places >= 10 { earned.append("10 places") }
-        if stats.days >= 30 { earned.append("A month away") }
-        return earned
-    }
-
     private func formattedMoney(_ value: Double, _ code: String) -> String {
         value.formatted(.currency(code: code).precision(.fractionLength(value < 1000 ? 2 : 0)))
-    }
-
-    /// Everywhere the profile can plot, on one map. Bookmarked map places have
-    /// coordinates already; visited names are filled in by `VisitedPlaceGeocoder` as it
-    /// resolves them, so the map starts sparse and completes itself.
-    @ViewBuilder
-    private var travelMapCard: some View {
-        let places = mappedPlaces
-        if !places.isEmpty {
-            let stats = stats
-            Map(initialPosition: .region(region(for: places)), interactionModes: [.pan, .zoom]) {
-                ForEach(places) { place in
-                    Marker(place.name, systemImage: "mappin", coordinate: place.coordinate)
-                        .tint(Theme.accent)
-                }
-            }
-            .frame(height: 220)
-            .clipShape(.rect(cornerRadius: 24))
-            .overlay(alignment: .topLeading) {
-                HStack(spacing: 5) {
-                    Image(systemName: "mappin.and.ellipse")
-                        .font(.app(.caption2, .semibold))
-                        .foregroundStyle(Theme.accent)
-                    Text("\(stats.places) places · \(stats.countries) countries")
-                        .font(.app(.caption, .semibold))
-                        .monospacedDigit()
-                }
-                .padding(.horizontal, 10)
-                .frame(minHeight: 26)
-                .background(Theme.surface, in: .capsule)
-                .shadow(color: Theme.elevatedShadow, radius: 4, y: 2)
-                .padding(12)
-            }
-            .shadow(color: Theme.elevatedShadow, radius: 8, y: 4)
-            .accessibilityLabel("Map of the places you've been")
-        }
-    }
-
-    /// A region containing every pin, with padding so markers aren't clipped at the rim.
-    private func region(for places: [MappedPlace]) -> MKCoordinateRegion {
-        let latitudes = places.map(\.latitude)
-        let longitudes = places.map(\.longitude)
-        guard let minLatitude = latitudes.min(), let maxLatitude = latitudes.max(),
-              let minLongitude = longitudes.min(), let maxLongitude = longitudes.max() else {
-            return MKCoordinateRegion(center: .init(latitude: 20, longitude: 0),
-                                      span: .init(latitudeDelta: 120, longitudeDelta: 120))
-        }
-        let center = CLLocationCoordinate2D(latitude: (minLatitude + maxLatitude) / 2,
-                                            longitude: (minLongitude + maxLongitude) / 2)
-        let span = MKCoordinateSpan(latitudeDelta: max((maxLatitude - minLatitude) * 1.5, 4),
-                                    longitudeDelta: max((maxLongitude - minLongitude) * 1.5, 4))
-        return MKCoordinateRegion(center: center, span: span)
     }
 
     /// Bookmarks made on the Map and Explore tabs. They have always been stored on the
@@ -632,7 +677,9 @@ struct ProfileDetailView: View {
     @ViewBuilder
     private var placesSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionHeading("Where I've been", count: visitedPlaces.count) {
+            PlacesShowcaseSection(title: "Where I've been", places: visitedPlaces,
+                                  favorite: store.userProfile.showcase.favoritePlace,
+                                  memory: store.userProfile.showcase.favoriteMemory) {
                 Button { showEditor = true } label: { headingDisc("plus") }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Add visited places")
@@ -647,16 +694,6 @@ struct ProfileDetailView: View {
                         .font(.app(.subheadline, .semibold))
                         .frame(minHeight: 44)
                 }
-            } else {
-                // Full-bleed horizontal rail of passport-style cards (negative padding
-                // cancels the parent's inset so the row runs edge to edge like a gallery).
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
-                        ForEach(visitedPlaces) { VisitedPlaceCard(place: $0) }
-                    }
-                    .padding(.horizontal, 16)
-                }
-                .padding(.horizontal, -16)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -665,18 +702,22 @@ struct ProfileDetailView: View {
     @ViewBuilder
     private var tripsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionHeading("My trips", count: myTrips.count)
+            sectionHeading("Trips", count: myTrips.count)
 
             // The section used to vanish entirely when empty, unlike Places and Friends
             // above it, so a new account's profile just stopped mid-page.
             if myTrips.isEmpty {
-                Text("Trips you create show up here. Start one from the Trips tab.")
+                Text("Trips you create or join show up here. Start one from the Trips tab.")
                     .font(.app(.subheadline))
                     .foregroundStyle(.secondary)
             } else {
+                // Only worth offering when there's something to tell apart.
+                if !organizedTrips.isEmpty && !joinedTrips.isEmpty {
+                    tripFilterChips
+                }
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
-                        ForEach(myTrips) { trip in
+                        ForEach(filteredTrips) { trip in
                             Button { selectedTrip = trip } label: {
                                 ProfileTripCard(trip: trip)
                             }
@@ -689,5 +730,176 @@ struct ProfileDetailView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var tripFilterChips: some View {
+        HStack(spacing: 8) {
+            ForEach(ProfileTripFilter.allCases) { filter in
+                let selected = tripFilter == filter
+                let count = switch filter {
+                case .all: myTrips.count
+                case .organized: organizedTrips.count
+                case .joined: joinedTrips.count
+                }
+                Button { tripFilter = filter } label: {
+                    HStack(spacing: 5) {
+                        Text(filter.label)
+                        if filter != .all {
+                            Text(verbatim: "\(count)").monospacedDigit()
+                        }
+                    }
+                    .font(.app(.footnote, .semibold))
+                    .foregroundStyle(selected ? Theme.onAccent : Theme.ink)
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 36)
+                }
+                .buttonStyle(.plain)
+                .background {
+                    if selected {
+                        Capsule().fill(Theme.accent)
+                    } else {
+                        Capsule().fill(Theme.fieldBackground)
+                    }
+                }
+                .contentShape(.capsule)
+                .accessibilityAddTraits(selected ? .isSelected : [])
+            }
+        }
+    }
+}
+
+/// Which of the user's trips the profile's trips rail shows.
+enum ProfileTripFilter: CaseIterable, Identifiable {
+    case all, organized, joined
+
+    var id: Self { self }
+
+    var label: LocalizedStringKey {
+        switch self {
+        case .all: "All"
+        case .organized: "Organized"
+        case .joined: "Joined"
+        }
+    }
+}
+
+/// Whose eyes the Profile tab shows the page through.
+enum ProfileAudience: Hashable {
+    case me, friends
+}
+
+/// Picks up to `ProfileShowcase.momentLimit` of the user's own trip-feed photos for the
+/// profile. Only the owner's photos are offered — never someone else's from a shared
+/// trip — and only the picked ones become visible outside their trip.
+struct MomentsPicker: View {
+    @Environment(TripStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var candidates: [ProfileMoment] = []
+    /// Picked paths, in pick order (the order the profile shows them).
+    @State private var picked: [String] = []
+    @State private var isLoading = true
+    @State private var loadError: String?
+
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 4), count: 3)
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if isLoading {
+                    ProgressView()
+                } else if let loadError {
+                    ContentUnavailableView {
+                        Label("Couldn't load your photos", systemImage: "exclamationmark.triangle")
+                    } description: {
+                        Text(verbatim: loadError)
+                    } actions: {
+                        Button("Try Again") { Task { await load() } }
+                    }
+                } else if candidates.isEmpty {
+                    ContentUnavailableView("No photos yet", systemImage: "photo.on.rectangle",
+                                           description: Text("Photos you post in your trip feeds show up here."))
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Pick up to \(ProfileShowcase.momentLimit). Friends see only the photos you pick, even from trips they weren't on.")
+                                .font(.app(.footnote))
+                                .foregroundStyle(Theme.textSecondary)
+                            LazyVGrid(columns: columns, spacing: 4) {
+                                ForEach(candidates, id: \.path) { moment in
+                                    tile(moment)
+                                }
+                            }
+                        }
+                        .padding()
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background { AppBackground() }
+            .navigationTitle("Moments")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { save() }
+                        .disabled(isLoading || loadError != nil)
+                }
+            }
+            .task { await load() }
+        }
+    }
+
+    private func tile(_ moment: ProfileMoment) -> some View {
+        let index = picked.firstIndex(of: moment.path)
+        let isFull = picked.count >= ProfileShowcase.momentLimit
+        return Button {
+            if let index {
+                picked.remove(at: index)
+            } else if !isFull {
+                picked.append(moment.path)
+            }
+        } label: {
+            MomentTile(moment: moment)
+                .overlay(alignment: .topTrailing) {
+                    ZStack {
+                        Circle().fill(index == nil ? Color.black.opacity(0.3) : Theme.accent)
+                        Circle().stroke(.white, lineWidth: 1.5)
+                        if let index {
+                            Text(verbatim: "\(index + 1)")
+                                .font(.app(.caption, .bold))
+                                .foregroundStyle(Theme.onAccent)
+                        }
+                    }
+                    .frame(width: 26, height: 26)
+                    .padding(6)
+                }
+                .opacity(index == nil && isFull ? 0.5 : 1)
+        }
+        .buttonStyle(.plain)
+        .disabled(index == nil && isFull)
+        .accessibilityAddTraits(index == nil ? [] : .isSelected)
+    }
+
+    private func load() async {
+        isLoading = true
+        loadError = nil
+        do {
+            candidates = try await store.myFeedPhotos()
+            // Keep earlier picks that still exist; a deleted post's photo drops out.
+            let available = Set(candidates.map(\.path))
+            picked = store.userProfile.showcase.moments.map(\.path).filter(available.contains)
+        } catch {
+            loadError = (error as? AuthError)?.message ?? String(localized: "Check your connection and try again.")
+        }
+        isLoading = false
+    }
+
+    private func save() {
+        let chosen = picked.compactMap { path in candidates.first { $0.path == path } }
+        store.updateShowcase { $0.moments = chosen }
+        dismiss()
     }
 }

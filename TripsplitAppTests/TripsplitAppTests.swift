@@ -19,6 +19,25 @@ final class TripsplitAppTests: XCTestCase {
         }
     }
 
+    /// Settings values, footers and subtitles use `Theme.textSecondary` on the page
+    /// background and on cards, in every theme and appearance.
+    func testSecondaryTextMeetsContrastInEveryTheme() {
+        let original = ThemeManager.shared.selection
+        defer { ThemeManager.shared.selection = original }
+        for theme in AppTheme.allCases {
+            ThemeManager.shared.selection = theme
+            for style in [UIUserInterfaceStyle.light, .dark] {
+                let traits = UITraitCollection(userInterfaceStyle: style)
+                for (name, ground) in [("background", Theme.background), ("surface", Theme.surface)] {
+                    XCTAssertGreaterThanOrEqual(
+                        contrast(Theme.textSecondary, against: ground, traits: traits), 4.5,
+                        "\(theme.label) \(style == .dark ? "dark" : "light") secondary text on \(name)"
+                    )
+                }
+            }
+        }
+    }
+
     func testEveryThemeAccentHasReadableSelectedForeground() {
         for theme in AppTheme.allCases {
             XCTAssertGreaterThanOrEqual(
@@ -77,7 +96,7 @@ final class TripsplitAppTests: XCTestCase {
         let incomplete = Destination.all.filter { $0.places.isEmpty || $0.restaurants.isEmpty }
 
         XCTAssertTrue(incomplete.isEmpty, "Incomplete bundled guides: \(incomplete.map(\.id))")
-        for id in ["taipei", "paris", "hanoi", "buenos-aires", "cape-town", "queenstown", "reykjavik"] {
+        for id in ["taipei", "paris", "hanoi", "buenos-aires", "cape-town", "queenstown", "reykjavik", "da-nang", "hokkaido"] {
             let guide = try! XCTUnwrap(Destination.all.first { $0.id == id })
             XCTAssertFalse(guide.recommendedPlaces.isEmpty, "\(id) has no recommended locations")
             XCTAssertFalse(guide.recommendedRestaurants.isEmpty, "\(id) has no recommended restaurants")
@@ -86,6 +105,22 @@ final class TripsplitAppTests: XCTestCase {
             XCTAssertFalse(guide.practicalGuide.base.isEmpty)
             XCTAssertFalse(guide.bestMonths.isEmpty)
         }
+        let daNang = try! XCTUnwrap(Destination.all.first { $0.id == "da-nang" })
+        XCTAssertEqual(daNang.days, 7)
+        XCTAssertEqual(daNang.country, "Vietnam")
+        XCTAssertEqual(daNang.continent, "Asia")
+        XCTAssertGreaterThanOrEqual(daNang.budgetValue, 3000)
+        XCTAssertEqual(daNang.recommendedPlaces.count, 6)
+        XCTAssertEqual(daNang.recommendedRestaurants.count, 4)
+
+        let hokkaido = try! XCTUnwrap(Destination.all.first { $0.id == "hokkaido" })
+        XCTAssertEqual(hokkaido.days, 7)
+        XCTAssertEqual(hokkaido.country, "Japan")
+        XCTAssertEqual(hokkaido.continent, "Asia")
+        XCTAssertGreaterThanOrEqual(hokkaido.budgetValue, 3000)
+        XCTAssertEqual(hokkaido.recommendedPlaces.count, 6)
+        XCTAssertEqual(hokkaido.recommendedRestaurants.count, 4)
+
         XCTAssertFalse(CommunityTripGuide.preview.destination.places.isEmpty)
         XCTAssertFalse(CommunityTripGuide.preview.destination.restaurants.isEmpty)
     }

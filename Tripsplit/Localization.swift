@@ -139,54 +139,47 @@ extension Bundle {
 
 // MARK: - Language picker
 
-/// The sheet presented from Settings → Language. Selecting a row switches the whole app's
-/// language live and dismisses.
+/// Pushed from Settings → Language. Selecting a row switches the whole app's language live;
+/// the checkmark moves and the page stays, as in iOS Settings.
 struct LanguagePickerView: View {
     @Environment(LocalizationManager.self) private var localization
-    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    ForEach(AppLanguage.released) { language in
-                        Button {
-                            localization.language = language
-                            dismiss()
-                        } label: {
-                            HStack(spacing: 14) {
-                                Text(language.flag)
-                                    .font(.app(.title2))
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(language.endonym)
-                                        .font(.app(.body))
-                                        .foregroundStyle(.primary)
-                                    Text(language.englishName)
-                                        .font(.app(.caption))
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                if language == localization.language {
-                                    Image(systemName: "checkmark")
-                                        .font(.app(.body, .semibold))
-                                        .foregroundStyle(.tint)
-                                }
+        List {
+            Section {
+                ForEach(AppLanguage.released) { language in
+                    Button {
+                        localization.language = language
+                    } label: {
+                        HStack(spacing: 14) {
+                            Text(language.flag)
+                                .font(.app(.title2))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(language.endonym)
+                                    .font(.app(.body))
+                                    .foregroundStyle(.primary)
+                                Text(language.englishName)
+                                    .font(.app(.caption))
+                                    .foregroundStyle(.secondary)
                             }
-                            .contentShape(.rect)
+                            Spacer()
+                            if language == localization.language {
+                                Image(systemName: "checkmark")
+                                    .font(.app(.body, .semibold))
+                                    .foregroundStyle(.tint)
+                                    .accessibilityHidden(true)
+                            }
                         }
-                        .buttonStyle(.plain)
+                        .contentShape(.rect)
                     }
-                } footer: {
-                    Text("Additional reviewed languages will be added in a future update.")
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(language == localization.language ? .isSelected : [])
                 }
-            }
-            .navigationTitle("Language")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
+            } footer: {
+                Text("Additional reviewed languages will be added in a future update.")
             }
         }
+        .navigationTitle("Language")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }

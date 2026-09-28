@@ -159,3 +159,145 @@ struct CommunityStandardsView: View {
         .navigationTitle("Community Standards")
     }
 }
+
+/// A blocked account as Settings lists it. The server returns ids only; blocking happens
+/// from a trip feed, so the name and avatar come from trips you share. Someone no longer
+/// in any of your trips has no local record and is listed generically.
+struct BlockedAccount: Identifiable {
+    let id: UUID
+    let person: Person?
+
+    static func resolve(_ ids: Set<UUID>, in trips: [Trip]) -> [BlockedAccount] {
+        var people: [UUID: Person] = [:]
+        for member in trips.flatMap(\.members) where people[member.id] == nil {
+            people[member.id] = member
+        }
+        return ids.map { BlockedAccount(id: $0, person: people[$0]) }.sorted { lhs, rhs in
+            switch (lhs.person?.name, rhs.person?.name) {
+            case let (l?, r?) where l != r: l.localizedCaseInsensitiveCompare(r) == .orderedAscending
+            case (_?, nil): true
+            case (nil, _?): false
+            default: lhs.id.uuidString < rhs.id.uuidString
+            }
+        }
+    }
+}
+
+/// Settings → Blocked accounts: everyone you've blocked, with Unblock.
+struct BlockedAccountsView: View {
+    @Environment(TripStore.self) private var store
+    @State private var isLoading = true
+    @State private var errorMessage: String?
+    @State private var pendingUnblock: BlockedAccount?
+    @State private var unblockingID: UUID?
+
+    private var accounts: [BlockedAccount] {
+        BlockedAccount.resolve(store.blockedUserIDs, in: store.trips)
+    }
+
+    var body: some View {
+        List {
+            if let errorMessage {
+                Section { Text(verbatim: errorMessage).foregroundStyle(Theme.negative) }
+            }
+            if !accounts.isEmpty {
+                Section {
+                    ForEach(accounts) { account in
+                        row(account)
+                    }
+                } footer: {
+                    Text("You won't see their posts or comments, and neither of you can interact with the other in a shared trip feed.")
+                }
+            }
+        }
+        .overlay {
+            if accounts.isEmpty && errorMessage == nil {
+                if isLoading {
+                    ProgressView()
+                } else {
+                    ContentUnavailableView(
+                        "No blocked accounts",
+                        systemImage: "hand.raised",
+                        description: Text("You can block someone from a post in a trip's feed.")
+                    )
+                }
+            }
+        }
+        .navigationTitle("Blocked accounts")
+        .navigationBarTitleDisplayMode(.inline)
+        .task { await load() }
+        .refreshable { await load() }
+        .confirmationDialog(
+            "Unblock \(pendingUnblock.map(name(for:)) ?? "")?",
+            isPresented: Binding(
+                get: { pendingUnblock != nil },
+                set: { if !$0 { pendingUnblock = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Unblock") {
+                if let account = pendingUnblock { unblock(account) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Their posts and comments will show in your trip feeds again. Blocking removed any friend connection, so you'd need to add each other again.")
+        }
+    }
+
+    private func row(_ account: BlockedAccount) -> some View {
+        HStack(spacing: 12) {
+            Group {
+                if let person = account.person {
+                    AvatarView(person: person, size: 36)
+                } else {
+                    Image(systemName: "person.crop.circle.fill")
+                        .resizable()
+                        .foregroundStyle(Theme.textSecondary)
+                        .frame(width: 36, height: 36)
+                }
+            }
+            .accessibilityHidden(true)
+
+            Text(verbatim: name(for: account))
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if unblockingID == account.id {
+                ProgressView()
+            } else {
+                Button("Unblock") { pendingUnblock = account }
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel("Unblock \(name(for: account))")
+                    .disabled(unblockingID != nil)
+            }
+        }
+    }
+
+    private func name(for account: BlockedAccount) -> String {
+        let name = account.person?.name.trimmingCharacters(in: .whitespaces) ?? ""
+        return name.isEmpty ? String(localized: "Former trip member") : name
+    }
+
+    private func load() async {
+        errorMessage = nil
+        do {
+            try await store.refreshBlockedUsers()
+        } catch {
+            errorMessage = (error as? AuthError)?.message ?? String(localized: "Blocked accounts couldn't be loaded. Pull to try again.")
+        }
+        isLoading = false
+    }
+
+    private func unblock(_ account: BlockedAccount) {
+        pendingUnblock = nil
+        unblockingID = account.id
+        errorMessage = nil
+        Task {
+            do {
+                try await store.unblockUser(account.id)
+            } catch {
+                errorMessage = (error as? AuthError)?.message ?? String(localized: "The account couldn't be unblocked. Try again.")
+            }
+            unblockingID = nil
+        }
+    }
+}

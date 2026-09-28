@@ -154,6 +154,117 @@ final class TripsplitAppUITests: XCTestCase {
         captureDesignScreen("Explore-community-guide")
     }
 
+    func testSettingsRowsExposeLabelsValuesAndSelection() throws {
+        openDemoSettings()
+
+        // Each row is one control: the title is its label, the trailing text its value.
+        let appearance = app.buttons["Appearance & theme"]
+        XCTAssertTrue(appearance.waitForExistence(timeout: 5))
+        XCTAssertEqual(appearance.value as? String, "Light")
+        XCTAssertEqual(app.buttons["Language"].value as? String, "English")
+        let currency = app.buttons["Home currency"]
+        XCTAssertTrue(currency.exists)
+        XCTAssertFalse((currency.value as? String ?? "").isEmpty, "Home currency should announce its value")
+        // Clipping is audited at the accessibility sizes themselves (next test): the
+        // audit's larger-size prediction can't see that rows stack at those sizes.
+        try performAccessibilityAudit(for: settingsAuditTypes(contentSize: nil))
+        scrollToSettingsBottom()
+        try performAccessibilityAudit(for: settingsAuditTypes(contentSize: nil, scrolled: true))
+
+        // Checkmark lists announce their current choice as selected. (Counted within the
+        // list: the Profile tab behind the sheet is a selected button too.)
+        let selected = NSPredicate(format: "isSelected == true")
+        for _ in 0..<12 where !app.buttons["Personal information"].isHittable { app.swipeDown() }
+        tapAfterScrolling(app.buttons["Default payment method"])
+        XCTAssertTrue(app.navigationBars["Payment method"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.collectionViews.buttons.matching(selected).count, 1, "Exactly one payment method should be selected")
+        app.navigationBars["Payment method"].buttons.element(boundBy: 0).tap()
+
+        tapAfterScrolling(app.buttons["Language"])
+        XCTAssertTrue(app.navigationBars["Language"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.collectionViews.buttons.matching(selected).count, 1, "The current language should be selected")
+        app.navigationBars["Language"].buttons.element(boundBy: 0).tap()
+
+        tapAfterScrolling(app.buttons["Appearance & theme"])
+        tapAfterScrolling(app.buttons["Typeface"])
+        XCTAssertTrue(app.navigationBars["Change fonts"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.collectionViews.buttons.matching(selected).count, 1, "The current font should be selected")
+    }
+
+    func testSettingsPagesPushAndReturn() throws {
+        openDemoSettings()
+        for (row, title) in [("Default payment method", "Payment method"), ("Appearance & theme", "Appearance"),
+                             ("Language", "Language"), ("Privacy & AI", "Privacy & AI"),
+                             ("Blocked accounts", "Blocked accounts"),
+                             ("Community Standards", "Community Standards"), ("Privacy Policy", "Privacy Policy")] {
+            tapAfterScrolling(app.buttons[row])
+            XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 5), "\(row) should push \(title)")
+            app.navigationBars[title].buttons.element(boundBy: 0).tap()
+            XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5), "Back from \(title)")
+        }
+        XCTAssertFalse(app.staticTexts["Featured travel guides"].exists)
+        let support = app.buttons["Contact support"]
+        for _ in 0..<12 where !support.isHittable { app.swipeUp() }
+        XCTAssertTrue(support.isHittable)
+        XCTAssertEqual(support.value as? String, "support@tripsplit.app")
+    }
+
+    func testSettingsStaysReadableAtLargestTextSizes() throws {
+        // The largest standard size (rows stay side by side) and the largest
+        // accessibility size (rows stack).
+        for size in ["UICTContentSizeCategoryXXXL", "UICTContentSizeCategoryAccessibilityXXXL"] {
+            openDemoSettings(contentSize: size)
+            captureDesignScreen("Settings-\(size)-top")
+            try performAccessibilityAudit(for: settingsAuditTypes(contentSize: size))
+            scrollToSettingsBottom()
+            captureDesignScreen("Settings-\(size)-bottom")
+            try performAccessibilityAudit(for: settingsAuditTypes(contentSize: size, scrolled: true))
+        }
+    }
+
+    /// - Settings rows switch to a stacked layout at accessibility text sizes. The
+    ///   audit's text-clipped check predicts a *larger* size from the current render,
+    ///   so below those sizes it flags side-by-side rows that would in fact stack.
+    ///   Clipping is asserted only where the stacked layout is actually rendered.
+    /// - The audit scrolls the page itself while it runs (a screenshot taken after it
+    ///   shows a different offset than one taken before). Started from a scrolled
+    ///   state, it reports text straddling the screen edge as clipped, and iOS 26's
+    ///   scroll-edge effect — blurred copies of rows under the navigation bar — as
+    ///   low-contrast, unlabelled text. Scrolled audits skip those three checks; the
+    ///   unscrolled audit covers them, and the colors are also unit tested
+    ///   (`testSecondaryTextMeetsContrastInEveryTheme`).
+    private func settingsAuditTypes(contentSize: String?, scrolled: Bool = false) -> XCUIAccessibilityAuditType {
+        var types = XCUIAccessibilityAuditType.all
+        if contentSize?.contains("Accessibility") != true || scrolled { types.subtract(.textClipped) }
+        if scrolled { types.subtract([.contrast, .elementDetection]) }
+        return types
+    }
+
+    private func scrollToSettingsBottom() {
+        let footer = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Version")).firstMatch
+        for _ in 0..<12 where !(footer.exists && footer.isHittable) { app.swipeUp() }
+        XCTAssertTrue(footer.isHittable, "Settings footer should be reachable")
+        // Let the end-of-content bounce settle: auditing mid-animation measures contrast
+        // on pixels the text has already moved away from. (AX frames jump straight to
+        // their final position, so they can't be polled for this.)
+        usleep(1_500_000)
+    }
+
+    private func openDemoSettings(contentSize: String? = nil) {
+        app.launchArguments = ["-app-store-demo", "-ui-test-skip-onboarding", "-ui-test-theme", "classic",
+                               "-appearancePreference", "light", "-AppleLanguages", "(en)"]
+        if let contentSize {
+            app.launchArguments += ["-UIPreferredContentSizeCategoryName", contentSize]
+        }
+        app.launch()
+        XCTAssertTrue(app.buttons["Profile"].waitForExistence(timeout: 10))
+        app.buttons["Profile"].tap()
+        let settings = app.buttons["Settings"].firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        settings.tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+    }
+
     private func launchDemoTrip(theme: String, largeText: Bool = false) {
         app.launchArguments = ["-app-store-demo", "-ui-test-skip-onboarding", "-ui-test-theme", theme,
                                "-appearancePreference", "light", "-AppleLanguages", "(en)"]

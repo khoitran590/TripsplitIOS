@@ -44,6 +44,19 @@ extension TripStore {
         profile.bio = "Weekend explorer, noodle enthusiast, and keeper of the shared itinerary."
         profile.visitedPlaces = ["Tokyo, Japan", "Lisbon, Portugal", "Mexico City, Mexico"]
         profile.savedDestinationIDs = ["tokyo"]
+        profile.showcase.cover = ShareCardCover.japan.rawValue
+        profile.showcase.homeBase = "Seattle, WA"
+        profile.showcase.languages = "English, Spanish"
+        profile.showcase.travelStyles = [TravelStyle.streetFood, .planner, .earlyFlights].map(\.rawValue)
+        profile.showcase.prompts = [
+            ProfilePrompt(prompt: TravelPrompt.bestMeal.rawValue,
+                          answer: "A 2 a.m. bowl of ramen in Shinjuku, standing at the counter."),
+            ProfilePrompt(prompt: TravelPrompt.alwaysPack.rawValue,
+                          answer: "A deck of cards, and a spare charger for whoever forgot theirs."),
+        ]
+        profile.showcase.favoritePlace = "Lisbon, Portugal"
+        profile.showcase.favoriteMemory = "Got lost in Alfama on purpose. Twice."
+        profile.showcase.bucketList = ["Seoul, South Korea", "Patagonia, Argentina", "Marrakech, Morocco"]
         let sensoji = SavedMapPlace(
             key: "Sensō-ji@35.7148,139.7967",
             name: "Sensō-ji",

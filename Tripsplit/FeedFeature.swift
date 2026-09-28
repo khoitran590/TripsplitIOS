@@ -271,6 +271,29 @@ actor FeedRepository {
         return posts
     }
 
+    /// A post of the user's own that carries photos: just enough to offer its photos as
+    /// profile Moments.
+    nonisolated struct PhotoPost: Decodable, Sendable {
+        let tripID: UUID
+        let photoPaths: [String]
+        let locationName: String?
+
+        enum CodingKeys: String, CodingKey {
+            case tripID = "trip_id"
+            case photoPaths = "photo_paths"
+            case locationName = "location_name"
+        }
+    }
+
+    /// The author's own posts that have photos, newest first, across every trip they can
+    /// still read (RLS limits rows to trips they're a member of).
+    func photoPosts(authorID: UUID, accessToken: String) async throws -> [PhotoPost] {
+        let path = "/rest/v1/trip_feed_posts?author_id=eq.\(authorID.uuidString.lowercased())"
+            + "&select=trip_id,photo_paths,location_name&order=created_at.desc&limit=200"
+        let data = try await send("GET", path, accessToken: accessToken)
+        return try decoder.decode([PhotoPost].self, from: data).filter { !$0.photoPaths.isEmpty }
+    }
+
     func insert(_ post: FeedPost, tripID: UUID, accessToken: String) async throws {
         let body = try encoder.encode(InsertRow(post: post, tripID: tripID))
         _ = try await send(
@@ -449,6 +472,23 @@ extension TripStore {
         feedNextCursors[tripID] = page.next
     }
 
+    /// The user's own trip-feed photos, newest first, offered as profile Moments. Each is
+    /// captioned with its post's place, or its trip's name.
+    func myFeedPhotos() async throws -> [ProfileMoment] {
+        guard let accessToken = try await authorizedAccessToken() else {
+            throw AuthError(message: "Sign in to choose Moments.")
+        }
+        let me = currentUser.id
+        let posts = try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
+            try await FeedRepository.shared.photoPosts(authorID: me, accessToken: token)
+        }
+        return posts.flatMap { post in
+            let place = post.locationName.map(PlaceKey.displayName(of:)) ?? ""
+            let caption = place.isEmpty ? (trips.first { $0.id == post.tripID }?.name ?? "") : place
+            return post.photoPaths.map { ProfileMoment(path: $0, caption: caption) }
+        }
+    }
+
     /// Independent projection keeps map pins complete even when only the first feed
     /// page is visible. Comments and reactions are not transferred for map reads.
     func feedPlaces(for tripID: Trip.ID) async throws -> [FeedPost] {
@@ -494,6 +534,29 @@ extension TripStore {
                 filteredPost($0, blocked: blockedUserIDs)
             }
         }
+    }
+
+    /// Settings → Blocked accounts reads the list from the server, so it's complete even
+    /// before any trip feed has loaded.
+    func refreshBlockedUsers() async throws {
+        guard let accessToken = try await authorizedAccessToken() else {
+            throw AuthError(message: "Sign in to see blocked accounts.")
+        }
+        blockedUserIDs = try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
+            try await ModerationService.shared.blockedUserIDs(accessToken: token)
+        }
+    }
+
+    /// Their posts reappear the next time a feed loads; the friendship removed when
+    /// blocking is not restored.
+    func unblockUser(_ userID: UUID) async throws {
+        guard let accessToken = try await authorizedAccessToken() else {
+            throw AuthError(message: "Sign in to unblock an account.")
+        }
+        try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
+            try await ModerationService.shared.setBlocked(false, userID: userID, accessToken: token)
+        }
+        blockedUserIDs.remove(userID)
     }
 
     /// Uploads one feed photo to the shared private `receipts` bucket and returns its
@@ -1108,7 +1171,7 @@ private struct FeedPostCard: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Their feed posts and comments will be hidden immediately, and direct feed interaction will be disabled in both directions.")
+            Text("Their feed posts and comments will be hidden immediately, and direct feed interaction will be disabled in both directions. You can unblock them in Settings → Blocked accounts.")
         }
         .alert(
             "Safety action failed",

@@ -432,7 +432,7 @@ struct ContentView: View {
                 onBrowseIdeas: { selectedTab = .explore }
             )
         case .profile:
-            ProfileScreen()
+            ProfileScreen(onOpenTrips: { selectedTab = .trips })
         }
     }
 

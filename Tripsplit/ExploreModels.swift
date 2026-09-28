@@ -837,6 +837,60 @@ extension Destination {
             ],
             plannerNote: "Reserve geothermal lagoon passes weeks in advance and keep waterproof layers on hand regardless of the season."
         ),
+
+        // Asia (Week-Long Curated Experiences)
+        Destination(
+            id: "da-nang",
+            title: "Da Nang & Hoi An Coast", city: "Da Nang", country: "Vietnam",
+            tags: ["7 days", "Coastal"], planner: "Mai Lan Tran", price: "$3.2k",
+            dailyBudget: "~$460/day", stops: 14, isFeatured: true, symbol: "beach.umbrella.fill",
+            colors: [.cyan, .teal],
+            places: [
+                TravelPlanItem(name: "Hoi An Ancient Town", detail: "UNESCO merchant quarter, Japanese Covered Bridge, and lantern sampan boat ride.", cost: "Low-mid"),
+                TravelPlanItem(name: "Golden Bridge at Ba Na Hills", detail: "Cable car up the misty Annamite Range to walk the famous colossal stone hands.", cost: "Mid-high"),
+                TravelPlanItem(name: "Son Tra Peninsula & Lady Buddha", detail: "Coastal reserve drive, Linh Ung pagoda, and panoramic views of Da Nang bay.", cost: "Low"),
+                TravelPlanItem(name: "Marble Mountains", detail: "Limestone grottos, Buddhist shrines, and cliffside lookouts over Non Nuoc beach.", cost: "Low"),
+                TravelPlanItem(name: "Cam Thanh Coconut Village", detail: "Private basket boat cruise weaving through tranquil nipa palm water channels.", cost: "Low-mid"),
+                TravelPlanItem(name: "My Son Sanctuary", detail: "Ancient fourth-century Hindu temple ruins surrounded by jungle and mountain ridges.", cost: "Mid"),
+                TravelPlanItem(name: "Hai Van Pass coastal drive", detail: "Dramatic cliffside ocean pass connecting Da Nang to Lang Co lagoon.", cost: "Mid"),
+                TravelPlanItem(name: "Dragon Bridge & Han River", detail: "Illuminated weekend dragon breathing fire and water, best seen by river cruise.", cost: "Low")
+            ],
+            restaurants: [
+                TravelPlanItem(name: "La Maison 1888", detail: "Michelin-starred French haute cuisine in an opulent colonial mansion.", cost: "$$$"),
+                TravelPlanItem(name: "Mango Mango Hoi An", detail: "Creative Vietnamese-fusion plates with sunset views over Thu Bon River.", cost: "$$"),
+                TravelPlanItem(name: "The Temple Restaurant & Lounge", detail: "Upscale Indochine dining featuring fresh local seafood and tamarind glazed duck.", cost: "$$-$$$"),
+                TravelPlanItem(name: "Ba Duong", detail: "Beloved local alley institution for sizzling banh xeo crispy crepes and skewers.", cost: "$"),
+                TravelPlanItem(name: "Com Ga Ba Buoi", detail: "Hoi An's definitive turmeric chicken rice with shredded herbs and chili sauce.", cost: "$"),
+                TravelPlanItem(name: "Madame Khanh The Banh Mi Queen", detail: "Legendary crispy banh mi with rich homemade pate, roast pork, and secret sauce.", cost: "$")
+            ],
+            plannerNote: "Base at a coastal resort halfway between Da Nang and Hoi An; book La Maison 1888 and private cars well in advance."
+        ),
+        Destination(
+            id: "hokkaido",
+            title: "Hokkaido Alpine & Onsen", city: "Hokkaido", country: "Japan",
+            tags: ["7 days", "Nature"], planner: "Kenji Takahashi", price: "$3.8k",
+            dailyBudget: "~$540/day", stops: 14, isFeatured: true, symbol: "mountain.2.fill",
+            colors: [.blue, .cyan],
+            places: [
+                TravelPlanItem(name: "Noboribetsu Jigokudani", detail: "Walk Hell Valley's boardwalks past sulfurous steam vents and hot spring pools.", cost: "Low"),
+                TravelPlanItem(name: "Otaru Canal & Sakaimachi", detail: "Romantic gaslit canal warehouses, hand-blown glass studios, and music boxes.", cost: "Low"),
+                TravelPlanItem(name: "Mount Yotei & Niseko Panorama", detail: "Volcano viewpoints, pristine alpine wildflower meadows, and private onsen bathing.", cost: "Mid-high"),
+                TravelPlanItem(name: "Lake Toya & Mount Usu", detail: "Caldera lake views, Usuzan ropeway to the volcanic rim, and geothermal trails.", cost: "Mid"),
+                TravelPlanItem(name: "Sapporo Odori Park & TV Tower", detail: "Central promenade gardens, panoramic tower observation deck, and beer gardens.", cost: "Low"),
+                TravelPlanItem(name: "Nikka Whisky Yoichi Distillery", detail: "Historic stone distillery tour and peated single malt tasting near the coast.", cost: "Low-mid"),
+                TravelPlanItem(name: "Shiroi Koibito Park", detail: "Tudor-style confectionary village and chocolate factory tour with garden courtyards.", cost: "Low"),
+                TravelPlanItem(name: "Jozankei Onsen Gorge", detail: "Maple-lined canyon suspension bridge, footbaths, and serene forested valley walks.", cost: "Free")
+            ],
+            restaurants: [
+                TravelPlanItem(name: "Sushi Miyakawa", detail: "Three Michelin-starred Edomae omakase highlighting pristine abalone and sea urchin.", cost: "$$$"),
+                TravelPlanItem(name: "Somoza Niseko", detail: "Contemporary alpine-inspired multi-course dining inside a 150-year-old farmhouse.", cost: "$$$"),
+                TravelPlanItem(name: "Kani Honke Sapporo", detail: "Multi-course feast of freshly steamed king crab, snow crab sashimi, and crab hotpot.", cost: "$$-$$$"),
+                TravelPlanItem(name: "Ramen Shintoya Otaru", detail: "Rich, fragrant miso ramen with local sweet corn, butter, and char siu.", cost: "$"),
+                TravelPlanItem(name: "Ganso Ramen Yokocho", detail: "Historic Susukino ramen alley lined with tiny seventeen-seat noodle stalls.", cost: "$"),
+                TravelPlanItem(name: "Sapporo Beer Garden Genghis Khan", detail: "Tender grilled lamb on dome-shaped hot plates paired with fresh draft beer.", cost: "$$")
+            ],
+            plannerNote: "Book a rental car with English GPS for scenic freedom between onsen towns, and reserve high-end sushi months in advance."
+        ),
     ]
 }
 
@@ -849,7 +903,8 @@ extension Destination {
         "kyoto", "seoul", "amsterdam", "santorini", "sydney", "istanbul",
         "mexico-city", "marrakech", "osaka", "honolulu", "san-francisco",
         "lisbon", "taipei", "vancouver", "rio-de-janeiro", "las-vegas", "cairo",
-        "cape-town", "buenos-aires", "reykjavik", "queenstown", "hanoi"
+        "cape-town", "buenos-aires", "reykjavik", "queenstown", "hanoi",
+        "da-nang", "hokkaido"
     ]
 
     /// Rank by id, built once. The lookup used to be a linear `firstIndex(of:)`, which
@@ -916,6 +971,8 @@ extension Destination {
         case "cape-town": "Dramatic granite peaks plunging into two oceans, historic vineyards, penguin colonies, and a world-class culinary scene make Cape Town unforgettable."
         case "queenstown": "Cradled by the dramatic Remarkables and Lake Wakatipu, Queenstown pairs adrenaline-fueled alpine excursions with cozy lakeside dining."
         case "reykjavik": "Glaciers, volcanic craters, geothermal lagoons, and midnight skies — Reykjavik is the design-forward gateway to Iceland's untamed natural wonders."
+        case "da-nang": "Golden beaches, mist-shrouded mountain bridges, ancient lantern-lit riverways, and world-class coastal dining — Central Vietnam delivers an idyllic week of heritage and relaxation."
+        case "hokkaido": "Steaming geothermal valleys, pristine alpine peaks, world-renowned crab and sushi, and serene hot-spring ryokans — Hokkaido is Japan's ultimate nature and culinary retreat."
         default: "A curated plan with hand-picked places to visit and eat."
         }
     }
@@ -971,6 +1028,8 @@ extension Destination {
         case "cape-town": .init(base: "Camps Bay for sunset beaches or City Bowl/V&A Waterfront for central dining and touring.", transport: "Use rideshare within the city and rent a car or book a tour for the Cape Peninsula drive.", booking: "Book Table Mountain cableway and Robben Island ferry tickets ahead of time.")
         case "queenstown": .init(base: "Queenstown town center for walking to dinner, or Frankton for quiet lakeside stays near the airport.", transport: "Rent a car for Arrowtown and Gibbston Valley; book coach-and-cruise tours for Milford Sound.", booking: "Book Milford Sound tours and Fergburger mobile pickup orders ahead to skip long waits.")
         case "reykjavik": .init(base: "Miðborg (downtown) keeps restaurants, harbor paths, and tour pickup points within a short walk.", transport: "Walk around the city; rent an all-wheel-drive car or book guided day tours for the countryside.", booking: "Reserve Blue Lagoon or Sky Lagoon slots and Michelin dining well before departure.")
+        case "da-nang": .init(base: "Stay along Non Nuoc Beach for resort relaxation within 20 minutes of both Da Nang and Hoi An.", transport: "Arrange private car transfers between destinations; use taxis or bicycles within Hoi An.", booking: "Reserve Ba Na Hills cable car early, and book fine dining tables at La Maison 1888 weeks ahead.")
+        case "hokkaido": .init(base: "Split nights between Sapporo for dining, Niseko for mountain views, and Noboribetsu for luxury ryokan onsens.", transport: "Rent an AWD car for maximum flexibility, or use the JR Hokkaido Rail Pass between major stations.", booking: "Reserve Michelin omakase at Sushi Miyakawa and luxury ryokan stays well before arrival.")
         default: .init(base: "Choose a central, well-connected neighborhood.", transport: "Group stops by area and rely on local transit.", booking: "Reserve the one experience you would be disappointed to miss.")
         }
     }
@@ -1016,6 +1075,8 @@ extension Destination {
         case "cape-town": [11, 12, 1, 2, 3, 4]
         case "queenstown": [12, 1, 2, 3, 4, 6, 7, 8]
         case "reykjavik": [6, 7, 8, 9, 10, 11, 12, 1, 2, 3]
+        case "da-nang": [2, 3, 4, 5, 6, 7, 8]
+        case "hokkaido": [12, 1, 2, 6, 7, 8, 9, 10]
         default: []
         }
     }
@@ -1066,6 +1127,8 @@ extension Destination {
         case "cape-town": CLLocationCoordinate2D(latitude: -33.9249, longitude: 18.4241)
         case "queenstown": CLLocationCoordinate2D(latitude: -45.0312, longitude: 168.6626)
         case "reykjavik": CLLocationCoordinate2D(latitude: 64.1466, longitude: -21.9426)
+        case "da-nang": CLLocationCoordinate2D(latitude: 16.0544, longitude: 108.2022)
+        case "hokkaido": CLLocationCoordinate2D(latitude: 43.0618, longitude: 141.3545)
         default: CLLocationCoordinate2D(latitude: 0, longitude: 0)
         }
     }

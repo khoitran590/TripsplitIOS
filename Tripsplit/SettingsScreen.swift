@@ -12,27 +12,29 @@ struct SettingsScreen: View {
     @Environment(TripStore.self) private var store
     @Environment(LocalizationManager.self) private var localization
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
 
+    /// Pages pushed within Settings. Self-contained tasks with Cancel/Save (editing the
+    /// profile, changing the password, deleting the account) stay sheets instead.
+    private enum Page: Hashable {
+        case profile, appearance, paymentMethod, language, privacyAI, blockedAccounts, communityStandards, privacyPolicy
+    }
+
+    @State private var path: [Page] = []
     @State private var showPersonalInfo = false
     @State private var showChangePassword = false
-    @State private var showProfilePage = false
-    @State private var showPaymentSettings = false
     @State private var showDeleteAccount = false
-    @State private var showPrivacyChoices = false
-    @State private var showPrivacyPolicy = false
-    @State private var showCommunityStandards = false
-    @State private var showAppearanceSettings = false
-    @State private var showLanguagePicker = false
     @State private var isSigningOut = false
     @State private var showSignOutConfirmation = false
     @State private var showUnsyncedSignOutWarning = false
     @AppStorage("appearancePreference") private var appearance: AppearancePreference = .system
     @AppStorage("displayCurrency") private var displayCurrency = "USD"
+    @AppStorage("defaultPaymentMethod") private var defaultPaymentMethod = PaymentMethod.cash.rawValue
 
     var body: some View {
         Group {
             if auth.isAuthenticated {
-                NavigationStack {
+                NavigationStack(path: $path) {
                     settingsContent
                         .background { AppBackground() }
                         // "Settings", not "Profile": the Profile tab has its own page by
@@ -76,13 +78,7 @@ struct SettingsScreen: View {
             VStack(alignment: .leading, spacing: 24) {
                 if showsProfileLink { profileHeader }
 
-                exploreCard
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Account")
-                        .font(Theme.Typography.sectionTitle)
-                        .padding(.bottom, 8)
-
+                settingsSection("Account") {
                     PlainSettingsRow(icon: "person.fill", title: "Personal information",
                                      iconColor: Theme.accent) {
                         showPersonalInfo = true
@@ -92,20 +88,12 @@ struct SettingsScreen: View {
                     // with the account rows rather than in the public-facing profile.
                     PlainSettingsRow(icon: "lock.shield.fill", title: "Login & security",
                                      value: auth.email.map { Text(verbatim: $0) },
-                                     iconColor: Theme.accent) {
+                                     valueBelowTitle: true, iconColor: Theme.accent) {
                         showChangePassword = true
                     }
                 }
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Money")
-                        .font(Theme.Typography.sectionTitle)
-                        .padding(.bottom, 8)
-
-                    PlainSettingsRow(icon: "creditcard.fill", title: "Payment records",
-                                     iconColor: Theme.accent) {
-                        showPaymentSettings = true
-                    }
+                settingsSection("Preferences") {
                     Menu {
                         Picker("Home currency", selection: $displayCurrency) {
                             ForEach(supportedCurrencies, id: \.self) { Text($0).tag($0) }
@@ -115,37 +103,51 @@ struct SettingsScreen: View {
                                          value: Text(verbatim: displayCurrency), iconColor: Theme.accent)
                     }
                     .buttonStyle(.plain)
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Appearance")
-                        .font(Theme.Typography.sectionTitle)
-                        .padding(.bottom, 8)
-
+                    .accessibilityLabel("Home currency")
+                    .accessibilityValue(Text(verbatim: displayCurrency))
+                    PlainSettingsRow(icon: "creditcard.fill", title: "Default payment method",
+                                     value: Text(LocalizedStringKey(defaultPaymentMethod)),
+                                     iconColor: Theme.accent) {
+                        path.append(.paymentMethod)
+                    }
                     PlainSettingsRow(icon: "paintpalette.fill", title: "Appearance & theme",
                                      value: Text(appearance.label),
                                      iconColor: Theme.accent) {
-                        showAppearanceSettings = true
+                        path.append(.appearance)
                     }
                     PlainSettingsRow(icon: "globe", title: "Language",
                                      value: Text(verbatim: localization.language.endonym),
                                      iconColor: Theme.accent) {
-                        showLanguagePicker = true
+                        path.append(.language)
                     }
                 }
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Privacy & Safety")
-                        .font(Theme.Typography.sectionTitle)
-                        .padding(.bottom, 8)
-
+                settingsSection("Privacy & Safety") {
                     PlainSettingsRow(icon: "hand.raised.fill", title: "Privacy & AI",
                                      iconColor: Theme.accent) {
-                        showPrivacyChoices = true
+                        path.append(.privacyAI)
+                    }
+                    PlainSettingsRow(icon: "hand.raised.slash.fill", title: "Blocked accounts",
+                                     iconColor: Theme.accent) {
+                        path.append(.blockedAccounts)
                     }
                     PlainSettingsRow(icon: "checkmark.shield.fill", title: "Community Standards",
                                      iconColor: Theme.accent) {
-                        showCommunityStandards = true
+                        path.append(.communityStandards)
+                    }
+                    PlainSettingsRow(icon: "doc.text.fill", title: "Privacy Policy",
+                                     iconColor: Theme.accent) {
+                        path.append(.privacyPolicy)
+                    }
+                }
+
+                settingsSection("Support") {
+                    // The address doubles as the value, so it's still usable when Mail
+                    // isn't set up and the link can't open.
+                    PlainSettingsRow(icon: "envelope.fill", title: "Contact support",
+                                     value: Text(verbatim: Self.supportEmail), valueBelowTitle: true,
+                                     showsChevron: false, iconColor: Theme.accent) {
+                        openURL(supportMailURL)
                     }
                 }
 
@@ -181,11 +183,17 @@ struct SettingsScreen: View {
             .padding()
             .padding(.bottom, 80) // Clearance for the floating dock.
         }
-        .navigationDestination(isPresented: $showProfilePage) {
-            ProfileDetailView()
-        }
-        .navigationDestination(isPresented: $showAppearanceSettings) {
-            AppearanceSettingsView()
+        .navigationDestination(for: Page.self) { page in
+            switch page {
+            case .profile: ProfileDetailView()
+            case .appearance: AppearanceSettingsView()
+            case .paymentMethod: PaymentPreferencesView()
+            case .language: LanguagePickerView()
+            case .privacyAI: AIPrivacyChoicesView()
+            case .blockedAccounts: BlockedAccountsView()
+            case .communityStandards: CommunityStandardsView()
+            case .privacyPolicy: PrivacyPolicyPage()
+            }
         }
         .sheet(isPresented: $showPersonalInfo) {
             EditProfileView()
@@ -193,29 +201,27 @@ struct SettingsScreen: View {
         .sheet(isPresented: $showChangePassword) {
             ChangePasswordView()
         }
-        .sheet(isPresented: $showLanguagePicker) {
-            LanguagePickerView()
-        }
-        .sheet(isPresented: $showPaymentSettings) {
-            PaymentPreferencesView()
-        }
         .sheet(isPresented: $showDeleteAccount) {
             DeleteAccountView()
         }
-        .sheet(isPresented: $showPrivacyChoices) {
-            NavigationStack { AIPrivacyChoicesView() }
-        }
-        .sheet(isPresented: $showPrivacyPolicy) {
-            PrivacyPolicyView()
-        }
-        .sheet(isPresented: $showCommunityStandards) {
-            NavigationStack { CommunityStandardsView() }
+    }
+
+    private func settingsSection(_ title: LocalizedStringKey,
+                                 @ViewBuilder rows: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(Theme.Typography.sectionTitle)
+                .accessibilityAddTraits(.isHeader)
+                .padding(.bottom, 8)
+            rows()
         }
     }
 
+    /// The system close button rather than a "Done" text button: toolbar text doesn't
+    /// scale with Dynamic Type and failed the contrast audit on the glass bar.
     private var doneButton: some ToolbarContent {
         ToolbarItem(placement: .confirmationAction) {
-            Button("Done") { dismiss() }
+            Button(role: .close) { dismiss() }
                 .disabled(isSigningOut)
         }
     }
@@ -242,7 +248,7 @@ struct SettingsScreen: View {
     /// Airbnb-style header: avatar, name, "Show profile", chevron → full profile page.
     private var profileHeader: some View {
         Button {
-            showProfilePage = true
+            path.append(.profile)
         } label: {
             VStack(spacing: 16) {
                 HStack(spacing: 16) {
@@ -254,7 +260,7 @@ struct SettingsScreen: View {
                             .foregroundStyle(.primary)
                         Text("Show profile")
                             .font(Theme.Typography.secondary)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Theme.textSecondary)
                     }
 
                     Spacer()
@@ -268,40 +274,39 @@ struct SettingsScreen: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(Text(verbatim: displayName))
+        .accessibilityHint("Shows your profile")
     }
 
-    /// A quiet reminder that curated guides are the product's planning front door.
-    private var exploreCard: some View {
-        HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Featured travel guides")
-                    .font(Theme.Typography.sectionTitle)
-                Text("Find a destination, shape a plan, then share it with friends.")
-                    .font(Theme.Typography.secondary)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            Image(systemName: "airplane.departure")
-                .font(.app(size: 34, weight: .semibold))
-                .foregroundStyle(Theme.accent)
-        }
-        .padding(16)
-        .readableSurface(cornerRadius: Theme.cardRadius)
+    private static let supportEmail = "support@tripsplit.app"
+
+    /// "1.1 (1)" — marketing version and build.
+    private var appVersion: String {
+        let info = Bundle.main.infoDictionary
+        return "\(info?["CFBundleShortVersionString"] as? String ?? "1") (\(info?["CFBundleVersion"] as? String ?? "1"))"
     }
 
-    /// Luma-style footer: app name, version, terms.
+    /// Prefills the version and iOS release so support doesn't have to ask for them.
+    private var supportMailURL: URL {
+        var components = URLComponents()
+        components.scheme = "mailto"
+        components.path = Self.supportEmail
+        components.queryItems = [
+            URLQueryItem(name: "subject", value: "TripSplit Support"),
+            URLQueryItem(name: "body", value: "\n\n—\nTripSplit \(appVersion) · iOS \(UIDevice.current.systemVersion)"),
+        ]
+        return components.url!
+    }
+
+    /// Luma-style footer: app name and version.
     private var versionFooter: some View {
         VStack(spacing: 6) {
             Text("TripSplit")
                 .font(Theme.Typography.sectionTitle)
-                .foregroundStyle(.tertiary)
-            Text("Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1") (\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"))")
+                .foregroundStyle(Theme.textSecondary)
+            Text("Version \(appVersion)")
                 .font(Theme.Typography.metadata)
-                .foregroundStyle(.tertiary)
-            Button("Privacy Policy") { showPrivacyPolicy = true }
-                .font(Theme.Typography.metadata)
-                .foregroundStyle(.tertiary)
-                .buttonStyle(.plain)
+                .foregroundStyle(Theme.textSecondary)
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 16)
@@ -406,6 +411,9 @@ struct PlainSettingsRow: View {
     /// A `Text`, not a `String`, so each caller decides: a key for labels that translate
     /// (e.g. "Light"), `Text(verbatim:)` for data (email, currency code, language name).
     var value: Text? = nil
+    /// Shows the value as a subtitle, for values too long to share a line with the
+    /// title (the account email) — it would otherwise truncate or wrap mid-word.
+    var valueBelowTitle = false
     var showsChevron = true
     var tint: Color? = nil
     /// Badge color behind the icon (iOS-Settings style). Falls back to `tint`,
@@ -413,42 +421,74 @@ struct PlainSettingsRow: View {
     var iconColor: Color? = nil
     var action: (() -> Void)? = nil
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     var body: some View {
-        Button {
-            action?()
-        } label: {
-            VStack(spacing: 0) {
-                HStack(spacing: 16) {
-                    SettingsIconBadge(icon: icon, color: iconColor ?? tint ?? Theme.accent)
-
-                    Text(title)
-                        .font(Theme.Typography.body)
-                        .foregroundStyle(tint ?? .primary)
-
-                    Spacer()
-
-                    if let value {
-                        value
-                            .font(Theme.Typography.secondary)
-                            .foregroundStyle(.secondary)
-                            // Values are short labels except the account email, which can
-                            // be long enough to squeeze the title off the row.
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-
-                    if showsChevron {
-                        Image(systemName: "chevron.right")
-                            .font(.app(.footnote, .semibold))
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-                .padding(.vertical, 16)
-                Divider()
-            }
-            .contentShape(.rect)
+        if let action {
+            Button(action: action) { content }
+                .buttonStyle(.plain)
+                // VoiceOver reads "Login & security, button, <email>" rather than the
+                // SF Symbol names of the badge and chevron run together with the text.
+                .accessibilityLabel(Text(title))
+                .accessibilityValue(value ?? Text(verbatim: ""))
+        } else {
+            // Without an action the row is a label for an enclosing control (the Home
+            // currency Menu), which supplies the button and its accessibility.
+            content
         }
-        .buttonStyle(.plain)
+    }
+
+    private var content: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 16) {
+                SettingsIconBadge(icon: icon, color: iconColor ?? tint ?? Theme.accent)
+                    .accessibilityHidden(true)
+
+                titleAndValue
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                if showsChevron {
+                    Image(systemName: "chevron.right")
+                        .font(.app(.footnote, .semibold))
+                        .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
+                }
+            }
+            .padding(.vertical, 16)
+            Divider()
+        }
+        .contentShape(.rect)
+    }
+
+    /// Side by side normally; stacked at accessibility text sizes (or always, with
+    /// `valueBelowTitle`). No line limits, so text wraps rather than clipping. Side by
+    /// side, the short value keeps its natural width and the title wraps — otherwise
+    /// a long title squeezes "Cash" into one letter per line.
+    private var titleAndValue: some View {
+        let stacked = valueBelowTitle || dynamicTypeSize.isAccessibilitySize
+        let layout = stacked
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
+            : AnyLayout(HStackLayout(spacing: 16))
+        return layout {
+            titleText
+            if !stacked { Spacer(minLength: 0) }
+            value.map {
+                styledValue($0)
+                    .fixedSize(horizontal: !stacked, vertical: false)
+            }
+        }
+    }
+
+    private var titleText: some View {
+        Text(title)
+            .font(Theme.Typography.body)
+            .foregroundStyle(tint ?? .primary)
+    }
+
+    private func styledValue(_ value: Text) -> some View {
+        value
+            .font(Theme.Typography.secondary)
+            .foregroundStyle(Theme.textSecondary)
     }
 }
 

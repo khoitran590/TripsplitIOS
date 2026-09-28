@@ -9,7 +9,7 @@ actor ProfilesRepository {
     static let shared = ProfilesRepository()
     private let session = BackendSecurity.secureSession
 
-    private static let columns = "display_name,date_of_birth,bio,avatar_path,visited_places,saved_place_keys,saved_map_places,saved_destination_ids,profile_visibility"
+    private static let columns = "display_name,date_of_birth,bio,avatar_path,visited_places,saved_place_keys,saved_map_places,saved_destination_ids,profile_visibility,showcase"
 
     func fetch(userID: UUID, accessToken: String) async throws -> UserProfile? {
         let path = "/rest/v1/profiles?user_id=eq.\(userID.uuidString.lowercased())&select=\(Self.columns)"

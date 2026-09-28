@@ -44,6 +44,7 @@ struct AppearanceSettingsView: View {
                             if themeManager.selection == theme {
                                 Image(systemName: "checkmark.circle.fill")
                                     .foregroundStyle(Theme.accent)
+                                    .accessibilityHidden(true)
                             }
                         }
                         .frame(minHeight: 44)
@@ -63,10 +64,13 @@ struct AppearanceSettingsView: View {
                             .foregroundStyle(Theme.textSecondary)
                         Image(systemName: "chevron.right")
                             .foregroundStyle(.tertiary)
+                            .accessibilityHidden(true)
                     }
                     .foregroundStyle(.primary)
                     .frame(minHeight: 44)
                 }
+                .accessibilityLabel("Typeface")
+                .accessibilityValue(Text(verbatim: fontManager.selection.label))
             } header: {
                 Text("Text")
             } footer: {
@@ -98,39 +102,37 @@ struct AppearanceSettingsView: View {
     }
 }
 
+/// Pushed from Settings → Default payment method.
 struct PaymentPreferencesView: View {
-    @Environment(\.dismiss) private var dismiss
     @AppStorage("defaultPaymentMethod") private var defaultMethod = PaymentMethod.cash.rawValue
 
     var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    ForEach(PaymentMethod.allCases) { method in
-                        Button { defaultMethod = method.rawValue } label: {
-                            HStack {
-                                Label(LocalizedStringKey(method.rawValue), systemImage: method.icon)
-                                Spacer()
-                                if defaultMethod == method.rawValue {
-                                    Image(systemName: "checkmark").foregroundStyle(Theme.accent)
-                                }
+        List {
+            Section {
+                ForEach(PaymentMethod.allCases) { method in
+                    Button { defaultMethod = method.rawValue } label: {
+                        HStack {
+                            Label(LocalizedStringKey(method.rawValue), systemImage: method.icon)
+                            Spacer()
+                            if defaultMethod == method.rawValue {
+                                Image(systemName: "checkmark").foregroundStyle(Theme.accent)
+                                    .accessibilityHidden(true)
                             }
                         }
-                        .buttonStyle(.plain)
                     }
-                } header: {
-                    Text("Default payment method")
-                } footer: {
-                    Text("TripSplit records how a payment was made. It does not move money or connect to a payment account.")
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(defaultMethod == method.rawValue ? .isSelected : [])
                 }
+            } header: {
+                Text("Default payment method")
+            } footer: {
+                Text("TripSplit records how a payment was made. It does not move money or connect to a payment account.")
             }
-            .navigationTitle("Payments")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
+        .navigationTitle("Payment method")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
-
 /// Typeface chooser. Each row previews itself in its own font, and the sample card
 /// shows the selection at the sizes the app actually uses, so the readability of a
 /// choice is visible before it is applied.
@@ -161,11 +163,13 @@ struct FontPickerView: View {
                                     Image(systemName: "checkmark")
                                         .font(.app(.body, .semibold))
                                         .foregroundStyle(.tint)
+                                        .accessibilityHidden(true)
                                 }
                             }
                             .contentShape(.rect)
                         }
                         .buttonStyle(.plain)
+                        .accessibilityAddTraits(choice == fontManager.selection ? .isSelected : [])
                     }
                 } header: {
                     Text("Font")

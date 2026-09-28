@@ -178,6 +178,9 @@ final class TripStore {
         /// Cached so a launch before the cloud fetch lands doesn't show every section as
         /// visible — and, worse, save that back over the user's hidden ones.
         var visibility: ProfileVisibility?
+        /// Cached for the same reason: a bookmark saved before the cloud fetch lands
+        /// pushes the whole profile, and an empty showcase would overwrite the real one.
+        var showcase: ProfileShowcase?
     }
 
     /// Returns a UserDefaults key scoped to the given user UUID, so different accounts
@@ -352,7 +355,8 @@ final class TripStore {
             savedPlaceKeys: userProfile.savedPlaceKeys,
             savedMapPlaces: userProfile.savedMapPlaces,
             savedDestinationIDs: userProfile.savedDestinationIDs,
-            visibility: userProfile.visibility
+            visibility: userProfile.visibility,
+            showcase: userProfile.showcase
         )
         if let data = try? JSONEncoder().encode(stored) {
             UserDefaults.standard.set(data, forKey: Self.profileKey(for: currentUser.id))
@@ -399,6 +403,22 @@ final class TripStore {
         if let mapKeys { userProfile.savedPlaceKeys = mapKeys }
         if let mapPlaces { userProfile.savedMapPlaces = mapPlaces }
         if let destinationIDs { userProfile.savedDestinationIDs = destinationIDs }
+        persistLocalProfile()
+        Task { await pushProfileToCloud() }
+    }
+
+    /// Applies a quick showcase edit made outside the editor (pinning a badge, picking a
+    /// card cover), persisting locally and upserting `public.profiles`.
+    func updateShowcase(_ change: (inout ProfileShowcase) -> Void) {
+        change(&userProfile.showcase)
+        persistLocalProfile()
+        Task { await pushProfileToCloud() }
+    }
+
+    /// Applies a quick privacy change made outside the editor (the bucket list's
+    /// visibility button), persisting locally and upserting `public.profiles`.
+    func updateVisibility(_ change: (inout ProfileVisibility) -> Void) {
+        change(&userProfile.visibility)
         persistLocalProfile()
         Task { await pushProfileToCloud() }
     }
@@ -996,6 +1016,7 @@ final class TripStore {
         userProfile.savedMapPlaces = stored?.savedMapPlaces ?? []
         userProfile.savedDestinationIDs = stored?.savedDestinationIDs ?? Self.legacySavedList("exploreSavedDestinationIDs")
         userProfile.visibility = stored?.visibility ?? ProfileVisibility()
+        userProfile.showcase = stored?.showcase ?? ProfileShowcase()
         // Paint this user's locally cached trips right away; loadFromCloud replaces them
         // with the authoritative copy as soon as the network round-trip finishes.
         restoreCachedTrips(for: uuid)

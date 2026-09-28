@@ -13,13 +13,21 @@ nonisolated struct PublicProfile: Decodable {
     var displayName: String = ""
     var avatarPath: String?
     var bio: String = ""
-    var dateOfBirth: Date?
+    /// Month and day only — the server never sends the year.
+    var birthday: MonthDay?
     var visitedPlaceNames: [String] = []
     var trips: [PublicTripSummary] = []
+    var showcase = ProfileShowcase()
+    /// Whether the owner shares badges; friends' devices compute them from what's shown.
+    var badgesVisible = true
 
     enum CodingKeys: String, CodingKey {
         case userID, isSelf, friendStatus, displayName, avatarPath, bio
-        case dateOfBirth, visitedPlaces, trips
+        case birthday, visitedPlaces, trips, showcase, badgesVisible
+    }
+
+    init(userID: UUID) {
+        self.userID = userID
     }
 
     init(from decoder: Decoder) throws {
@@ -30,11 +38,71 @@ nonisolated struct PublicProfile: Decodable {
         displayName = try c.decodeIfPresent(String.self, forKey: .displayName) ?? ""
         avatarPath = try c.decodeIfPresent(String.self, forKey: .avatarPath)
         bio = try c.decodeIfPresent(String.self, forKey: .bio) ?? ""
-        if let raw = try c.decodeIfPresent(String.self, forKey: .dateOfBirth) {
-            dateOfBirth = UserProfile.dobFormatter.date(from: raw)
+        if let raw = try c.decodeIfPresent(String.self, forKey: .birthday) {
+            birthday = MonthDay(serverValue: raw)
         }
         visitedPlaceNames = try c.decodeIfPresent([String].self, forKey: .visitedPlaces) ?? []
         trips = try c.decodeIfPresent([PublicTripSummary].self, forKey: .trips) ?? []
+        showcase = (try? c.decodeIfPresent(ProfileShowcase.self, forKey: .showcase)) ?? ProfileShowcase()
+        badgesVisible = try c.decodeIfPresent(Bool.self, forKey: .badgesVisible) ?? true
+    }
+
+    /// The owner's own profile as a friend would receive it from `profile_by_token`,
+    /// built from local data for "Viewing as Friends". Mirrors the server's filtering —
+    /// keep the two in step (`20260928000000_profile_showcase.sql`).
+    @MainActor
+    static func preview(of profile: UserProfile, user: Person, trips: [Trip]) -> PublicProfile {
+        let visible = profile.visibility
+        var preview = PublicProfile(userID: user.id)
+        preview.displayName = user.name
+        preview.avatarPath = user.avatarURL
+        preview.bio = visible.bio ? profile.bio : ""
+        if visible.birthday, let dob = profile.dateOfBirth {
+            preview.birthday = MonthDay(date: dob, calendar: UserProfile.dobCalendar)
+        }
+        preview.visitedPlaceNames = visible.places ? profile.visitedPlaces : []
+        // `profile_by_token` lists trips the owner created, archived or not.
+        preview.trips = visible.trips
+            ? trips.filter { $0.creatorID == user.id }
+                .sorted { ($0.startDate ?? .distantPast) > ($1.startDate ?? .distantPast) }
+                .map(PublicTripSummary.init(trip:))
+            : []
+        preview.badgesVisible = visible.badges
+        var showcase = ProfileShowcase()
+        showcase.cover = profile.showcase.cover
+        if visible.details {
+            showcase.homeBase = profile.showcase.homeBase
+            showcase.languages = profile.showcase.languages
+            showcase.travelStyles = profile.showcase.travelStyles
+        }
+        if visible.bio { showcase.prompts = profile.showcase.prompts }
+        if visible.places {
+            showcase.favoritePlace = profile.showcase.favoritePlace
+            showcase.favoriteMemory = profile.showcase.favoriteMemory
+        }
+        if visible.badges { showcase.pinnedBadges = profile.showcase.pinnedBadges }
+        if visible.bucketList { showcase.bucketList = profile.showcase.bucketList }
+        if visible.moments { showcase.moments = profile.showcase.moments }
+        preview.showcase = showcase
+        return preview
+    }
+
+    /// The counts a friend's device can derive from what this profile shares, for badges.
+    @MainActor var visibleStats: ProfileStats {
+        var stats = ProfileStats()
+        let places = visitedPlaces
+        stats.places = places.count
+        stats.countries = Set(places.compactMap { PlaceRegion.isoCode(forRegionIn: $0.name) }).count
+        stats.trips = trips.count
+        stats.days = ProfileStats.daysAway(spans: trips.map { ($0.startDate, $0.endDate) })
+        return stats
+    }
+
+    /// Pinned badges when the owner picked some, otherwise what the shared counts earn.
+    @MainActor var displayedBadges: [ProfileBadge] {
+        guard badgesVisible else { return [] }
+        let pinned = showcase.pinned
+        return pinned.isEmpty ? Array(ProfileBadge.earned(for: visibleStats).prefix(ProfileBadge.pinLimit)) : pinned
     }
 
     /// A safe, non-empty display name for headers.
@@ -78,6 +146,16 @@ nonisolated struct PublicTripSummary: Identifiable, Decodable {
     }
 
     /// Trip dates round-trip through the blob as ISO-8601 strings (`.iso8601` strategy).
+
+    /// A local trip as `profile_by_token` would summarize it (for the friends preview).
+    init(trip: Trip) {
+        id = trip.id
+        name = trip.name
+        location = trip.location
+        startDate = trip.startDate
+        endDate = trip.endDate
+        coverImageURL = trip.coverImageURL
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -709,6 +787,12 @@ struct SharedProfileView: View {
     @State private var reportTarget: ModerationTarget?
     @State private var profileToBlock: PublicProfile?
     @State private var safetyError: String?
+    @State private var showPlanTrip = false
+    /// The trip just created from "Plan a trip together", awaiting its invite.
+    @State private var plannedTrip: Trip?
+    @State private var inviteURL: URL?
+    @State private var inviteBusy = false
+    @State private var inviteError: String?
 
     var body: some View {
         Group {
@@ -748,6 +832,13 @@ struct SharedProfileView: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Done") { dismiss() }
+            }
+        }
+        .sheet(isPresented: $showPlanTrip) {
+            AddTripView { trip in
+                plannedTrip = trip
+                inviteURL = nil
+                inviteError = nil
             }
         }
         .sheet(item: $reportTarget) { target in
@@ -790,79 +881,19 @@ struct SharedProfileView: View {
 
     private func content(_ profile: PublicProfile) -> some View {
         ScrollView {
-            VStack(spacing: 24) {
-                VStack(spacing: 12) {
-                    AvatarView(person: profile.person, size: 110)
-                    Text(verbatim: profile.name).font(.app(.title, .bold))
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.top, 8)
-
+            ProfileShowcaseContent(profile: profile, mutual: profile.isSelf ? nil : mutual(with: profile)) {
                 if !profile.isSelf {
-                    addFriendButton
-                }
-
-                if !profile.bio.trimmingCharacters(in: .whitespaces).isEmpty {
-                    Text(verbatim: profile.bio)
-                        .font(.app(.body))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(16)
-                        .readableSurface(cornerRadius: Theme.cardRadius)
-                }
-
-                if let dob = profile.dateOfBirth {
-                    HStack(spacing: 14) {
-                        SettingsIconBadge(icon: "birthday.cake.fill", color: Color(hex: 0xEC4899))
-                        Text("Birthday").font(.app(.body))
-                        Spacer()
-                        Text(verbatim: dob.formatted(date: .long, time: .omitted))
-                            .font(.app(.body))
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 14)
-                    .readableSurface(cornerRadius: Theme.cardRadius)
-                }
-
-                if !profile.visitedPlaces.isEmpty {
-                    section("Where \(profile.name) has been") {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 14) {
-                                ForEach(profile.visitedPlaces) { VisitedPlaceCard(place: $0) }
-                            }
-                            .padding(.horizontal, 16)
+                    VStack(spacing: 10) {
+                        addFriendButton
+                        if friendStatus == "accepted" {
+                            planTripControls(for: profile)
                         }
-                        .padding(.horizontal, -16)
-                    }
-                }
-
-                if !profile.trips.isEmpty {
-                    section("Trips") {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 14) {
-                                ForEach(profile.trips) { SummaryTripCard(trip: $0) }
-                            }
-                            .padding(.horizontal, 16)
-                        }
-                        .padding(.horizontal, -16)
                     }
                 }
             }
             .padding()
             .padding(.bottom, 40)
         }
-    }
-
-    /// `LocalizedStringKey`, not `String`: the heading interpolates the person's name, so
-    /// as a `String` it was pinned to English ("Where %@ has been" never reached the
-    /// catalog). Interpolating into a key keeps the name dynamic and the sentence
-    /// translatable.
-    private func section<Content: View>(_ title: LocalizedStringKey, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text(title).font(.app(.title3, .bold))
-            content()
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
@@ -906,6 +937,93 @@ struct SharedProfileView: View {
             .buttonStyle(.plain)
             .actionFill(tint: Theme.accent)
             .disabled(actionBusy)
+        }
+    }
+
+    private func mutual(with profile: PublicProfile) -> MutualContext {
+        MutualContext.between(viewerID: store.currentUser.id,
+                              viewerPlaces: store.profileVisitedPlaces,
+                              viewerTrips: store.trips,
+                              viewerBucket: store.userProfile.showcase.bucketList,
+                              friend: profile)
+    }
+
+    /// "Plan a trip together": the usual new-trip sheet, then the trip's ordinary invite
+    /// link to send the friend. Membership stays consent-based — they join by accepting.
+    @ViewBuilder
+    private func planTripControls(for profile: PublicProfile) -> some View {
+        if let plannedTrip {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("“\(plannedTrip.name)” is ready. Send \(profile.name) the invite so they can join.")
+                    .font(.app(.subheadline))
+                    .foregroundStyle(Theme.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let inviteURL {
+                    ShareLink(item: inviteURL,
+                              message: Text("Join me on “\(plannedTrip.name)” in TripSplit")) {
+                        Label("Send invite to \(profile.name)", systemImage: "paperplane.fill")
+                            .font(.app(.subheadline, .semibold))
+                            .foregroundStyle(Theme.onAccent)
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .actionFill(tint: Theme.accent)
+                } else {
+                    Button {
+                        Task { await createInvite(for: plannedTrip.id) }
+                    } label: {
+                        Group {
+                            if inviteBusy {
+                                ProgressView()
+                            } else {
+                                Label("Create invite link", systemImage: "link")
+                            }
+                        }
+                        .font(.app(.subheadline, .semibold))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .controlSurface(in: .capsule)
+                    .disabled(inviteBusy)
+                }
+                if let inviteError {
+                    Text(verbatim: inviteError)
+                        .font(.app(.caption))
+                        .foregroundStyle(Theme.negative)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .panelPadding(horizontal: 16, vertical: 14)
+            .homePanel(cornerRadius: Theme.cardRadius)
+        } else {
+            Button { showPlanTrip = true } label: {
+                Label("Plan a trip together", systemImage: "suitcase.fill")
+                    .font(.app(.subheadline, .semibold))
+                    .foregroundStyle(Theme.onAccent)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .buttonStyle(.plain)
+            .actionFill(tint: Theme.accent)
+        }
+    }
+
+    /// The new trip is saved to the cloud in the background, and the invite RPC needs
+    /// the row to exist — so a first failure right after creating it is retried briefly.
+    private func createInvite(for tripID: Trip.ID) async {
+        inviteBusy = true
+        inviteError = nil
+        defer { inviteBusy = false }
+        for attempt in 0..<3 {
+            do {
+                inviteURL = try await store.createInvitationLink(for: tripID)
+                return
+            } catch {
+                if attempt == 2 {
+                    inviteError = (error as? AuthError)?.message ?? String(localized: "Couldn't create the invite. Try again.")
+                } else {
+                    try? await Task.sleep(for: .seconds(1.5))
+                }
+            }
         }
     }
 

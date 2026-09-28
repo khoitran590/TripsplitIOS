@@ -211,34 +211,42 @@ struct AIConsentDisclosureView: View {
     }
 }
 
+/// The policy as a sheet, for flows outside Settings (sign-in, AI consent).
 struct PrivacyPolicyView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    Text("TripSplit Privacy Policy")
-                        .font(.app(.title2, .bold))
-                    Text("Last updated August 5, 2026")
-                        .font(.app(.caption))
-                        .foregroundStyle(.secondary)
-                    policySection("Data we use", "Account and profile details, trip membership, itineraries, expenses, settlements, receipts, photos, posts, comments, friendships, place information, and privacy choices are used to provide the features you request.")
-                    policySection("Cloud providers", "TripSplit stores account and app data with Supabase. After receipt-processing consent, TripSplit sends the receipt image to Anthropic Claude first and to Google Gemini only if Claude cannot complete the scan. AI itinerary planning sends the destination, dates, budget, and existing plan text to Anthropic Claude first and to Google Gemini only if Claude cannot draft a plan; either provider may search the web for current places. Both happen only after separate consent.")
-                    policySection("Retention", "TripSplit retains cloud data while your account or shared records need it. The app's AI proxy does not intentionally persist prompts, receipt images, or provider responses in logs. Provider-side retention is governed by the production cloud agreements. Device caches are protected and removed at sign-out or account deletion.")
-                    policySection("Your choices", "You can decline or revoke cloud AI, use manual and on-device alternatives, edit profile information, sign out, and permanently delete your account in Settings. Deletion removes owned trips and user-generated content; shared financial history may retain a pseudonymous participant record so other members' balances remain accurate.")
-                    policySection("Security and contact", "TripSplit uses HTTPS, private object storage, row-level authorization, Keychain session storage, and server-side provider credentials. Privacy questions can be sent to support@tripsplit.app.")
-                    Link("Email privacy support", destination: URL(string: "mailto:support@tripsplit.app?subject=TripSplit%20Privacy")!)
-                        .font(.app(.body, .semibold))
+            PrivacyPolicyPage()
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
                 }
-                .padding(24)
-            }
-            .navigationTitle("Privacy")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
-            }
         }
+    }
+}
+
+/// The policy page itself; Settings pushes it directly.
+struct PrivacyPolicyPage: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("TripSplit Privacy Policy")
+                    .font(.app(.title2, .bold))
+                Text("Last updated August 5, 2026")
+                    .font(.app(.caption))
+                    .foregroundStyle(.secondary)
+                policySection("Data we use", "Account and profile details, trip membership, itineraries, expenses, settlements, receipts, photos, posts, comments, friendships, place information, and privacy choices are used to provide the features you request.")
+                policySection("Cloud providers", "TripSplit stores account and app data with Supabase. After receipt-processing consent, TripSplit sends the receipt image to Anthropic Claude first and to Google Gemini only if Claude cannot complete the scan. AI itinerary planning sends the destination, dates, budget, and existing plan text to Anthropic Claude first and to Google Gemini only if Claude cannot draft a plan; either provider may search the web for current places. Both happen only after separate consent.")
+                policySection("Retention", "TripSplit retains cloud data while your account or shared records need it. The app's AI proxy does not intentionally persist prompts, receipt images, or provider responses in logs. Provider-side retention is governed by the production cloud agreements. Device caches are protected and removed at sign-out or account deletion.")
+                policySection("Your choices", "You can decline or revoke cloud AI, use manual and on-device alternatives, edit profile information, sign out, and permanently delete your account in Settings. Deletion removes owned trips and user-generated content; shared financial history may retain a pseudonymous participant record so other members' balances remain accurate.")
+                policySection("Security and contact", "TripSplit uses HTTPS, private object storage, row-level authorization, Keychain session storage, and server-side provider credentials. Privacy questions can be sent to support@tripsplit.app.")
+                Link("Email privacy support", destination: URL(string: "mailto:support@tripsplit.app?subject=TripSplit%20Privacy")!)
+                    .font(.app(.body, .semibold))
+            }
+            .padding(24)
+        }
+        .navigationTitle("Privacy Policy")
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     private func policySection(_ title: LocalizedStringKey, _ text: LocalizedStringKey) -> some View {

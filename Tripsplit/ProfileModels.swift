@@ -52,22 +52,36 @@ nonisolated struct SavedMapPlace: Codable, Equatable, Identifiable {
 }
 
 /// What a shared profile reveals to other people. Every section defaults to visible,
-/// which is how profiles behaved before the toggles existed — and `profile_by_token`
-/// applies the same default server-side for rows that predate the column.
+/// which is how profiles behaved before the toggles existed — except the birthday and
+/// bucket list, which are hidden until the owner turns them on. `profile_by_token`
+/// applies the same defaults server-side for rows that predate a key.
 nonisolated struct ProfileVisibility: Codable, Equatable {
+    /// The bio and the travel-note prompts.
     var bio = true
-    var birthday = true
+    var birthday = false
+    /// "Where I've been", including the favorite place.
     var places = true
     var trips = true
+    /// Home base, languages and travel styles.
+    var details = true
+    var badges = true
+    /// Trip-feed photos the owner picked.
+    var moments = true
+    /// Hidden until the owner turns it on, like the birthday.
+    var bucketList = false
 
     init() {}
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         bio = try c.decodeIfPresent(Bool.self, forKey: .bio) ?? true
-        birthday = try c.decodeIfPresent(Bool.self, forKey: .birthday) ?? true
+        birthday = try c.decodeIfPresent(Bool.self, forKey: .birthday) ?? false
         places = try c.decodeIfPresent(Bool.self, forKey: .places) ?? true
         trips = try c.decodeIfPresent(Bool.self, forKey: .trips) ?? true
+        details = try c.decodeIfPresent(Bool.self, forKey: .details) ?? true
+        badges = try c.decodeIfPresent(Bool.self, forKey: .badges) ?? true
+        moments = try c.decodeIfPresent(Bool.self, forKey: .moments) ?? true
+        bucketList = try c.decodeIfPresent(Bool.self, forKey: .bucketList) ?? false
     }
 }
 
@@ -93,6 +107,8 @@ nonisolated struct UserProfile: Codable, Equatable {
     var savedDestinationIDs: [String] = []
     /// Which sections of this profile other people can see.
     var visibility = ProfileVisibility()
+    /// Cover, home base, travel styles, prompts, favorite place and pinned badges.
+    var showcase = ProfileShowcase()
 
     enum CodingKeys: String, CodingKey {
         case displayName = "display_name"
@@ -104,7 +120,16 @@ nonisolated struct UserProfile: Codable, Equatable {
         case savedMapPlaces = "saved_map_places"
         case savedDestinationIDs = "saved_destination_ids"
         case visibility = "profile_visibility"
+        case showcase
     }
+
+    /// The calendar `dobFormatter` reads dates in, for pulling out the month and day the
+    /// server would (`to_char(date_of_birth, 'MM-DD')`).
+    nonisolated static let dobCalendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        return calendar
+    }()
 
     /// Postgres `date` columns round-trip as plain "yyyy-MM-dd" strings.
     nonisolated static let dobFormatter: DateFormatter = {
@@ -130,6 +155,9 @@ nonisolated struct UserProfile: Codable, Equatable {
         savedMapPlaces = try c.decodeIfPresent([SavedMapPlace].self, forKey: .savedMapPlaces) ?? []
         savedDestinationIDs = try c.decodeIfPresent([String].self, forKey: .savedDestinationIDs) ?? []
         visibility = try c.decodeIfPresent(ProfileVisibility.self, forKey: .visibility) ?? ProfileVisibility()
+        // `try?`: the showcase is rendered, not relied on — a malformed blob must never
+        // cost the user the rest of their profile.
+        showcase = (try? c.decodeIfPresent(ProfileShowcase.self, forKey: .showcase)) ?? ProfileShowcase()
     }
 
     func encode(to encoder: Encoder) throws {
@@ -143,6 +171,7 @@ nonisolated struct UserProfile: Codable, Equatable {
         try c.encode(savedMapPlaces, forKey: .savedMapPlaces)
         try c.encode(savedDestinationIDs, forKey: .savedDestinationIDs)
         try c.encode(visibility, forKey: .visibility)
+        try c.encode(showcase, forKey: .showcase)
     }
 }
 
@@ -165,12 +194,32 @@ struct ProfileStats {
     var countries = 0
     var places = 0
     var trips = 0
-    /// Nights-inclusive days across every trip with both dates set.
+    /// Days already spent away, from `daysAway(in:asOf:)`.
     var days = 0
-    var spent: Double = 0
-    var owed: Double = 0
-    var owe: Double = 0
-    var currency = "USD"
+
+    /// Whether every count is zero — a brand-new account with nothing to show yet.
+    var isEmpty: Bool { countries == 0 && places == 0 && trips == 0 && days == 0 }
+
+    /// Days already travelled across `trips`, inclusive of both ends (a Friday-to-Sunday
+    /// trip is three days away). Future trips count nothing and a trip in progress counts
+    /// up to today, so the number never includes days that haven't happened.
+    static func daysAway(in trips: [Trip], asOf now: Date = .now, calendar: Calendar = .current) -> Int {
+        daysAway(spans: trips.map { ($0.startDate, $0.endDate) }, asOf: now, calendar: calendar)
+    }
+
+    /// `daysAway(in:)` over bare date pairs, for trips known only by their summary (a
+    /// friend's profile).
+    static func daysAway(spans: [(start: Date?, end: Date?)], asOf now: Date = .now,
+                         calendar: Calendar = .current) -> Int {
+        let today = calendar.startOfDay(for: now)
+        return spans.reduce(0) { total, span in
+            guard let start = span.start, let end = span.end, end >= start else { return total }
+            let first = calendar.startOfDay(for: start)
+            guard first <= today else { return total }
+            let last = min(calendar.startOfDay(for: end), today)
+            return total + (calendar.dateComponents([.day], from: first, to: last).day ?? 0) + 1
+        }
+    }
 }
 
 /// A visited place resolved to a coordinate, for the profile's travel map.

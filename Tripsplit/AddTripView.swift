@@ -25,6 +25,8 @@ struct AddTripView: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
     @FocusState private var focusedField: TripField?
+    /// Called with the trip once it's created, before the sheet dismisses.
+    var onCreated: ((Trip) -> Void)? = nil
 
     private enum TripField: Hashable { case name, budget, member }
 
@@ -342,6 +344,7 @@ struct AddTripView: View {
                 }
             }
             store.addTrip(trip)
+            onCreated?(trip)
             isSaving = false
             dismiss()
         }
