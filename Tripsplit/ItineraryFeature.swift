@@ -967,6 +967,8 @@ struct ItineraryDetailView: View {
     @State private var isEditingBudget = false
     @State private var budgetText = ""
     @State private var dayPendingDeletion: Int?
+    /// The most recently swiped-away stop, kept briefly so the removal can be undone.
+    @State private var removedStop: (stop: ItineraryStop, dayID: ItineraryDay.ID, index: Int)?
     @State private var showTripDetails = false
     @State private var showRemoveConfirm = false
     /// Jump to the in-progress day once per appearance, not on every re-render.
@@ -1619,6 +1621,26 @@ struct ItineraryDetailView: View {
                     }
                     .padding(.top, 4)
                 }
+
+                if let removed = removedStop, removed.dayID == day.id {
+                    Button {
+                        undoRemoveStop()
+                    } label: {
+                        Label("Undo \"\(removed.stop.name)\"", systemImage: "arrow.uturn.backward")
+                            .font(.app(.caption, .semibold))
+                            .foregroundStyle(Theme.accent)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                    }
+                    .buttonStyle(.plain)
+                    .transition(.opacity)
+                    // Hide the offer after a few seconds so it doesn't linger.
+                    .task(id: removed.stop.id) {
+                        try? await Task.sleep(for: .seconds(8))
+                        guard !Task.isCancelled, removedStop?.stop.id == removed.stop.id else { return }
+                        withAnimation(.snappy) { removedStop = nil }
+                    }
+                }
             }
 
             Button {
@@ -2204,9 +2226,11 @@ struct ItineraryDetailView: View {
                         .accessibilityLabel(showInviteFields ? "Hide invite options" : "Invite a tripmate")
                     }
                 }
-                .padding(.horizontal, 2)
+                .padding(.horizontal, Theme.Space.card)
             }
-            .scrollClipDisabled()
+            // Span the card's full width so avatars scroll out at its edges and are
+            // clipped there, rather than drawing over the page outside the card.
+            .padding(.horizontal, -Theme.Space.card)
 
             if isCreator, showInviteFields || invitations.link != nil {
                Divider()
@@ -2238,9 +2262,29 @@ struct ItineraryDetailView: View {
 
     private func removeStop(_ stopID: ItineraryStop.ID, fromDay dayIndex: Int) {
         guard var itinerary = store.trip(tripID)?.itinerary,
-              itinerary.days.indices.contains(dayIndex) else { return }
-        itinerary.days[dayIndex].stops.removeAll { $0.id == stopID }
+              itinerary.days.indices.contains(dayIndex),
+              let index = itinerary.days[dayIndex].stops.firstIndex(where: { $0.id == stopID }) else { return }
+        let stop = itinerary.days[dayIndex].stops.remove(at: index)
         store.updateItinerary(itinerary, in: tripID)
+        withAnimation(.snappy) {
+            removedStop = (stop, itinerary.days[dayIndex].id, index)
+        }
+    }
+
+    /// Puts the last swiped-away stop back in its day at its original position.
+    private func undoRemoveStop() {
+        guard let removed = removedStop,
+              var itinerary = store.trip(tripID)?.itinerary,
+              let dayIndex = itinerary.days.firstIndex(where: { $0.id == removed.dayID }) else {
+            removedStop = nil
+            return
+        }
+        let stops = itinerary.days[dayIndex].stops
+        if !stops.contains(where: { $0.id == removed.stop.id }) {
+            itinerary.days[dayIndex].stops.insert(removed.stop, at: min(removed.index, stops.count))
+            store.updateItinerary(itinerary, in: tripID)
+        }
+        withAnimation(.snappy) { removedStop = nil }
     }
 
     private func addDay() {

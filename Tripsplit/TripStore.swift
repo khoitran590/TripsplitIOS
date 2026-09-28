@@ -1237,16 +1237,38 @@ final class TripStore {
                     return
                 }
                 let deletionsCleared = await flushPendingDeletions(accessToken: accessToken)
-                for trip in trips {
-                    try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
-                        let cloudTrip = self.tripForCloudSave(trip, accessToken: token)
-                        try await TripsRepository.shared.upsert(cloudTrip, accessToken: token)
-                    }
-                }
+                try await upsertAllTrips(accessToken: accessToken)
                 self.endSyncActivity(failed: !deletionsCleared)
             } catch {
                 let message = await self.syncFailureMessage(error)
                 self.endSyncActivity(failed: true, message: message)
+            }
+        }
+    }
+
+    /// Called before sign-out, which purges the local cache: waits for scheduled saves
+    /// still inside their debounce, and if anything failed to reach the cloud, re-pushes
+    /// every trip once (as Retry does). Returns false when changes would still be lost.
+    func flushPendingChanges() async -> Bool {
+        for task in Array(tripSaveTasks.values) { await task.value }
+        guard syncState == .failed || !pendingDeletions.isEmpty else { return true }
+        do {
+            guard let accessToken = try await authorizedAccessToken(requireServerAccepted: true),
+                  await flushPendingDeletions(accessToken: accessToken) else { return false }
+            try await upsertAllTrips(accessToken: accessToken)
+            syncState = .idle
+            syncErrorMessage = nil
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func upsertAllTrips(accessToken: String) async throws {
+        for trip in trips {
+            try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
+                let cloudTrip = self.tripForCloudSave(trip, accessToken: token)
+                try await TripsRepository.shared.upsert(cloudTrip, accessToken: token)
             }
         }
     }

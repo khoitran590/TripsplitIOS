@@ -172,6 +172,14 @@ struct SwipeActionsRow<Content: View>: View {
                 }
                 .highPriorityGesture(drag)
         }
+        // While swiped, content sliding past the row's edges is clipped away instead of
+        // overlapping the surrounding card. Vertically (and at rest) the mask is
+        // oversized so row shadows are left intact.
+        .mask {
+            Rectangle()
+                .padding(.horizontal, offset == 0 ? -40 : 0)
+                .padding(.vertical, -40)
+        }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { rowWidth = $0 }
     }
 

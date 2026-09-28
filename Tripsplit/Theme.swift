@@ -40,7 +40,7 @@ enum AppearancePreference: String, CaseIterable, Identifiable {
         }
     }
 
-    var label: String {
+    var label: LocalizedStringKey {
         switch self {
         case .system: "System"
         case .light: "Light"

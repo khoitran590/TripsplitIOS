@@ -77,10 +77,14 @@ final class TripsplitAppTests: XCTestCase {
         let incomplete = Destination.all.filter { $0.places.isEmpty || $0.restaurants.isEmpty }
 
         XCTAssertTrue(incomplete.isEmpty, "Incomplete bundled guides: \(incomplete.map(\.id))")
-        for id in ["taipei", "paris"] {
+        for id in ["taipei", "paris", "hanoi", "buenos-aires", "cape-town", "queenstown", "reykjavik"] {
             let guide = try! XCTUnwrap(Destination.all.first { $0.id == id })
             XCTAssertFalse(guide.recommendedPlaces.isEmpty, "\(id) has no recommended locations")
             XCTAssertFalse(guide.recommendedRestaurants.isEmpty, "\(id) has no recommended restaurants")
+            XCTAssertNotEqual(guide.continent, "Other", "\(id) has unknown continent")
+            XCTAssertFalse(guide.blurb.isEmpty)
+            XCTAssertFalse(guide.practicalGuide.base.isEmpty)
+            XCTAssertFalse(guide.bestMonths.isEmpty)
         }
         XCTAssertFalse(CommunityTripGuide.preview.destination.places.isEmpty)
         XCTAssertFalse(CommunityTripGuide.preview.destination.restaurants.isEmpty)

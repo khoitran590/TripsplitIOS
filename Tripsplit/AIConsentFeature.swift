@@ -140,9 +140,9 @@ struct AIConsentDisclosureView: View {
                         .font(.system(size: 42))
                         .foregroundStyle(Theme.accent)
 
-                    Text(purpose.title)
+                    Text(LocalizedStringKey(purpose.title))
                         .font(.app(.title2, .bold))
-                    Text(purpose.disclosure)
+                    Text(LocalizedStringKey(purpose.disclosure))
                         .font(.app(.body))
                     Label("Providers: \(purpose.providerSummary)", systemImage: "network")
                         .font(.app(.subheadline))
@@ -241,7 +241,7 @@ struct PrivacyPolicyView: View {
         }
     }
 
-    private func policySection(_ title: String, _ text: String) -> some View {
+    private func policySection(_ title: LocalizedStringKey, _ text: LocalizedStringKey) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title).font(.app(.headline))
             Text(text).font(.app(.body)).foregroundStyle(.secondary)
@@ -260,8 +260,9 @@ struct AIPrivacyChoicesView: View {
                 ForEach(AIConsentPurpose.allCases) { purpose in
                     HStack {
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(purpose.title)
-                            Text(AIConsentPreferences.isGranted(purpose, userID: store.currentUser.id) ? "Allowed" : "Not allowed")
+                            Text(LocalizedStringKey(purpose.title))
+                            Text(AIConsentPreferences.isGranted(purpose, userID: store.currentUser.id)
+                                 ? LocalizedStringKey("Allowed") : LocalizedStringKey("Not allowed"))
                                 .font(.app(.caption)).foregroundStyle(.secondary)
                         }
                         Spacer()

@@ -14,6 +14,10 @@ enum AppLanguage: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    /// Languages offered in the picker. The first release is English-only until the
+    /// es/zh-Hans catalog has complete, human-reviewed translations (readiness item UX-02).
+    static let released: [AppLanguage] = [.english]
+
     /// The code passed to `Locale` / `.lproj` lookup.
     var code: String { rawValue }
 
@@ -145,7 +149,7 @@ struct LanguagePickerView: View {
         NavigationStack {
             List {
                 Section {
-                    ForEach(AppLanguage.allCases) { language in
+                    ForEach(AppLanguage.released) { language in
                         Button {
                             localization.language = language
                             dismiss()

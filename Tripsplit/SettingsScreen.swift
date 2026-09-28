@@ -24,12 +24,10 @@ struct SettingsScreen: View {
     @State private var showAppearanceSettings = false
     @State private var showLanguagePicker = false
     @State private var isSigningOut = false
+    @State private var showSignOutConfirmation = false
+    @State private var showUnsyncedSignOutWarning = false
     @AppStorage("appearancePreference") private var appearance: AppearancePreference = .system
     @AppStorage("displayCurrency") private var displayCurrency = "USD"
-    @AppStorage("navbarTransparency") private var navbarTransparency = 0.0
-    @State private var showFontPicker = false
-    @State private var themeManager = ThemeManager.shared
-    @State private var fontManager = FontManager.shared
 
     var body: some View {
         Group {
@@ -40,12 +38,16 @@ struct SettingsScreen: View {
                         // "Settings", not "Profile": the Profile tab has its own page by
                         // that name, and both used to be titled the same thing.
                         .navigationTitle("Settings")
+                        .toolbar { doneButton }
                 }
             } else {
-                ZStack {
-                    AppBackground()
+                NavigationStack {
+                    ZStack {
+                        AppBackground()
 
-                    AuthView()
+                        AuthView()
+                    }
+                    .toolbar { doneButton }
                 }
             }
         }
@@ -62,7 +64,7 @@ struct SettingsScreen: View {
         let name = store.currentUser.name.trimmingCharacters(in: .whitespaces)
         if !name.isEmpty { return name }
         guard let local = auth.email?.split(separator: "@").first, !local.isEmpty else {
-            return "TripSplit User"
+            return String(localized: "TripSplit User")
         }
         return local.split(whereSeparator: { $0 == "." || $0 == "_" })
             .map { $0.prefix(1).uppercased() + $0.dropFirst() }
@@ -89,7 +91,8 @@ struct SettingsScreen: View {
                     // page: it is account data only the holder can see, so it belongs
                     // with the account rows rather than in the public-facing profile.
                     PlainSettingsRow(icon: "lock.shield.fill", title: "Login & security",
-                                     value: auth.email, iconColor: Theme.accent) {
+                                     value: auth.email.map { Text(verbatim: $0) },
+                                     iconColor: Theme.accent) {
                         showChangePassword = true
                     }
                 }
@@ -109,7 +112,7 @@ struct SettingsScreen: View {
                         }
                     } label: {
                         PlainSettingsRow(icon: "dollarsign.arrow.circlepath", title: "Home currency",
-                                         value: displayCurrency, iconColor: Theme.accent)
+                                         value: Text(verbatim: displayCurrency), iconColor: Theme.accent)
                     }
                     .buttonStyle(.plain)
                 }
@@ -120,12 +123,12 @@ struct SettingsScreen: View {
                         .padding(.bottom, 8)
 
                     PlainSettingsRow(icon: "paintpalette.fill", title: "Appearance & theme",
-                                     value: appearance.label,
+                                     value: Text(appearance.label),
                                      iconColor: Theme.accent) {
                         showAppearanceSettings = true
                     }
                     PlainSettingsRow(icon: "globe", title: "Language",
-                                     value: localization.language.endonym,
+                                     value: Text(verbatim: localization.language.endonym),
                                      iconColor: Theme.accent) {
                         showLanguagePicker = true
                     }
@@ -146,19 +149,26 @@ struct SettingsScreen: View {
                     }
                 }
 
-                PlainSettingsRow(icon: "rectangle.portrait.and.arrow.right", title: "Sign Out",
+                PlainSettingsRow(icon: "rectangle.portrait.and.arrow.right",
+                                 title: isSigningOut ? "Signing Out…" : "Sign Out",
                                  showsChevron: false, tint: Theme.negative) {
-                    Task {
-                        guard !isSigningOut else { return }
-                        isSigningOut = true
-                        let userID = store.currentUser.id
-                        auth.signOut()
-                        await store.purgeLocalData(for: userID)
-                        isSigningOut = false
-                    }
+                    showSignOutConfirmation = true
                 }
                 .padding(.top, 8)
                 .disabled(isSigningOut)
+                .confirmationDialog("Sign out of TripSplit?", isPresented: $showSignOutConfirmation,
+                                    titleVisibility: .visible) {
+                    Button("Sign Out", role: .destructive) { signOut() }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("Your trips stay saved to your account. You can sign back in anytime.")
+                }
+                .alert("Some changes haven't synced", isPresented: $showUnsyncedSignOutWarning) {
+                    Button("Sign Out Anyway", role: .destructive) { signOut(discardingUnsynced: true) }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("Signing out now will discard edits that haven't reached the cloud. Check your connection and try again.")
+                }
 
                 PlainSettingsRow(icon: "person.crop.circle.badge.xmark", title: "Delete Account",
                                  showsChevron: false, tint: Theme.negative) {
@@ -186,9 +196,6 @@ struct SettingsScreen: View {
         .sheet(isPresented: $showLanguagePicker) {
             LanguagePickerView()
         }
-        .sheet(isPresented: $showFontPicker) {
-            FontPickerView()
-        }
         .sheet(isPresented: $showPaymentSettings) {
             PaymentPreferencesView()
         }
@@ -206,124 +213,30 @@ struct SettingsScreen: View {
         }
     }
 
-    /// Live, device-local control for the custom floating navigation dock. A small
-    /// amount of glass is retained at the upper end so labels remain readable over
-    /// busy maps and photos.
-    private var navbarTransparencyPicker: some View {
-        VStack(spacing: 10) {
-            HStack(spacing: 16) {
-                SettingsIconBadge(icon: "rectangle.bottomthird.inset.filled",
-                                  color: Color(hex: 0x06B6D4))
-
-                Text("Dock background transparency")
-                    .font(Theme.Typography.body)
-
-                Spacer()
-
-                Text("\(Int((navbarTransparency * 100).rounded()))%")
-                    .font(Theme.Typography.secondary)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-
-            Slider(value: $navbarTransparency, in: 0...0.55, step: 0.05)
-                .tint(Theme.accent)
-                .accessibilityLabel("Dock background transparency")
-                .accessibilityValue("\(Int((navbarTransparency * 100).rounded())) percent")
-
-            HStack {
-                Text("Solid")
-                Spacer()
-                Text("Clear")
-            }
-            .font(Theme.Typography.metadata)
-            .foregroundStyle(.secondary)
-
-            Divider()
-        }
-        .padding(.top, 12)
-    }
-
-    /// Inline theme chooser: one swatch per `AppTheme`, applied app-wide immediately.
-    /// The same palette drives both light and dark appearances, so it lives alongside
-    /// (not inside) the light/dark Appearance picker.
-    private var themePicker: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 16) {
-                // Two-hue badge so the Theme row previews the active accent pair.
-                RoundedRectangle(cornerRadius: 9)
-                    .fill(
-                        LinearGradient(
-                            colors: [Theme.accent, Theme.accentSecondary],
-                            startPoint: .topLeading, endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: 32, height: 32)
-                    .overlay {
-                        Image(systemName: "swatchpalette.fill")
-                            .font(.app(size: 15, weight: .semibold))
-                            .foregroundStyle(.white)
-                    }
-                    .shadow(color: Theme.accent.opacity(0.35), radius: 4, y: 2)
-                Text("Theme")
-                    .font(Theme.Typography.body)
-                Spacer()
-                // Theme names are proper nouns — shown verbatim, not localized.
-                Text(verbatim: themeManager.selection.label)
-                    .font(Theme.Typography.secondary)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.top, 16)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 14) {
-                    ForEach(AppTheme.allCases) { theme in
-                        themeSwatch(theme)
-                    }
-                }
-                .padding(.horizontal, 2)
-                .padding(.bottom, 2)
-            }
-
-            Divider()
+    private var doneButton: some ToolbarContent {
+        ToolbarItem(placement: .confirmationAction) {
+            Button("Done") { dismiss() }
+                .disabled(isSigningOut)
         }
     }
 
-    private func themeSwatch(_ theme: AppTheme) -> some View {
-        let isSelected = themeManager.selection == theme
-        return Button {
-            withAnimation(.snappy) { themeManager.selection = theme }
-        } label: {
-            VStack(spacing: 6) {
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [theme.accent, theme.accentSecondary],
-                            startPoint: .topLeading, endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: 44, height: 44)
-                    .overlay {
-                        if isSelected {
-                            Image(systemName: "checkmark")
-                                .font(.app(.subheadline, .bold))
-                                .foregroundStyle(Theme.onAccent)
-                        }
-                    }
-                    .overlay {
-                        Circle()
-                            .strokeBorder(isSelected ? theme.accent : .clear, lineWidth: 2)
-                            .padding(-4)
-                    }
-
-                Text(verbatim: theme.label)
-                    .font(.app(.caption2))
-                    .foregroundStyle(isSelected ? .primary : .secondary)
+    /// Signing out purges the local trip cache, so edits the cloud hasn't confirmed yet
+    /// (still debouncing, or a failed save) are flushed first; if that fails the user is
+    /// warned instead of silently losing them.
+    private func signOut(discardingUnsynced: Bool = false) {
+        guard !isSigningOut else { return }
+        isSigningOut = true
+        Task {
+            if !discardingUnsynced, await !store.flushPendingChanges() {
+                isSigningOut = false
+                showUnsyncedSignOutWarning = true
+                return
             }
-            .contentShape(.rect)
+            let userID = store.currentUser.id
+            auth.signOut()
+            await store.purgeLocalData(for: userID)
+            isSigningOut = false
         }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     /// Airbnb-style header: avatar, name, "Show profile", chevron → full profile page.
@@ -490,7 +403,9 @@ struct PlainSettingsRow: View {
     // LocalizedStringKey (not String): `Text(someString)` renders verbatim and skips
     // localization, so row titles must come through as keys to pick up translations.
     let title: LocalizedStringKey
-    var value: String? = nil
+    /// A `Text`, not a `String`, so each caller decides: a key for labels that translate
+    /// (e.g. "Light"), `Text(verbatim:)` for data (email, currency code, language name).
+    var value: Text? = nil
     var showsChevron = true
     var tint: Color? = nil
     /// Badge color behind the icon (iOS-Settings style). Falls back to `tint`,
@@ -513,7 +428,7 @@ struct PlainSettingsRow: View {
                     Spacer()
 
                     if let value {
-                        Text(value)
+                        value
                             .font(Theme.Typography.secondary)
                             .foregroundStyle(.secondary)
                             // Values are short labels except the account email, which can

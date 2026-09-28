@@ -718,6 +718,125 @@ extension Destination {
             ],
             plannerNote: "Use a licensed guide for the first medina walk, keep cash for small purchases, and build in a quiet midday reset."
         ),
+
+        // Asia
+        Destination(
+            id: "hanoi",
+            title: "Hanoi Heritage", city: "Hanoi", country: "Vietnam",
+            tags: ["4 days", "Foodie"], planner: "Linh Nguyen", price: "$950",
+            dailyBudget: "~$240/day", stops: 10, isFeatured: false, symbol: "leaf.fill",
+            colors: [.green, .yellow],
+            places: [
+                TravelPlanItem(name: "Old Quarter & Hoan Kiem", detail: "Morning stroll around the lake, Ngoc Son Temple, and the 36 guild streets.", cost: "Low"),
+                TravelPlanItem(name: "Temple of Literature", detail: "Vietnam's first national university with tranquil courtyards and stone stelae.", cost: "Low"),
+                TravelPlanItem(name: "Ho Chi Minh Complex", detail: "Ba Dinh Square, the Presidential Palace gardens, and One Pillar Pagoda.", cost: "Low"),
+                TravelPlanItem(name: "Hanoi Train Street", detail: "Watch the train pass cafes inches from the tracks with an egg coffee.", cost: "Low"),
+                TravelPlanItem(name: "Tran Quoc & West Lake", detail: "Sixth-century lakeside pagoda on an islet, ideal for golden-hour breeze.", cost: "Free"),
+                TravelPlanItem(name: "Vietnam Fine Arts Museum", detail: "Lacquer art, silk paintings, and sculpture in a French colonial villa.", cost: "Low")
+            ],
+            restaurants: [
+                TravelPlanItem(name: "Pho Gia Truyen Bat Dan", detail: "Classic northern beef pho with clear, deeply fragrant bone broth.", cost: "$"),
+                TravelPlanItem(name: "Bun Cha Huong Lien", detail: "Smoky grilled pork patties and rice noodles made famous by Anthony Bourdain.", cost: "$"),
+                TravelPlanItem(name: "Banh Mi 25", detail: "Warm crusty baguettes packed with pate, pickled carrots, and fresh herbs.", cost: "$"),
+                TravelPlanItem(name: "Cafe Giang", detail: "The birthplace of Hanoi egg coffee (ca phe trung) since 1946.", cost: "$")
+            ],
+            plannerNote: "Cross streets with a calm, steady stride so motorbikes flow around you, and keep small cash for street stalls."
+        ),
+
+        // South America
+        Destination(
+            id: "buenos-aires",
+            title: "Buenos Aires Tango", city: "Buenos Aires", country: "Argentina",
+            tags: ["5 days", "Culture"], planner: "Mateo Rossi", price: "$1.4k",
+            dailyBudget: "~$280/day", stops: 11, isFeatured: true, symbol: "building.columns.fill",
+            colors: [.blue, .yellow],
+            places: [
+                TravelPlanItem(name: "Plaza de Mayo & Casa Rosada", detail: "Historic heart of the city, the pink presidential palace, and the cathedral.", cost: "Low"),
+                TravelPlanItem(name: "San Telmo & Dorrego Square", detail: "Cobblestone lanes, antique market halls, and open-air Sunday tango buskers.", cost: "Low"),
+                TravelPlanItem(name: "Recoleta Cemetery & El Ateneo", detail: "Eva Peron's mausoleum followed by the grand converted-theater bookstore.", cost: "Low-mid"),
+                TravelPlanItem(name: "La Boca & Caminito", detail: "Vibrant painted corrugated houses, street murals, and artisan stalls.", cost: "Low"),
+                TravelPlanItem(name: "Palermo Soho & Bosques", detail: "Boutique-lined avenues, botanical gardens, and the lake park.", cost: "Low"),
+                TravelPlanItem(name: "Teatro Colon", detail: "World-renowned opera house with breathtaking gilded acoustics; book a tour.", cost: "Mid")
+            ],
+            restaurants: [
+                TravelPlanItem(name: "Don Julio", detail: "World-famous parilla for grass-fed ribeye and malbec; reserve well ahead.", cost: "$$$"),
+                TravelPlanItem(name: "La Mezzetta", detail: "Legendary counter for towering fugazzeta cheese-and-onion pizza.", cost: "$"),
+                TravelPlanItem(name: "Cafe Tortoni", detail: "Grand 1858 salon for hot chocolate, churros, and late-night tango.", cost: "$$"),
+                TravelPlanItem(name: "El Sanjuanino", detail: "Hand-pinched empanadas and hearty locro stew in Recoleta.", cost: "$-$$")
+            ],
+            plannerNote: "Dinners start late around 9 or 10 PM, and neighborhoods are wide — explore one distinct barrio each day."
+        ),
+
+        // Middle East & Africa
+        Destination(
+            id: "cape-town",
+            title: "Cape Town Horizons", city: "Cape Town", country: "South Africa",
+            tags: ["5 days", "Coastal"], planner: "Thabo Mthembu", price: "$1.8k",
+            dailyBudget: "~$360/day", stops: 11, isFeatured: true, symbol: "mountain.2.fill",
+            colors: [.teal, .orange],
+            places: [
+                TravelPlanItem(name: "Table Mountain Cableway", detail: "Rotating cable car to the flat-topped summit with 360-degree ocean views.", cost: "Mid"),
+                TravelPlanItem(name: "Kirstenbosch Botanical Garden", detail: "Canopy walkway (Boomslang) nestled against the mountain slopes.", cost: "Low-mid"),
+                TravelPlanItem(name: "Boulders Beach & Simon's Town", detail: "Boardwalk paths through a protected colony of wild African penguins.", cost: "Low-mid"),
+                TravelPlanItem(name: "Cape Point & Good Hope", detail: "Towering sea cliffs and windswept lighthouses where two ocean currents meet.", cost: "Mid"),
+                TravelPlanItem(name: "V&A Waterfront & Zeitz MOCAA", detail: "Harbor promenade and contemporary African art inside grain silos.", cost: "Mid"),
+                TravelPlanItem(name: "Bo-Kaap & Signal Hill", detail: "Pastel Cape Malay lanes, then a golden-hour drive up Signal Hill.", cost: "Low")
+            ],
+            restaurants: [
+                TravelPlanItem(name: "The Test Kitchen Carbon", detail: "Modern South African dining in Woodstock for a special evening.", cost: "$$$"),
+                TravelPlanItem(name: "Kalky's Fish and Chips", detail: "Harborside fresh snoek and chips with salt and vinegar at Kalk Bay.", cost: "$"),
+                TravelPlanItem(name: "Biesmiellah", detail: "Traditional Cape Malay bobotie and spiced samosas in Bo-Kaap.", cost: "$-$$"),
+                TravelPlanItem(name: "Chef's Warehouse Beau Constantia", detail: "Sharing plates overlooking rolling Constantia Valley wine hills.", cost: "$$")
+            ],
+            plannerNote: "Ride Table Mountain on the first clear morning of your stay before coastal clouds and wind roll in."
+        ),
+
+        // Oceania
+        Destination(
+            id: "queenstown",
+            title: "Queenstown Alpine", city: "Queenstown", country: "New Zealand",
+            tags: ["5 days", "Nature"], planner: "Liam MacKenzie", price: "$2.6k",
+            dailyBudget: "~$520/day", stops: 10, isFeatured: false, symbol: "mountain.2.fill",
+            colors: [.cyan, .indigo],
+            places: [
+                TravelPlanItem(name: "Skyline Gondola & Luge", detail: "Bob's Peak cable car with downhill gravity luge carts and lake views.", cost: "Mid"),
+                TravelPlanItem(name: "Milford Sound Day Tour", detail: "Scenic fjord cruise beneath Mitre Peak and cascading glacial waterfalls.", cost: "High"),
+                TravelPlanItem(name: "TSS Earnslaw & Walter Peak", detail: "Vintage 1912 steamship cruise across Lake Wakatipu to a high-country station.", cost: "Mid-high"),
+                TravelPlanItem(name: "Arrowtown Historic District", detail: "1860s gold-rush settlement, tree-canopied main street, and river trails.", cost: "Low"),
+                TravelPlanItem(name: "Queenstown Hill Track", detail: "Pine forest walk up to the Basket of Dreams sculpture overlooking the basin.", cost: "Free"),
+                TravelPlanItem(name: "Gibbston Valley Wine Route", detail: "World-class Pinot Noir cellars and cheese platters through Kawarau Gorge.", cost: "Mid")
+            ],
+            restaurants: [
+                TravelPlanItem(name: "Fergburger", detail: "Legendary gourmet burgers with prime NZ beef on fresh-baked buns.", cost: "$-$$"),
+                TravelPlanItem(name: "Flame Bar & Grill", detail: "Steaks, ribs, and grilled seafood right on the lakefront boardwalk.", cost: "$$"),
+                TravelPlanItem(name: "Bespoke Kitchen", detail: "Artisan coffee and wholesome breakfast bowls near the gondola base.", cost: "$-$$"),
+                TravelPlanItem(name: "Patagonia Chocolates", detail: "Lakeside hot chocolate, churros, and house-churned artisan gelato.", cost: "$")
+            ],
+            plannerNote: "Leave one buffer day for Milford Sound or alpine flights in case mountain weather causes schedule shifts."
+        ),
+
+        // Europe
+        Destination(
+            id: "reykjavik",
+            title: "Reykjavik Elements", city: "Reykjavik", country: "Iceland",
+            tags: ["4 days", "Modern"], planner: "Astrid Jonsdottir", price: "$3.5k",
+            dailyBudget: "~$875/day", stops: 10, isFeatured: true, symbol: "sparkles",
+            colors: [.blue, .indigo],
+            places: [
+                TravelPlanItem(name: "Hallgrimskirkja & Rainbow St", detail: "Iconic basalt-column church tower views and vibrant Skolavordustigur.", cost: "Low"),
+                TravelPlanItem(name: "Golden Circle Route", detail: "Thingvellir rift valley, Geysir erupting vents, and Gullfoss waterfall.", cost: "Mid-high"),
+                TravelPlanItem(name: "Sky Lagoon Geothermal Spa", detail: "Ocean-side geothermal infinity pool with cold plunge and sauna ritual.", cost: "High"),
+                TravelPlanItem(name: "Harpa & Old Harbour", detail: "Geometric glass concert hall on the waterfront and whale-watching boats.", cost: "Free"),
+                TravelPlanItem(name: "South Coast Waterfalls", detail: "Walk behind Seljalandsfoss, gaze at Skogafoss, and Reynisfjara black sand.", cost: "High")
+            ],
+            restaurants: [
+                TravelPlanItem(name: "Baejarins Beztu Pylsur", detail: "Historic harbor stand for classic hot dogs with crispy onions and remoulade.", cost: "$"),
+                TravelPlanItem(name: "Dill Restaurant", detail: "Michelin-starred New Nordic tasting menu honoring native Icelandic ingredients.", cost: "$$$"),
+                TravelPlanItem(name: "Messinn", detail: "Sizzling copper pans of arctic char and cod with buttered potatoes downtown.", cost: "$$"),
+                TravelPlanItem(name: "Braud & Co", detail: "Hot sourdough cinnamon and cardamom buns straight from early-morning ovens.", cost: "$")
+            ],
+            plannerNote: "Reserve geothermal lagoon passes weeks in advance and keep waterproof layers on hand regardless of the season."
+        ),
     ]
 }
 
@@ -729,7 +848,8 @@ extension Destination {
         "los-angeles", "bangkok", "dubai", "bali", "singapore", "cancun",
         "kyoto", "seoul", "amsterdam", "santorini", "sydney", "istanbul",
         "mexico-city", "marrakech", "osaka", "honolulu", "san-francisco",
-        "lisbon", "taipei", "vancouver", "rio-de-janeiro", "las-vegas", "cairo"
+        "lisbon", "taipei", "vancouver", "rio-de-janeiro", "las-vegas", "cairo",
+        "cape-town", "buenos-aires", "reykjavik", "queenstown", "hanoi"
     ]
 
     /// Rank by id, built once. The lookup used to be a linear `firstIndex(of:)`, which
@@ -791,6 +911,11 @@ extension Destination {
         case "cancun": "Turquoise water is the headline, but island ferries, cenotes, Maya history, and lively local food give Cancún far more range than a resort-only stay."
         case "santorini": "Whitewashed villages trace a volcanic caldera above the Aegean, with cliff walks, ancient ruins, and vineyard afternoons beyond the famous sunsets."
         case "marrakech": "Ochre lanes, tiled palaces, garden courtyards, and a market square that transforms after dark make Marrakech an immersive first stop in Morocco."
+        case "hanoi": "Ancient guild streets, serene lakes, fragrant noodle bowls, and egg-coffee cafes — Hanoi blends French colonial charm with vibrant street culture."
+        case "buenos-aires": "Grand European boulevards, sizzling parillas, late-night milongas, and leafy parks give Buenos Aires an irresistible, nostalgic rhythm."
+        case "cape-town": "Dramatic granite peaks plunging into two oceans, historic vineyards, penguin colonies, and a world-class culinary scene make Cape Town unforgettable."
+        case "queenstown": "Cradled by the dramatic Remarkables and Lake Wakatipu, Queenstown pairs adrenaline-fueled alpine excursions with cozy lakeside dining."
+        case "reykjavik": "Glaciers, volcanic craters, geothermal lagoons, and midnight skies — Reykjavik is the design-forward gateway to Iceland's untamed natural wonders."
         default: "A curated plan with hand-picked places to visit and eat."
         }
     }
@@ -841,6 +966,11 @@ extension Destination {
         case "cancun": .init(base: "Hotel Zone for a beach-first stay or downtown for local food and lower prices.", transport: "Use buses along the resort corridor and booked transfers for longer outings.", booking: "Ferries, reef trips, and a reputable inland day tour.")
         case "santorini": .init(base: "Fira for transport, Imerovigli for quieter caldera views, or Kamari for the beach.", transport: "Use buses for main villages; reserve a car only for a focused island loop.", booking: "Sailing, vineyard tastings, and any sunset dinner that matters.")
         case "marrakech": .init(base: "A riad inside the medina for atmosphere or Hivernage for easier vehicle access.", transport: "Walk the medina, then use licensed taxis or arranged drivers beyond it.", booking: "Jardin Majorelle, a first-day guide, and a vetted Atlas excursion.")
+        case "hanoi": .init(base: "Old Quarter or French Quarter keeps lakes and street-food stalls within easy walking distance.", transport: "Walk within the Old Quarter and use Grab taxis or ride-hailing bikes for cross-town trips.", booking: "Book Halong Bay or Ninh Binh day excursions through your hotel a day or two in advance.")
+        case "buenos-aires": .init(base: "Palermo Soho for lively cafes and dining, or Recoleta for leafy, classic architecture.", transport: "Use the Subte (metro) and cheap rideshares; get a SUBE transit card at any kiosk.", booking: "Reserve Don Julio well in advance and book Teatro Colon guided tickets online.")
+        case "cape-town": .init(base: "Camps Bay for sunset beaches or City Bowl/V&A Waterfront for central dining and touring.", transport: "Use rideshare within the city and rent a car or book a tour for the Cape Peninsula drive.", booking: "Book Table Mountain cableway and Robben Island ferry tickets ahead of time.")
+        case "queenstown": .init(base: "Queenstown town center for walking to dinner, or Frankton for quiet lakeside stays near the airport.", transport: "Rent a car for Arrowtown and Gibbston Valley; book coach-and-cruise tours for Milford Sound.", booking: "Book Milford Sound tours and Fergburger mobile pickup orders ahead to skip long waits.")
+        case "reykjavik": .init(base: "Miðborg (downtown) keeps restaurants, harbor paths, and tour pickup points within a short walk.", transport: "Walk around the city; rent an all-wheel-drive car or book guided day tours for the countryside.", booking: "Reserve Blue Lagoon or Sky Lagoon slots and Michelin dining well before departure.")
         default: .init(base: "Choose a central, well-connected neighborhood.", transport: "Group stops by area and rely on local transit.", booking: "Reserve the one experience you would be disappointed to miss.")
         }
     }
@@ -881,6 +1011,11 @@ extension Destination {
         case "dubai": [11, 12, 1, 2, 3]
         case "cairo": [10, 11, 12, 1, 2, 3]
         case "marrakech": [3, 4, 5, 10, 11]
+        case "hanoi": [10, 11, 12, 2, 3, 4]
+        case "buenos-aires": [3, 4, 5, 9, 10, 11]
+        case "cape-town": [11, 12, 1, 2, 3, 4]
+        case "queenstown": [12, 1, 2, 3, 4, 6, 7, 8]
+        case "reykjavik": [6, 7, 8, 9, 10, 11, 12, 1, 2, 3]
         default: []
         }
     }
@@ -926,6 +1061,11 @@ extension Destination {
         case "cancun": CLLocationCoordinate2D(latitude: 21.1619, longitude: -86.8515)
         case "santorini": CLLocationCoordinate2D(latitude: 36.3932, longitude: 25.4615)
         case "marrakech": CLLocationCoordinate2D(latitude: 31.6295, longitude: -7.9811)
+        case "hanoi": CLLocationCoordinate2D(latitude: 21.0285, longitude: 105.8542)
+        case "buenos-aires": CLLocationCoordinate2D(latitude: -34.6037, longitude: -58.3816)
+        case "cape-town": CLLocationCoordinate2D(latitude: -33.9249, longitude: 18.4241)
+        case "queenstown": CLLocationCoordinate2D(latitude: -45.0312, longitude: 168.6626)
+        case "reykjavik": CLLocationCoordinate2D(latitude: 64.1466, longitude: -21.9426)
         default: CLLocationCoordinate2D(latitude: 0, longitude: 0)
         }
     }
@@ -1020,12 +1160,12 @@ extension Destination {
     /// Continent bucket for the filter, keyed off the country.
     var continent: String {
         switch country {
-        case "Japan", "South Korea", "Thailand", "Singapore", "Indonesia", "Taiwan": "Asia"
-        case "France", "Italy", "Spain", "UK", "Portugal", "Netherlands", "Turkey", "Greece": "Europe"
+        case "Japan", "South Korea", "Thailand", "Singapore", "Indonesia", "Taiwan", "Vietnam": "Asia"
+        case "France", "Italy", "Spain", "UK", "Portugal", "Netherlands", "Turkey", "Greece", "Iceland": "Europe"
         case "USA", "Canada", "Mexico": "North America"
-        case "Brazil": "South America"
-        case "UAE", "Egypt", "Morocco": "Middle East & Africa"
-        case "Australia": "Oceania"
+        case "Brazil", "Argentina": "South America"
+        case "UAE", "Egypt", "Morocco", "South Africa": "Middle East & Africa"
+        case "Australia", "New Zealand": "Oceania"
         default: "Other"
         }
     }
