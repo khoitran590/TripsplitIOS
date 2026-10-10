@@ -1,6 +1,44 @@
 # TripSplit
 
-TripSplit is a SwiftUI iOS app backed by hosted Supabase in normal Debug and Release builds. For backend development, it can opt into an isolated local Supabase stack managed by the Supabase CLI and a Docker-compatible runtime. The iOS app, Simulator, signing, and App Store workflow remain native to macOS.
+**Plan · Split · Settle**
+
+TripSplit is a native SwiftUI iPhone app for planning group trips, tracking shared expenses, and settling up. Discover a destination, build an itinerary, invite friends, and keep the group's plans and balances together.
+
+## What the app does
+
+- **Explore:** browse curated and community destination guides, search for places and interests, and filter by trip length, travel style, continent, and budget. Create a trip from a guide or plan your own destination.
+- **Plan and navigate:** build shared itineraries, request AI suggestions with user consent, view stops on a map, and preview a shorter route while keeping scheduled stops in place.
+- **Split expenses:** enter costs manually or scan receipts, then split equally, by percentage, by amount, or by item. Track tax, tips, multiple currencies, and each traveler's share.
+- **Settle up:** see who owes whom, simplify group debts, and track settlement payments and confirmations.
+- **Share reports:** use the share menu in a trip's header to choose **Share summary as text** or **Export PDF report**. The PDF includes trip totals, who pays whom, confirmed payments and remaining amounts, each person's balance and expense shares, and the expense breakdown. It uses selectable text and multiple pages when needed, so recipients can read it without the app.
+- **Keep travel memories:** share trip-feed photos, locations, comments, and reactions. Personalize the redesigned passport profile with stamps, travel styles, notes, favorite memories, badges, a bucket list, and selected photos; connect with friends and share a profile card.
+- **Personalize and manage your account:** adjust appearance and preferences, manage privacy and AI consent, and use reporting and blocking controls.
+
+The main dock contains **Explore, Map, Trips, and Profile**. Guests can browse before signing in; an account is required to create, join, and sync shared trips.
+
+## Run the iOS app
+
+1. Open `Tripsplit.xcodeproj` in Xcode 26 or later.
+2. Select the **Tripsplit** scheme and an iPhone Simulator running iOS 26 or later.
+3. Build and run. For a physical iPhone, configure signing with your own development team.
+
+The app target supports iOS 26+ and uses SwiftUI and Apple system frameworks. Supabase access uses direct HTTP APIs rather than a third-party Swift SDK. Normal Debug and Release builds use hosted Supabase; Docker is only needed for the optional local backend workflow below.
+
+For deterministic screenshot and reviewer content, add `-app-store-demo` to the scheme's launch arguments. The demo fixtures live in [AppStoreDemoData.swift](Tripsplit/AppStoreDemoData.swift).
+
+## Repository layout
+
+| Path | Contents |
+| --- | --- |
+| `Tripsplit/` | SwiftUI screens, trip models, split engine, maps, profiles, backend clients, and exports |
+| `TripsplitAppTests/` | Unit, regression, and opt-in local integration tests |
+| `TripsplitAppUITests/` | UI and accessibility tests |
+| `supabase/migrations/` | Ordered database schema and authorization migrations |
+| `supabase/functions/` | Authenticated Edge Functions and shared helpers |
+| `supabase/tests/` | pgTAP database tests |
+| `scripts/` | Backend prerequisite checks and test scripts |
+| `.github/workflows/ci.yml` | Provider-free backend and native iOS CI |
+| `design/location-stamps/` | Passport stamp design assets and notes |
 
 ## Local backend prerequisites
 
@@ -115,7 +153,7 @@ make functions-unit-test
 make functions-test
 ```
 
-The database suite currently runs 70 pgTAP checks, including authorization, delta synchronization, and paged trip reads. The function suite checks missing and malformed JWTs, missing-provider behavior, authenticated mock responses, invitation ownership, and account deletion without paid calls.
+The database suite currently declares 94 pgTAP checks, including authorization, delta synchronization, and paged trip reads. The function suite checks missing and malformed JWTs, missing-provider behavior, authenticated mock responses, invitation ownership, and account deletion without paid calls.
 
 Run ordinary native tests from Xcode, or use an available Simulator ID:
 
@@ -129,7 +167,13 @@ xcodebuild -project Tripsplit.xcodeproj -scheme Tripsplit -configuration Debug \
   -only-testing:TripsplitAppUITests test
 ```
 
-The opt-in authenticated and outage commands are maintained in `DOCKER_SUPABASE_IMPLEMENTATION_PLAN.md` for local regression work.
+Local integration tests are opt-in. With the local stack running, compile with
+`SWIFT_ACTIVE_COMPILATION_CONDITIONS='DEBUG LOCAL_SUPABASE LOCAL_SUPABASE_INTEGRATION'`
+and run `TripsplitAppTests/LocalSupabaseIntegrationTests/testLocalSupabaseCoreFlow`.
+For the outage test, stop the local stack, compile with
+`SWIFT_ACTIVE_COMPILATION_CONDITIONS='DEBUG LOCAL_SUPABASE LOCAL_SUPABASE_OUTAGE'`,
+and run `TripsplitAppTests/LocalSupabaseIntegrationTests/testLocalSupabaseOutageIsAnErrorNotEmptyData`.
+These flags can be passed to the same `xcodebuild` commands above. Ordinary test runs skip both flows.
 
 ## Continuous integration
 

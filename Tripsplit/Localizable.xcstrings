@@ -4,6 +4,89 @@
     "" : {
 
     },
+    "%@ Expense Report" : {
+
+    },
+    "All expenses" : {
+
+    },
+    "Balance" : {
+
+    },
+    "Balances are combined so the group settles up with as few payments as possible." : {
+
+    },
+    "Balances by person" : {
+
+    },
+    "Breakdown by person" : {
+
+    },
+    "EXPENSE REPORT" : {
+
+    },
+    "Everyone is settled up. No payments are needed." : {
+
+    },
+    "Export PDF report" : {
+
+    },
+    "Generated %@ · All amounts in %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Generated %1$@ · All amounts in %2$@"
+          }
+        }
+      }
+    },
+    "Gets back %@" : {
+
+    },
+    "No share in any expense." : {
+
+    },
+    "Page %lld" : {
+
+    },
+    "Paid %@ · Share %@ · %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Paid %1$@ · Share %2$@ · %3$@"
+          }
+        }
+      }
+    },
+    "Paid is what each person covered for the group; share is their part of the costs." : {
+
+    },
+    "Paid so far" : {
+
+    },
+    "Person" : {
+
+    },
+    "Share summary as text" : {
+
+    },
+    "Split between" : {
+
+    },
+    "Still owed" : {
+
+    },
+    "Their share" : {
+
+    },
+    "TripSplit expense report · %@" : {
+
+    },
+    "Who pays whom" : {
+
+    },
     "· %@, %@" : {
       "localizations" : {
         "en" : {

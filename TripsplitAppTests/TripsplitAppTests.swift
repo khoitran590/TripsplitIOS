@@ -2,6 +2,7 @@ import XCTest
 import SwiftUI
 import UIKit
 import MapKit
+import PDFKit
 @testable import Tripsplit
 
 @MainActor
@@ -929,6 +930,45 @@ final class TripsplitAppTests: XCTestCase {
         XCTAssertTrue(text.contains("PAYMENT\nFrom: Bob\nTo: Alice"))
         XCTAssertTrue(text.contains("AMOUNT DUE\n"))
         XCTAssertTrue(text.contains("Remaining balance after confirmed payments."))
+    }
+
+    func testPDFReportShowsWhoOwesWhomAndPerPersonBreakdown() throws {
+        let dinner = Expense(
+            title: "Dinner",
+            amount: 60,
+            payerID: alice.id,
+            participantIDs: [alice.id, bob.id, chris.id],
+            date: Date(timeIntervalSince1970: 1_735_689_600),
+            shares: [alice.id: 30, bob.id: 20, chris.id: 10]
+        )
+        let taxi = Expense(
+            title: "Taxi",
+            amount: 30,
+            payerID: bob.id,
+            participantIDs: [alice.id, bob.id, chris.id],
+            date: Date(timeIntervalSince1970: 1_735_776_000)
+        )
+        let trip = Trip(
+            name: "Weekend Away",
+            currencyCode: "USD",
+            creatorID: alice.id,
+            members: [alice, bob, chris],
+            budgets: [:],
+            expenses: [dinner, taxi]
+        )
+
+        let report = TripReport(trip: trip)
+        XCTAssertEqual(report.people.map(\.balance), [20, 0, -20])
+        XCTAssertEqual(report.people.reduce(0) { $0 + $1.share }, 90, accuracy: 0.001)
+        XCTAssertEqual(report.payments.map { "\($0.settlement.from.name)->\($0.settlement.to.name)" }, ["Chris->Alice"])
+
+        let data = TripReportRenderer.data(for: report)
+        let text = try XCTUnwrap(PDFDocument(data: data)?.string)
+        for expected in ["Weekend Away", "WHO PAYS WHOM", "BALANCES BY PERSON", "BREAKDOWN BY PERSON",
+                         "ALL EXPENSES", "Dinner", "Taxi", "Gets back $20.00", "Owes $20.00"] {
+            XCTAssertTrue(text.contains(expected), "PDF is missing \(expected)")
+        }
+        XCTAssertEqual(TripReportPDF.fileName(for: trip), "Weekend Away Expense Report.pdf")
     }
 
     private func calculate(

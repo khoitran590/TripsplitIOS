@@ -284,7 +284,20 @@ struct TripDetailView: View {
                         requireAuthentication(for: .editTrip)
                     }
                 }
-                ShareLink(item: TripExport.text(trip)) {
+                Menu {
+                    ShareLink(item: TripExport.text(trip)) {
+                        Label("Share summary as text", systemImage: "text.alignleft")
+                    }
+                    ShareLink(
+                        item: TripReportPDF(trip: trip),
+                        preview: SharePreview(
+                            TripReportPDF.fileName(for: trip),
+                            image: Image(systemName: "doc.richtext")
+                        )
+                    ) {
+                        Label("Export PDF report", systemImage: "doc.richtext")
+                    }
+                } label: {
                     Image(systemName: "square.and.arrow.up")
                         .font(.system(size: 17, weight: .bold))
                         .foregroundStyle(.white)
