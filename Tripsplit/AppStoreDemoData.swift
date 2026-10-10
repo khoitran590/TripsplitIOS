@@ -44,7 +44,7 @@ extension TripStore {
         profile.bio = "Weekend explorer, noodle enthusiast, and keeper of the shared itinerary."
         profile.visitedPlaces = ["Tokyo, Japan", "Lisbon, Portugal", "Mexico City, Mexico"]
         profile.savedDestinationIDs = ["tokyo"]
-        profile.showcase.cover = ShareCardCover.japan.rawValue
+        profile.showcase.cover = ShareCardCover.kiku.rawValue
         profile.showcase.homeBase = "Seattle, WA"
         profile.showcase.languages = "English, Spanish"
         profile.showcase.travelStyles = [TravelStyle.streetFood, .planner, .earlyFlights].map(\.rawValue)

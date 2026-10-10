@@ -7,7 +7,7 @@ import MapKit
 // device (`SharedProfileView`), so "Viewing as Friends" shows the real layout rather
 // than a look-alike.
 
-/// The passport cover as the profile's banner — the same six covers as the share card.
+/// The passport cover as the profile's banner — the same themes as the share card.
 struct ProfileCoverBanner: View {
     let cover: ShareCardCover
     var height: CGFloat = 140
@@ -21,8 +21,9 @@ struct ProfileCoverBanner: View {
                         .font(.system(size: 11, weight: .bold))
                         .textCase(.uppercase)
                         .tracking(3.5)
-                    Text(verbatim: cover.code)
+                    Text(cover.edition)
                         .font(.system(size: 9, weight: .semibold))
+                        .textCase(.uppercase)
                         .tracking(2.5)
                         .opacity(0.75)
                 }

@@ -9,7 +9,8 @@ let profileInvite: LocalizedStringKey =
     "Hey! Add me on TripSplit and we'll share many journeys together while staying on budget!"
 
 /// The profile data a share card is drawn from, held while the preview sheet is up. The
-/// picture itself is rendered in the sheet, which is where the cover is chosen.
+/// picture itself is rendered in the sheet, which is where the theme is chosen; the
+/// owner's card choices are read live from the profile there, so customizing re-renders.
 struct ShareCardItem: Identifiable {
     let id = UUID()
     let name: String
@@ -17,32 +18,44 @@ struct ShareCardItem: Identifiable {
     /// The avatar's Storage path, used when this device has no local copy of the photo —
     /// signing in on a new device leaves `imageData` nil while the picture still exists.
     let avatarPath: String?
-    let stats: ProfileStats
+    /// Every number the card can headline; the owner picks which three it prints.
+    let statValues: [PassportStat: Int]
     let places: [VisitedPlace]
     /// The profile deep link the card's QR code encodes; nil until the token has loaded.
     let shareURL: URL?
 }
 
-/// The cover a share card is printed on, taken from real passport covers — the object
-/// the card imitates. US navy is the default; the rest are picked for distinct hues
-/// rather than exhaustiveness, so the swatches never read as two shades of the same red.
+/// The theme a share card is printed in. Each takes its cues from a real travel document
+/// — Japan's passport, the US passport, the US national-parks passport book — without
+/// copying one: the emblem is TripSplit's own pin and no country is named, so the card
+/// can't be mistaken for a government document.
+///
+/// Raw values are the country covers these replaced, so a saved cover (and a friend on an
+/// older build reading it) keeps resolving. The other retired covers fall back to
+/// `federal` wherever a raw value is read.
 ///
 /// Fixed hex values, not `Color(light:dark:)`: the card is a printed object and renders
 /// the same whatever appearance the app is in.
 enum ShareCardCover: String, CaseIterable, Identifiable {
-    case unitedStates, europeanUnion, japan, mexico, vietnam, newZealand
+    case kiku = "japan", federal = "unitedStates", trailhead = "mexico"
 
     var id: Self { self }
 
-    /// Country names are localized like the rest of the UI, not shown verbatim.
+    /// Theme names are proper nouns, shown as written.
     var label: LocalizedStringKey {
         switch self {
-        case .unitedStates: "United States"
-        case .europeanUnion: "European Union"
-        case .japan: "Japan"
-        case .mexico: "Mexico"
-        case .vietnam: "Vietnam"
-        case .newZealand: "New Zealand"
+        case .kiku: "Kiku"
+        case .federal: "Federal"
+        case .trailhead: "Trailhead"
+        }
+    }
+
+    /// Printed at the head of the page, opposite its title.
+    var edition: LocalizedStringKey {
+        switch self {
+        case .kiku: "Kiku edition"
+        case .federal: "Federal edition"
+        case .trailhead: "Trailhead edition"
         }
     }
 
@@ -52,33 +65,16 @@ enum ShareCardCover: String, CaseIterable, Identifiable {
     /// two-stop gradient stretched over that much board bands visibly across its middle.
     var colors: [Color] {
         switch self {
-        case .unitedStates: [Color(hex: 0x2A4677), Color(hex: 0x152A4B), Color(hex: 0x08111F)]
-        case .europeanUnion: [Color(hex: 0x7E2742), Color(hex: 0x4C1727), Color(hex: 0x230A12)]
-        case .japan: [Color(hex: 0xB63039), Color(hex: 0x7B1A21), Color(hex: 0x420C11)]
-        case .mexico: [Color(hex: 0x24734B), Color(hex: 0x134A30), Color(hex: 0x062218)]
-        case .vietnam: [Color(hex: 0x494284), Color(hex: 0x2A2557), Color(hex: 0x121029)]
-        case .newZealand: [Color(hex: 0x3A3A41), Color(hex: 0x1D1D22), Color(hex: 0x08080A)]
+        case .kiku: [Color(hex: 0xB63039), Color(hex: 0x7B1A21), Color(hex: 0x420C11)]
+        case .federal: [Color(hex: 0x2A4677), Color(hex: 0x152A4B), Color(hex: 0x08111F)]
+        case .trailhead: [Color(hex: 0x2F6A50), Color(hex: 0x1F4D3A), Color(hex: 0x0C241A)]
         }
     }
 
-    /// The three-letter issuing-state code the data page prints in its header and again
-    /// at the head of the machine-readable zone. The country's own ICAO code, so picking a
-    /// cover changes what the document says it was issued by and not just its colour.
-    var code: String {
-        switch self {
-        case .unitedStates: "USA"
-        case .europeanUnion: "EUR"
-        case .japan: "JPN"
-        case .mexico: "MEX"
-        case .vietnam: "VNM"
-        case .newZealand: "NZL"
-        }
-    }
-
-    /// The embossing: gold foil on most covers, silver on the black one.
+    /// The embossing: gold foil, or cream on the green board.
     var foil: Color {
         switch self {
-        case .newZealand: Color(hex: 0xD9DEE4)
+        case .trailhead: Color(hex: 0xF1E3BF)
         default: Color(hex: 0xE3C486)
         }
     }
@@ -87,52 +83,40 @@ enum ShareCardCover: String, CaseIterable, Identifiable {
     /// header is reversed out of.
     var ink: Color { colors.last ?? .black }
 
-    /// The page stock. Printed paper is never white — and here it is never the same cream
-    /// twice either: every cover's page is mixed toward that cover's own hue, so choosing a
-    /// country repaints the card's whole ground instead of one strip down its edge.
+    /// The page stock: washi, bond and kraft, each mixed toward its cover's hue.
     var paper: Color {
         switch self {
-        case .unitedStates: Color(hex: 0xEEF1F7)
-        case .europeanUnion: Color(hex: 0xFAF0F0)
-        case .japan: Color(hex: 0xFCF2EB)
-        case .mexico: Color(hex: 0xEDF5EE)
-        case .vietnam: Color(hex: 0xF1EFF9)
-        case .newZealand: Color(hex: 0xF5F3EE)
+        case .kiku: Color(hex: 0xFCF2EB)
+        case .federal: Color(hex: 0xEEF1F7)
+        case .trailhead: Color(hex: 0xF3EAD7)
         }
     }
 
-    /// The second ink the page's security printing runs in. Data pages are printed in two
-    /// or three colours precisely so their line work interferes, and the pairing is picked
-    /// to sit *against* the cover rather than with it — blue line work under a red Japanese
-    /// page, gold under the indigo ones — because a second ink in the cover's own hue
-    /// disappears into the first and the guilloche flattens to a plain hatch.
-    var lineInk: Color {
+    /// The second ink Federal's security printing runs in, set against the cover so the
+    /// two families of line work interfere instead of merging.
+    var lineInk: Color { Color(hex: 0xB3543A) }
+
+    /// The inks places are stamped in, cycled across the stamps. The first is also the
+    /// personal seal's.
+    var stampInks: [Color] {
         switch self {
-        case .unitedStates: Color(hex: 0xB3543A)
-        case .europeanUnion: Color(hex: 0xC08A3E)
-        case .japan: Color(hex: 0x2F5FA8)
-        case .mexico: Color(hex: 0xB05236)
-        case .vietnam: Color(hex: 0xC08A3E)
-        case .newZealand: Color(hex: 0x8A6A4A)
+        case .kiku: [Color(hex: 0xC8322B)]
+        case .federal: [Color(hex: 0x1F3F7A), Color(hex: 0xA8322E)]
+        case .trailhead: [Color(hex: 0x1F4D3A), Color(hex: 0x8A3B1E), Color(hex: 0x2F5F7A)]
         }
     }
 }
 
-/// The profile rendered as a picture: a passport biodata page someone can post anywhere,
-/// unlike the `tripsplit://` link, which only does anything for people who already have
-/// the app.
+/// The profile rendered as a picture: a passport page someone can post anywhere, unlike
+/// the `tripsplit://` link, which only does anything for people who already have the app.
 ///
-/// The page rather than the cover, which is what this used to imitate: a real cover
-/// carries an emblem, a country and the word PASSPORT and nothing else, so a cover loaded
-/// with a portrait, four counts and three captioned stamps was working against itself.
-/// Everything here is what a biodata page genuinely holds, set the way a page sets it —
-/// left-aligned, ruled and field-labelled rather than centred.
+/// One layout in three themes. What makes a card its owner's is on the page rather than
+/// in the theme: the places they chose to stamp, the three numbers they chose to headline,
+/// their own line at the foot, and a personal seal no other name produces.
 ///
-/// The cover is the card's ground, not a stripe on it. Shown as a 30pt spine down one
-/// edge, the country picker changed a thirteenth of the picture and every cover produced
-/// the same cream card; the page is now *mounted* in the cover, which frames it on all
-/// four sides, prints its own stock in the cover's tone, and reverses the page header out
-/// of a band of the cover's ink.
+/// The page is *mounted* in the cover, which frames it on all four sides, prints its own
+/// stock in the cover's tone, and reverses the page header out of a band of the cover's
+/// ink — shown as a spine down one edge, the theme changed a thirteenth of the picture.
 ///
 /// Deliberately built from gradients, shapes and `Canvas` — `ImageRenderer` cannot
 /// rasterize glass, materials or blurs, which come out empty. Nothing is shrunk with
@@ -143,18 +127,19 @@ struct ProfileShareCard: View {
     /// Already resolved by the sheet — a photo the card had to load itself would still be
     /// downloading when `ImageRenderer` rasterizes it, and print as the monogram.
     let photo: UIImage?
-    let stats: ProfileStats
-    /// Every visited place: the first few are stamped, the rest still count toward the
-    /// flag row and the "+n more" line.
+    /// Every visited place; the owner's featured ones are stamped, else the first few.
     let places: [VisitedPlace]
-    /// The passport cover the page is bound in: its board, its paper and its foil.
-    var cover: ShareCardCover = .unitedStates
+    /// The theme: its board, its paper, its type and its stamps.
+    var cover: ShareCardCover = .federal
     /// Encoded as the QR code in the page's corner, so a posted card actually connects.
     var shareURL: URL?
+    /// The owner's home base, travel styles and favorite place, and their card choices.
+    var showcase = ProfileShowcase()
+    var statValues: [PassportStat: Int] = [:]
 
     /// 4:5. Deliberately not the old 0.61: that was too tall for a feed, which cropped it,
     /// and too short for a story, which letterboxed it. `ImageRenderer` rasterizes at 3x,
-    /// so the shared picture is 1140x1410.
+    /// so the shared picture is 1080x1350.
     private let width: CGFloat = 360
     private let height: CGFloat = 450
     /// How much cover shows around the mounted page — the border of the passport's own
@@ -163,9 +148,7 @@ struct ProfileShareCard: View {
     /// The deeper band of cover above the page, carrying the foil a cover is embossed with.
     private let coverBand: CGFloat = 42
 
-    /// The page is printed in the cover's deepest tone on the cover's own stock, so a Japan
-    /// cover prints a red-inked page on warm paper and a Mexico cover a green-inked one on
-    /// cool.
+    private var style: PassportCardStyle { showcase.card }
     private var ink: Color { cover.ink }
     private var page: Color { cover.paper }
 
@@ -173,42 +156,13 @@ struct ProfileShareCard: View {
         String(name.split(separator: " ").prefix(2).compactMap(\.first)).uppercased()
     }
 
-    /// Up to three stamps — as many as the visa band holds at a diameter where the wording
-    /// around the rim is still readable. The rest still count toward the flag row and the
-    /// "+n more" line.
-    private var stamped: [VisitedPlace] { Array(places.prefix(3)) }
-
-    /// Where each stamp lands in the visa band: its centre as a fraction of the band's
-    /// width, its offset from the band's middle as a fraction of the band's height, its
-    /// diameter, and the angle it was pressed at.
-    ///
-    /// A table per count rather than one formula. Two stamps spread across a band scaled
-    /// for three read as a row with a hole in it, so a pair is printed larger and pulled
-    /// in; a lone stamp is printed larger still and centred. The vertical offsets
-    /// alternate because stamps go onto a page one at a time, by hand, and a level row of
-    /// them reads as a chart rather than as a travel record.
-    private var stampLayout: [(x: CGFloat, y: CGFloat, size: CGFloat, tilt: Double)] {
-        switch stamped.count {
-        case 1: [(0.50, 0.00, 100, -7)]
-        case 2: [(0.28, -0.05, 94, -10), (0.72, 0.07, 88, 7)]
-        default: [(0.19, -0.06, 92, -9), (0.50, 0.09, 84, 5), (0.81, -0.07, 90, -4)]
+    /// The owner's featured places in the order they picked them, else the first few.
+    /// Three at most — as many as the band holds at a size where a stamp is still read.
+    private var stamped: [VisitedPlace] {
+        let picked = style.featuredPlaces.compactMap { name in
+            places.first { $0.id == name.lowercased() }
         }
-    }
-
-    /// Flags for the countries behind the places, in the order they were visited — a
-    /// passport page reads as one at a glance, before any of the numbers are.
-    private var flags: [String] {
-        var codes: [String] = []
-        for place in places {
-            guard let code = PlaceRegion.isoCode(forRegionIn: place.name),
-                  !codes.contains(code) else { continue }
-            codes.append(code)
-        }
-        return codes.prefix(6).map { code in
-            String(String.UnicodeScalarView(code.unicodeScalars.compactMap {
-                Unicode.Scalar(127_397 + $0.value)
-            }))
-        }
+        return Array((picked.isEmpty ? places : picked).prefix(PassportCardStyle.stampLimit))
     }
 
     /// A document number, in the spirit of a passport. Derived from the name (djb2, the
@@ -223,10 +177,7 @@ struct ProfileShareCard: View {
     /// available. Falls back to today for a profile whose trips carry no dates.
     private var issued: Date { places.compactMap(\.date).min() ?? .now }
 
-    /// Ten years on — the validity a passport is issued for.
-    private var expires: Date {
-        Calendar.current.date(byAdding: .year, value: 10, to: issued) ?? issued
-    }
+    private var homeBase: String { showcase.homeBase.trimmingCharacters(in: .whitespaces) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -262,84 +213,61 @@ struct ProfileShareCard: View {
         }
     }
 
-    /// What a cover actually carries: an emblem and a wordmark, foiled into the board and
-    /// nothing else. The rules either side centre it the way embossing is centred.
-    ///
-    /// One key rather than a verbatim wordmark concatenated onto a localized phrase:
-    /// `Text + Text` is deprecated, and translators leave a brand name alone inside a
-    /// string anyway.
+    /// What the cover carries, foiled into the board: TripSplit's pin where a state
+    /// passport has its emblem, the wordmark, and the document number.
     private var coverWordmark: some View {
-        HStack(spacing: 10) {
-            foilRule
-            Image(systemName: "globe")
-                .font(.system(size: 18, weight: .light))
-                .foregroundStyle(cover.foil.opacity(0.92))
-            Text("Passport")
-                .font(.system(size: 11, weight: .heavy))
-                .textCase(.uppercase)
-                .tracking(4)
-                .foregroundStyle(cover.foil.opacity(0.92))
-                .fixedSize()
-            foilRule
+        HStack(spacing: 9) {
+            PassportPinEmblem(foil: cover.foil.opacity(0.92), board: cover.colors[1])
+                .frame(width: 20, height: 20)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(verbatim: "TRIPSPLIT")
+                    .font(display(13))
+                    .tracking(3)
+                Text("Travel passport")
+                    .font(.system(size: 6.5, weight: .semibold))
+                    .textCase(.uppercase)
+                    .tracking(2.4)
+            }
+            .fixedSize()
+            Spacer(minLength: 0)
+            Text(verbatim: "No. TS \(serial)").font(document(8, .medium))
         }
+        .foregroundStyle(cover.foil.opacity(0.92))
         .padding(.horizontal, margin + 2)
         .frame(height: coverBand)
     }
 
-    private var foilRule: some View {
-        Rectangle().fill(cover.foil.opacity(0.3)).frame(height: 0.8)
-    }
-
-    /// The paper the page is printed on: the cover's own stock tone under its security
-    /// line work.
+    /// The paper the page is printed on: the theme's stock under its own ground pattern —
+    /// wave crests, engine-turned line work, or contour lines.
     private var pageStock: some View {
-        ZStack { page; guilloche }
+        ZStack {
+            page
+            switch cover {
+            case .kiku: waveCrests
+            case .federal: guilloche
+            case .trailhead: contours
+            }
+        }
     }
 
     private var pageView: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
+            if cover == .trailhead { regionBand }
             VStack(alignment: .leading, spacing: 0) {
                 identity
                 counts
-                    .padding(.top, 12)
+                    .padding(.top, 10)
                     .overlay(alignment: .top) { rule }
-                    .padding(.top, 16)
+                    .padding(.top, 12)
                 visaBand
-                endorsements
-                    .padding(.bottom, 10)
-                machineReadableZone
+                footer
+                if cover == .federal { machineReadableZone.padding(.top, 8) }
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 16)
-            .padding(.bottom, 12)
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
+            .padding(.bottom, 10)
         }
-    }
-
-    /// The open middle of the page, and the only part of it that stretches: whatever the
-    /// blocks above and below don't use is visa space, which is what a passport page does
-    /// with its middle too.
-    ///
-    /// The stamps are placed inside this band rather than offset from the card's own
-    /// corner, which is what they used to be. Card coordinates left them wherever the
-    /// numbers above happened to end — clustered to one side with the rest of the band
-    /// unaccounted for, and the first of them cut in half by the card's edge.
-    private var visaBand: some View {
-        GeometryReader { geometry in
-            ZStack {
-                ForEach(Array(stamped.enumerated()), id: \.offset) { index, place in
-                    let spec = stampLayout[index]
-                    PlaceStampBadge(place: place, size: spec.size, page: page, entryDate: place.date)
-                        // Just off full strength: a stamp is ink pressed into paper, and
-                        // at 100% it sits on top of the page as artwork rather than in it.
-                        .opacity(0.94)
-                        .rotationEffect(.degrees(spec.tilt))
-                        .position(x: geometry.size.width * spec.x,
-                                  y: geometry.size.height * (0.5 + spec.y))
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var rule: some View {
@@ -347,100 +275,79 @@ struct ProfileShareCard: View {
     }
 
     /// The page's title line, reversed out of a band of the cover's ink across the head of
-    /// the page. A real data page prints its title in the same colour as everything else;
-    /// this one doesn't, because the band is what carries the chosen country *into* the
-    /// page rather than leaving it as a border around one.
+    /// the page: the band is what carries the theme *into* the page rather than leaving it
+    /// as a border around one.
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            chipSymbol.alignmentGuide(.firstTextBaseline) { $0[.bottom] - 0.5 }
-            Text("Passport / Passeport")
-                .font(.system(size: 9, weight: .bold))
-                .textCase(.uppercase)
-                .tracking(1.5)
-                .foregroundStyle(page)
+            Text("Traveler record")
             Spacer()
-            Text(verbatim: cover.code).font(document(8.5, .medium)).foregroundStyle(page.opacity(0.72))
+            Text(cover.edition).opacity(0.72)
         }
+        .font(.system(size: 8.5, weight: .bold))
+        .textCase(.uppercase)
+        .tracking(1.5)
+        .foregroundStyle(page)
+        .lineLimit(1)
         .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(.vertical, 7)
         .frame(maxWidth: .infinity)
-        .background {
-            LinearGradient(colors: [ink.opacity(0.9), ink], startPoint: .leading, endPoint: .trailing)
-        }
+        .background(ink)
         .overlay(alignment: .bottom) { Rectangle().fill(cover.foil.opacity(0.4)).frame(height: 0.8) }
     }
 
-    /// The biometric-passport symbol a data page carries beside its title: a chip in a
-    /// rectangle, radiating. Drawn from shapes because there is no SF Symbol for it, and
-    /// it is the one mark that says *passport* before a word of the page has been read.
-    ///
-    /// Drawn in the page stock, not the ink: it sits inside the reversed header band.
-    private var chipSymbol: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 1.6, style: .continuous)
-                .strokeBorder(page.opacity(0.85), lineWidth: 0.9)
-            Circle().fill(page.opacity(0.85)).frame(width: 2.4, height: 2.4).offset(x: -2.6)
-            chipWave(diameter: 4.4, x: -1.2)
-            chipWave(diameter: 7.6, x: -0.4)
+    /// The parks passport book colour-codes its regions down the page edge; Trailhead
+    /// carries the same five-colour band under its header.
+    private var regionBand: some View {
+        HStack(spacing: 0) {
+            ForEach([0xB4532A, 0xD9A441, 0x3F7D5C, 0x2F6E8E, 0x6B4E7D] as [UInt32], id: \.self) { hex in
+                Rectangle().fill(Color(hex: hex))
+            }
         }
-        .frame(width: 12, height: 9)
+        .frame(height: 5)
     }
 
-    /// One of the symbol's two radiating arcs — a right-facing quarter circle.
-    private func chipWave(diameter: CGFloat, x: CGFloat) -> some View {
-        Circle()
-            .trim(from: 0, to: 0.25)
-            .stroke(page.opacity(0.85), lineWidth: 0.8)
-            .rotationEffect(.degrees(-45))
-            .frame(width: diameter, height: diameter)
-            .offset(x: x)
-    }
-
-    /// Portrait and the name block beside it.
+    /// Portrait, the name block beside it, and the personal seal.
     ///
     /// One `Name` field rather than a passport's own `Surname` / `Given names` pair: which
     /// half of a display name is the family name is not knowable — "Trần Văn Khôi" puts it
     /// first and "Jennie Tran" puts it last — and guessing wrong prints someone's name
     /// backwards on the thing they are about to post.
     private var identity: some View {
-        HStack(alignment: .top, spacing: 16) {
+        HStack(alignment: .top, spacing: 12) {
             portrait
-            VStack(alignment: .leading, spacing: 12) {
-                field("Name / Nom") {
-                    Text(verbatim: name.uppercased())
-                        .font(document(20, .bold))
+            VStack(alignment: .leading, spacing: 9) {
+                field("Name") {
+                    Text(verbatim: name)
+                        .font(display(19))
                         .foregroundStyle(ink)
                         .lineLimit(2)
                         .minimumScaleFactor(0.55)
                 }
-                HStack(alignment: .top, spacing: 12) {
-                    field("Passport no.") { documentValue(Text(verbatim: "TS\(serial)")) }
-                    field("Issued / Délivré") { documentValue(Text(verbatim: monthYear(issued))) }
+                HStack(alignment: .top, spacing: 10) {
+                    if style.showsHomeBase, !homeBase.isEmpty {
+                        field("Home base") { documentValue(Text(verbatim: homeBase)) }
+                    } else {
+                        field("Passport no.") { documentValue(Text(verbatim: "TS\(serial)")) }
+                    }
+                    field("Traveling since") { documentValue(Text(verbatim: monthYear(issued))) }
                 }
-                signature
             }
             .padding(.top, 2)
+            if style.showsSeal {
+                let seal = style.seal(for: name)
+                PassportSeal(outline: seal.frame, motif: seal.motif, initials: initials,
+                             color: cover.stampInks[0])
+                    .frame(width: 46, height: 46)
+                    .opacity(0.85)
+            }
         }
     }
 
-    /// The bearer's signature: the name in a script face over a short rule.
-    private var signature: some View {
-        Text(verbatim: name)
-            .font(.custom("SnellRoundhand-Bold", size: 15))
-            .foregroundStyle(ink.opacity(0.8))
-            .lineLimit(1)
-            .minimumScaleFactor(0.6)
-            .padding(.bottom, 1)
-            .frame(width: 110, alignment: .leading)
-            .overlay(alignment: .bottom) { Rectangle().fill(ink.opacity(0.35)).frame(height: 0.8) }
-    }
-
     /// A data-page value in one of the paired columns: allowed to shrink rather than wrap,
-    /// because a long country name would otherwise take a second line the row has no room
-    /// for. Takes a `Text` so a localized country name arrives still localized.
+    /// because a long home base would otherwise take a second line the row has no room for.
     private func documentValue(_ value: Text) -> some View {
         value
-            .font(document(12))
+            .font(document(11))
             .textCase(.uppercase)
             .foregroundStyle(ink)
             .lineLimit(1)
@@ -451,9 +358,8 @@ struct ProfileShareCard: View {
         date.formatted(.dateTime.month(.abbreviated).year())
     }
 
-    /// Rectangular, because a biodata photo is. The circular portrait it replaces was the
-    /// single element that most made the card read as a social profile rather than a
-    /// document, whatever was printed around it.
+    /// Rectangular, because a passport photo is — a circular portrait is the single
+    /// element that most makes a card read as a social profile rather than a document.
     private var portrait: some View {
         Group {
             if let photo {
@@ -461,117 +367,235 @@ struct ProfileShareCard: View {
             } else {
                 Rectangle().fill(ink.opacity(0.08)).overlay {
                     Text(verbatim: initials)
-                        .font(.system(size: 30, weight: .bold))
+                        .font(display(22))
                         .foregroundStyle(ink.opacity(0.8))
                 }
             }
         }
-        // Slightly shorter than it was: the cover band and margins take height off the
-        // page, and the visa band is where that would otherwise have come from.
-        .frame(width: 72, height: 94)
+        .frame(width: 60, height: 78)
         .clipped()
         .overlay(Rectangle().strokeBorder(ink.opacity(0.32), lineWidth: 0.75))
-        // Straddling the portrait's corner, the way a laminate seal is applied over the
-        // photo's edge so the picture can't be swapped without breaking it.
-        .overlay(alignment: .bottomTrailing) { laminateSeal.offset(x: 11, y: 10) }
     }
 
-    /// The optically variable patch a laminated data page carries over its portrait: an
-    /// angular sweep through the prismatic sequence a hologram runs, etched with the fine
-    /// concentric rings the diffraction sits in.
-    ///
-    /// The one thing on the page that is neither the cover's ink nor the paper — a printed
-    /// document is monochrome by nature, and without this the card had no colour of its own
-    /// beyond whatever the stamps happened to bring.
-    private var laminateSeal: some View {
-        let diameter: CGFloat = 32
-        return ZStack {
-            Circle().fill(
-                AngularGradient(
-                    colors: [Color(hex: 0xE9B8C8), Color(hex: 0xF2DDA8), Color(hex: 0xB8E0D2),
-                             Color(hex: 0xB9C8EE), Color(hex: 0xE0BCE8), Color(hex: 0xE9B8C8)],
-                    center: .center
-                )
-            )
-            ForEach(1..<5) { ring in
-                Circle()
-                    .inset(by: CGFloat(ring) * diameter * 0.09)
-                    .strokeBorder(.white.opacity(0.45), lineWidth: 0.5)
-            }
-            Image(systemName: "globe")
-                .font(.system(size: diameter * 0.34, weight: .light))
-                .foregroundStyle(.white.opacity(0.85))
-            Circle().strokeBorder(.white.opacity(0.6), lineWidth: 0.8)
-        }
-        .frame(width: diameter, height: diameter)
-        .opacity(0.72)
-    }
-
-    /// Three counts, not the old four: `places` and `countries` answer nearly the same
-    /// question, and the fourth column cost every number the size that makes it legible
-    /// once the card is a thumbnail in a feed.
+    /// The three numbers the owner chose to headline.
     private var counts: some View {
         HStack(spacing: 0) {
-            count(stats.countries, "Countries")
-            countDivider
-            count(stats.trips, "Trips")
-            countDivider
-            count(stats.days, "Days")
+            ForEach(Array(style.headlineStats.enumerated()), id: \.element) { index, stat in
+                if index > 0 { Rectangle().fill(ink.opacity(0.2)).frame(width: 1, height: 30) }
+                VStack(spacing: 2) {
+                    Text(verbatim: "\(statValues[stat] ?? 0)")
+                        .font(display(24))
+                        .foregroundStyle(ink)
+                    Text(stat.label)
+                        .font(.system(size: 7, weight: .semibold))
+                        .textCase(.uppercase)
+                        .tracking(0.9)
+                        .foregroundStyle(ink.opacity(0.55))
+                }
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+                .padding(.horizontal, 3)
+                .frame(maxWidth: .infinity)
+            }
         }
     }
 
-    private func count(_ value: Int, _ label: LocalizedStringKey) -> some View {
-        VStack(spacing: 2) {
-            number(value)
-            Text(label)
-                .font(.system(size: 7, weight: .semibold))
-                .textCase(.uppercase)
-                .tracking(0.9)
-                .foregroundStyle(ink.opacity(0.5))
+    /// The open middle of the page, and the only part of it that stretches: whatever the
+    /// blocks above and below don't use is visa space, which is what a passport page does
+    /// with its middle too. Tilts and offsets alternate because stamps go onto a page one
+    /// at a time, by hand, and a level row of them reads as a chart.
+    private var visaBand: some View {
+        HStack(spacing: 6) {
+            ForEach(Array(stamped.enumerated()), id: \.offset) { index, place in
+                stamp(place, index: index)
+                    .rotationEffect(.degrees([-6, 4, -3][index % 3]))
+                    .offset(y: [-3, 5, -2][index % 3])
+                    .frame(maxWidth: .infinity)
+            }
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var countDivider: some View {
-        Rectangle().fill(ink.opacity(0.2)).frame(width: 1, height: 30)
-    }
-
-    private func number(_ value: Int) -> some View {
-        Text(verbatim: "\(value)")
-            .font(document(26, .bold))
-            .foregroundStyle(ink)
+    /// One place, stamped the way the theme's document stamps one: a square red seal, a
+    /// dated rectangular entry stamp, or a round dated cancellation.
+    @ViewBuilder
+    private func stamp(_ place: VisitedPlace, index: Int) -> some View {
+        let tone = cover.stampInks[index % cover.stampInks.count]
+        switch cover {
+        case .kiku:
+            VStack(spacing: 3) {
+                Text(verbatim: place.shortName)
+                    .font(display(15))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .minimumScaleFactor(0.5)
+                if let date = place.date {
+                    Text(verbatim: stampDate(date)).font(document(7, .medium))
+                }
+            }
+            .padding(6)
+            .frame(width: 78, height: 78)
+            .overlay { RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(tone, lineWidth: 2.5) }
+            .foregroundStyle(tone)
+            .opacity(0.88)
+        case .federal:
+            VStack(spacing: 3) {
+                Text("Admitted")
+                    .font(document(6.5, .medium))
+                    .textCase(.uppercase)
+                    .tracking(1.4)
+                Text(verbatim: place.shortName)
+                    .font(display(12))
+                    .minimumScaleFactor(0.5)
+                if let date = place.date {
+                    Text(verbatim: stampDate(date)).font(document(7, .medium))
+                }
+            }
             .lineLimit(1)
+            .padding(.vertical, 6)
+            .padding(.horizontal, 5)
+            .frame(width: 94)
+            .overlay { RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(tone, lineWidth: 2) }
+            .foregroundStyle(tone)
+            .opacity(0.85)
+        case .trailhead:
+            VStack(spacing: 2) {
+                Text(verbatim: place.shortName)
+                    .font(.system(size: 8, weight: .bold))
+                    .textCase(.uppercase)
+                    .tracking(0.6)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                if let date = place.date {
+                    Text(verbatim: stampDate(date))
+                        .font(document(8, .medium))
+                        .lineLimit(1)
+                        .padding(.vertical, 2)
+                        .overlay(alignment: .top) { Rectangle().fill(tone).frame(height: 0.8) }
+                        .overlay(alignment: .bottom) { Rectangle().fill(tone).frame(height: 0.8) }
+                }
+                if let region = region(of: place) {
+                    Text(verbatim: region)
+                        .font(.system(size: 6.5, weight: .semibold))
+                        .textCase(.uppercase)
+                        .tracking(0.8)
+                        .lineLimit(1)
+                }
+            }
             .minimumScaleFactor(0.6)
+            .padding(.horizontal, 13)
+            .frame(width: 92, height: 92)
+            .overlay { Circle().strokeBorder(tone, lineWidth: 2) }
+            .overlay { Circle().inset(by: 5).strokeBorder(tone, lineWidth: 0.8) }
+            .foregroundStyle(tone)
+            .opacity(0.85)
+        }
     }
 
-    /// Flags on the left, the profile's QR code on the right. The QR is what makes a
-    /// posted card connect: scanning it opens this profile in the app.
-    private var endorsements: some View {
-        HStack(alignment: .bottom) {
-            field("Visas") {
-                HStack(spacing: 4) {
-                    ForEach(flags, id: \.self) { flag in
-                        Text(verbatim: flag).font(.system(size: 17))
+    /// "Japan" from "Kyoto, Japan"; nil for a place saved without a region.
+    private func region(of place: VisitedPlace) -> String? {
+        let parts = place.name.split(separator: ",")
+        guard parts.count > 1 else { return nil }
+        return parts[1].trimmingCharacters(in: .whitespaces)
+    }
+
+    /// The date in the theme's stamp convention: year-first, day-first, or month-first.
+    private func stampDate(_ date: Date) -> String {
+        switch cover {
+        case .kiku:
+            let parts = Calendar.current.dateComponents([.year, .month], from: date)
+            return String(format: "%04d.%02d", parts.year ?? 0, parts.month ?? 0)
+        case .federal:
+            return date.formatted(.dateTime.day(.twoDigits).month(.abbreviated).year()).uppercased()
+        case .trailhead:
+            return date.formatted(.dateTime.month(.abbreviated).day(.twoDigits).year()).uppercased()
+        }
+    }
+
+    /// The owner's own line on the left, the profile's QR code on the right. The QR is
+    /// what makes a posted card connect: scanning it opens this profile in the app.
+    private var footer: some View {
+        HStack(alignment: .bottom, spacing: 12) {
+            field(style.personalLine.label) {
+                personalLine
+                    .font(display(11))
+                    .foregroundStyle(ink)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.7)
+            }
+            if style.showsQR, let qr = qrImage {
+                Image(uiImage: qr)
+                    .interpolation(.none)
+                    .resizable()
+                    .frame(width: 38, height: 38)
+                    .padding(3)
+                    .background(.white)
+                    .overlay(Rectangle().strokeBorder(ink.opacity(0.32), lineWidth: 0.75))
+            }
+        }
+        .padding(.top, 8)
+        .overlay(alignment: .top) { rule }
+    }
+
+    /// Travel styles, the motto, or the favorite place — a dash when the chosen one is
+    /// still empty, so the field never prints blank.
+    private var personalLine: Text {
+        switch style.personalLine {
+        case .travelStyle:
+            let styles = Array(showcase.knownStyles.prefix(2))
+            if styles.count == 2 { return Text("\(Text(styles[0].label)) · \(Text(styles[1].label))") }
+            return styles.first.map { Text($0.label) } ?? Text(verbatim: "—")
+        case .motto:
+            let motto = style.motto.trimmingCharacters(in: .whitespaces)
+            return Text(verbatim: motto.isEmpty ? "—" : motto)
+        case .favoritePlace:
+            return Text(verbatim: showcase.favoritePlace ?? "—")
+        }
+    }
+
+    /// The theme's display face, for the name, the numbers and the stamps: a Mincho, a
+    /// Baskerville, or a typewriter slab. `fixedSize`, because the card rasterizes at a
+    /// fixed size and type that grew with Dynamic Type would overflow it.
+    private func display(_ size: CGFloat) -> Font {
+        switch cover {
+        case .kiku: .custom("HiraMinProN-W6", fixedSize: size)
+        case .federal: .custom("Baskerville-Bold", fixedSize: size)
+        case .trailhead: .custom("AmericanTypewriter-Bold", fixedSize: size)
+        }
+    }
+
+    /// Kiku's ground: rows of overlapping wave crests, the pattern Japanese papers and
+    /// passports both use, held near the threshold of visibility.
+    private var waveCrests: some View {
+        Canvas { context, size in
+            let radius: CGFloat = 9
+            var path = Path()
+            var row = 0
+            for y in stride(from: CGFloat(0), through: size.height + radius, by: radius * 0.5) {
+                let shift = row.isMultiple(of: 2) ? 0 : radius
+                row += 1
+                for x in stride(from: -radius, through: size.width + radius, by: radius * 2) {
+                    for r in [radius, radius * 0.6] {
+                        path.move(to: CGPoint(x: x + shift - r, y: y))
+                        path.addArc(center: CGPoint(x: x + shift, y: y), radius: r,
+                                    startAngle: .degrees(180), endAngle: .degrees(360), clockwise: false)
                     }
                 }
             }
-            if let qr = qrImage {
-                HStack(spacing: 8) {
-                    Text("Scan to\nadd me")
-                        .font(.system(size: 7, weight: .bold))
-                        .textCase(.uppercase)
-                        .tracking(1.2)
-                        .multilineTextAlignment(.trailing)
-                        .foregroundStyle(ink.opacity(0.6))
-                    Image(uiImage: qr)
-                        .interpolation(.none)
-                        .resizable()
-                        .frame(width: 38, height: 38)
-                        .padding(3)
-                        .background(.white)
-                        .overlay(Rectangle().strokeBorder(ink.opacity(0.32), lineWidth: 0.75))
-                }
+            context.stroke(path, with: .color(cover.colors[1].opacity(0.07)), lineWidth: 0.5)
+        }
+    }
+
+    /// Trailhead's ground: contour lines ringing a summit off the page's corner.
+    private var contours: some View {
+        Canvas { context, size in
+            let summit = CGPoint(x: size.width * 0.82, y: size.height * 0.18)
+            var path = Path()
+            for radius in stride(from: CGFloat(13), through: max(size.width, size.height) * 1.2, by: 13) {
+                path.addEllipse(in: CGRect(x: summit.x - radius, y: summit.y - radius * 0.86,
+                                           width: radius * 2, height: radius * 1.72))
             }
+            context.stroke(path, with: .color(cover.colors[1].opacity(0.09)), lineWidth: 0.6)
         }
     }
 
@@ -624,17 +648,12 @@ struct ProfileShareCard: View {
         let invite = "ADDMEONTRIPSPLIT"
         let parts = Calendar.current.dateComponents([.year, .month], from: issued)
         let stamp = String(format: "%04d%02d", parts.year ?? 0, parts.month ?? 0)
-        return (pad("P<" + cover.code + encode(name), to: 44),
+        return (pad("P<TRIPSPLIT<" + encode(name), to: 44),
                 pad("TS\(serial)<\(stamp)", to: 44 - invite.count) + invite)
     }
 
-    /// A labelled field, the way a data page sets one: a tiny tracked-caps label over a
-    /// monospaced value.
-    ///
-    /// The label is bilingual because every real passport's is, and that doubled line does
-    /// much of the work of making the page read as a document. Both halves live in one
-    /// `LocalizedStringKey` so the pairing is the translator's to make — "Countries / Pays"
-    /// should become "Países / Pays" in Spanish, not keep an English first half.
+    /// A labelled field, the way a data page sets one: a tiny tracked-caps label over
+    /// its value.
     private func field<Value: View>(
         _ label: LocalizedStringKey,
         alignment: HorizontalAlignment = .leading,
@@ -769,13 +788,153 @@ struct ProfileShareCard: View {
     }
 }
 
+/// TripSplit's pin, foiled into the cover where a state passport carries its emblem.
+private struct PassportPinEmblem: View {
+    let foil: Color
+    let board: Color
+
+    var body: some View {
+        Canvas { context, size in
+            let scale = min(size.width, size.height) / 24
+            context.scaleBy(x: scale, y: scale)
+            let head = CGPoint(x: 12, y: 9.5)
+            // The head's arc is sampled rather than drawn with `addArc`, whose `clockwise`
+            // reads backwards in a flipped coordinate space.
+            var pin = Path()
+            pin.move(to: CGPoint(x: 12, y: 22))
+            for degrees in stride(from: 143.0, through: 397.0, by: 6) {
+                let angle = degrees * .pi / 180
+                pin.addLine(to: CGPoint(x: head.x + 7.1 * cos(angle), y: head.y + 7.1 * sin(angle)))
+            }
+            pin.closeSubpath()
+            context.fill(pin, with: .color(foil))
+            // The three shares the pin's head is split into.
+            var cuts = Path()
+            for end in [CGPoint(x: 12, y: 4.3), CGPoint(x: 16.4, y: 12.05), CGPoint(x: 7.6, y: 12.05)] {
+                cuts.move(to: head)
+                cuts.addLine(to: end)
+            }
+            context.stroke(cuts, with: .color(board), lineWidth: 1.2)
+            context.fill(Path(ellipseIn: CGRect(x: 10.4, y: 7.9, width: 3.2, height: 3.2)), with: .color(board))
+        }
+    }
+}
+
+/// The personal seal: an outline and a motif, drawn in one ink. Six of each, chosen by the
+/// owner or derived from their name (`PassportCardStyle.seal(for:)`), so two travelers
+/// rarely carry the same one — and never the same one with the same monogram.
+///
+/// Drawn in a 44-unit square and scaled to the view, in `Canvas` so `ImageRenderer`
+/// rasterizes it.
+struct PassportSeal: View {
+    let outline: PassportSealFrame
+    let motif: PassportSealMotif
+    let initials: String
+    let color: Color
+
+    var body: some View {
+        Canvas { context, size in
+            let scale = min(size.width, size.height) / 44
+            context.scaleBy(x: scale, y: scale)
+            let ink = GraphicsContext.Shading.color(color)
+            let line = StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round)
+
+            func polygon(_ points: [(CGFloat, CGFloat)]) -> Path {
+                var path = Path()
+                path.addLines(points.map { CGPoint(x: $0.0, y: $0.1) })
+                path.closeSubpath()
+                return path
+            }
+            func circle(_ x: CGFloat, _ y: CGFloat, _ radius: CGFloat) -> Path {
+                Path(ellipseIn: CGRect(x: x - radius, y: y - radius, width: radius * 2, height: radius * 2))
+            }
+            /// A ripple running right from `x`: `count` half-waves, alternating up and down.
+            func ripple(x: CGFloat, y: CGFloat, count: Int, step: CGFloat, height: CGFloat) -> Path {
+                var path = Path()
+                path.move(to: CGPoint(x: x, y: y))
+                for index in 0..<count {
+                    let start = x + CGFloat(index) * step
+                    path.addQuadCurve(to: CGPoint(x: start + step, y: y),
+                                      control: CGPoint(x: start + step / 2,
+                                                       y: y + (index.isMultiple(of: 2) ? -height : height)))
+                }
+                return path
+            }
+
+            switch outline {
+            case .octagon:
+                context.stroke(polygon([(40.5, 29.65), (29.65, 40.5), (14.35, 40.5), (3.5, 29.65),
+                                        (3.5, 14.35), (14.35, 3.5), (29.65, 3.5), (40.5, 14.35)]),
+                               with: ink, style: line)
+            case .ring:
+                context.stroke(circle(22, 22, 20), with: ink, style: line)
+                context.stroke(circle(22, 22, 16.5), with: ink,
+                               style: StrokeStyle(lineWidth: 1.2, lineCap: .round, dash: [0.1, 3.356]))
+            case .hexagon:
+                context.stroke(polygon([(22, 2), (39.3, 12), (39.3, 32), (22, 42), (4.7, 32), (4.7, 12)]),
+                               with: ink, style: line)
+            case .diamond:
+                context.stroke(polygon([(22, 2), (42, 22), (22, 42), (2, 22)]), with: ink, style: line)
+            case .beaded:
+                context.stroke(circle(22, 22, 19.5), with: ink,
+                               style: StrokeStyle(lineWidth: 2.6, lineCap: .round, dash: [0.1, 5.005]))
+                context.stroke(circle(22, 22, 15.5), with: ink, style: line)
+            case .shield:
+                var shield = Path()
+                shield.move(to: CGPoint(x: 22, y: 3))
+                shield.addLine(to: CGPoint(x: 38, y: 8))
+                shield.addLine(to: CGPoint(x: 38, y: 22))
+                shield.addCurve(to: CGPoint(x: 22, y: 41), control1: CGPoint(x: 38, y: 31),
+                                control2: CGPoint(x: 31, y: 38))
+                shield.addCurve(to: CGPoint(x: 6, y: 22), control1: CGPoint(x: 13, y: 38),
+                                control2: CGPoint(x: 6, y: 31))
+                shield.addLine(to: CGPoint(x: 6, y: 8))
+                shield.closeSubpath()
+                context.stroke(shield, with: ink, style: line)
+            }
+
+            // Every motif stays within 11 units of the centre, so it clears all six outlines.
+            switch motif {
+            case .monogram:
+                context.stroke(circle(22, 22, 11), with: ink,
+                               style: StrokeStyle(lineWidth: 2.6, dash: [1.2, 4.56]))
+                context.draw(Text(verbatim: initials)
+                    .font(.system(size: 7.5, weight: .bold, design: .serif))
+                    .foregroundStyle(color), at: CGPoint(x: 22, y: 22))
+            case .compass:
+                context.fill(polygon([(22, 11), (24.2, 19.8), (33, 22), (24.2, 24.2),
+                                      (22, 33), (19.8, 24.2), (11, 22), (19.8, 19.8)]), with: ink)
+            case .peak:
+                context.stroke(polygon([(12, 27), (17.5, 17.5), (21.5, 22.5), (26, 14.5), (32, 27)]),
+                               with: ink, style: line)
+                context.fill(circle(15.5, 14, 1.9), with: ink)
+                context.stroke(ripple(x: 14, y: 30.5, count: 4, step: 4, height: 1.6), with: ink, style: line)
+            case .wave:
+                for y in [17.5, 22.5, 27.5] as [CGFloat] {
+                    context.stroke(ripple(x: 12, y: y, count: 4, step: 5, height: 2.4), with: ink, style: line)
+                }
+            case .plane:
+                var plane = polygon([(12.5, 22), (31.5, 13.5), (26, 30.5), (22, 24)])
+                plane.move(to: CGPoint(x: 22, y: 24))
+                plane.addLine(to: CGPoint(x: 31.5, y: 13.5))
+                context.stroke(plane, with: ink, style: line)
+            case .night:
+                context.fill(circle(21, 22.5, 8).subtracting(circle(25, 19.5, 7)), with: ink)
+                for star in [(32, 25), (30.5, 14.5), (14, 13.5)] as [(CGFloat, CGFloat)] {
+                    context.fill(circle(star.0, star.1, 1.1), with: ink)
+                }
+            }
+        }
+    }
+}
+
 /// Renders the card, previews it, and hands it to the system share sheet. Rendering
 /// lives here rather than at the call site because this is where the cover is chosen —
 /// picking one re-renders the picture in place.
 struct ProfileShareSheet: View {
     let card: ShareCardItem
-    @AppStorage("shareCardCover") private var cover: ShareCardCover = .unitedStates
-    /// Rasterized on appear and again whenever the cover changes.
+    @AppStorage("shareCardCover") private var cover: ShareCardCover = .federal
+    /// Rasterized on appear and again whenever the theme or the owner's choices change.
     @State private var image: Image?
     /// The same picture as `UIImage`, for saving to Photos.
     @State private var rendered: UIImage?
@@ -788,7 +947,7 @@ struct ProfileShareSheet: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 28) {
+            VStack(spacing: 20) {
                 Group {
                     if let image {
                         image
@@ -809,7 +968,7 @@ struct ProfileShareSheet: View {
                 .frame(maxWidth: 306)
                 .padding(.top, 8)
 
-                // Every cover in one row under the card, so a tap restyles it in place.
+                // Every theme in one row under the card, so a tap restyles it in place.
                 HStack(spacing: 10) {
                     ForEach(ShareCardCover.allCases) { option in
                         Button { cover = option } label: { coverSwatch(option) }
@@ -818,6 +977,20 @@ struct ProfileShareSheet: View {
                             .accessibilityAddTraits(cover == option ? [.isButton, .isSelected] : .isButton)
                     }
                 }
+
+                NavigationLink {
+                    PassportCustomizeView(name: card.name, places: card.places,
+                                          statValues: statValues, cover: cover)
+                } label: {
+                    Label("Customize", systemImage: "slider.horizontal.3")
+                        .font(.app(.subheadline, .semibold))
+                        .foregroundStyle(Theme.ink)
+                        .padding(.horizontal, 18)
+                        .frame(minHeight: 44)
+                        .background(Theme.surface, in: .capsule)
+                        .overlay(Capsule().stroke(Theme.separator, lineWidth: 0.5))
+                }
+                .buttonStyle(.plain)
 
                 Spacer(minLength: 0)
 
@@ -829,16 +1002,12 @@ struct ProfileShareSheet: View {
                                   preview: SharePreview(Text(profileInvite), image: image)) {
                             Label("Share passport", systemImage: "square.and.arrow.up")
                                 .font(.app(.subheadline, .bold))
-                                .foregroundStyle(Theme.onAccent)
+                                .foregroundStyle(Theme.ink)
                                 .frame(maxWidth: .infinity)
                                 .frame(minHeight: 50)
                         }
                         .buttonStyle(.plain)
-                        .background(
-                            LinearGradient(colors: [Theme.accent, Theme.accentSecondary],
-                                           startPoint: .topLeading, endPoint: .bottomTrailing),
-                            in: .capsule
-                        )
+                        .background(Theme.accentPastel, in: .capsule)
                         .shadow(color: Theme.elevatedShadow, radius: 8, y: 4)
                     }
                     Button {
@@ -870,7 +1039,7 @@ struct ProfileShareSheet: View {
             }
             // Rendered with whatever portrait is in hand so the sheet fills immediately,
             // then again if a cloud-only avatar had to be downloaded first.
-            .task(id: cover) {
+            .task(id: RenderKey(cover: cover, showcase: store.userProfile.showcase)) {
                 didSave = false
                 render()
                 guard !didResolvePhoto else { return }
@@ -879,6 +1048,20 @@ struct ProfileShareSheet: View {
                 if photo != nil { render() }
             }
         }
+    }
+
+    /// What the picture is drawn from beyond the card's own data: a change to either
+    /// re-renders it, which is how a pick on the customize screen shows up on return.
+    private struct RenderKey: Equatable {
+        let cover: ShareCardCover
+        let showcase: ProfileShowcase
+    }
+
+    /// The card's numbers, with the bucket list counted live so it follows the profile.
+    private var statValues: [PassportStat: Int] {
+        var values = card.statValues
+        values[.bucketList] = store.userProfile.showcase.bucketList.count
+        return values
     }
 
     /// A cover in miniature: board, foil emblem, and the page with its inked header.
@@ -916,10 +1099,11 @@ struct ProfileShareSheet: View {
         let content = ProfileShareCard(
             name: card.name,
             photo: photo,
-            stats: card.stats,
             places: card.places,
             cover: cover,
-            shareURL: card.shareURL
+            shareURL: card.shareURL,
+            showcase: store.userProfile.showcase,
+            statValues: statValues
         )
         let renderer = ImageRenderer(content: content.environment(\.colorScheme, .light))
         renderer.scale = 3

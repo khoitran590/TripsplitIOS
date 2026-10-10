@@ -80,7 +80,7 @@ struct SettingsScreen: View {
 
                 settingsSection("Account") {
                     PlainSettingsRow(icon: "person.fill", title: "Personal information",
-                                     iconColor: Theme.accent) {
+                                     iconColor: Color(hex: 0x34579A)) {
                         showPersonalInfo = true
                     }
                     // The signed-in address, shown here now that it is off the Profile
@@ -88,7 +88,7 @@ struct SettingsScreen: View {
                     // with the account rows rather than in the public-facing profile.
                     PlainSettingsRow(icon: "lock.shield.fill", title: "Login & security",
                                      value: auth.email.map { Text(verbatim: $0) },
-                                     valueBelowTitle: true, iconColor: Theme.accent) {
+                                     valueBelowTitle: true, iconColor: Color(hex: 0x4A5568)) {
                         showChangePassword = true
                     }
                 }
@@ -100,43 +100,43 @@ struct SettingsScreen: View {
                         }
                     } label: {
                         PlainSettingsRow(icon: "dollarsign.arrow.circlepath", title: "Home currency",
-                                         value: Text(verbatim: displayCurrency), iconColor: Theme.accent)
+                                         value: Text(verbatim: displayCurrency), iconColor: Color(hex: 0x1F9D55))
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Home currency")
                     .accessibilityValue(Text(verbatim: displayCurrency))
                     PlainSettingsRow(icon: "creditcard.fill", title: "Default payment method",
                                      value: Text(LocalizedStringKey(defaultPaymentMethod)),
-                                     iconColor: Theme.accent) {
+                                     iconColor: Color(hex: 0xC77700)) {
                         path.append(.paymentMethod)
                     }
                     PlainSettingsRow(icon: "paintpalette.fill", title: "Appearance & theme",
                                      value: Text(appearance.label),
-                                     iconColor: Theme.accent) {
+                                     iconColor: Color(hex: 0xB043C6)) {
                         path.append(.appearance)
                     }
                     PlainSettingsRow(icon: "globe", title: "Language",
                                      value: Text(verbatim: localization.language.endonym),
-                                     iconColor: Theme.accent) {
+                                     iconColor: Color(hex: 0x0E94A8)) {
                         path.append(.language)
                     }
                 }
 
                 settingsSection("Privacy & Safety") {
                     PlainSettingsRow(icon: "hand.raised.fill", title: "Privacy & AI",
-                                     iconColor: Theme.accent) {
+                                     iconColor: Color(hex: 0x5B5BD6)) {
                         path.append(.privacyAI)
                     }
                     PlainSettingsRow(icon: "hand.raised.slash.fill", title: "Blocked accounts",
-                                     iconColor: Theme.accent) {
+                                     iconColor: Color(hex: 0xD9480F)) {
                         path.append(.blockedAccounts)
                     }
                     PlainSettingsRow(icon: "checkmark.shield.fill", title: "Community Standards",
-                                     iconColor: Theme.accent) {
+                                     iconColor: Color(hex: 0x1C8FD6)) {
                         path.append(.communityStandards)
                     }
                     PlainSettingsRow(icon: "doc.text.fill", title: "Privacy Policy",
-                                     iconColor: Theme.accent) {
+                                     iconColor: Color(hex: 0x9A7B56)) {
                         path.append(.privacyPolicy)
                     }
                 }
@@ -146,14 +146,15 @@ struct SettingsScreen: View {
                     // isn't set up and the link can't open.
                     PlainSettingsRow(icon: "envelope.fill", title: "Contact support",
                                      value: Text(verbatim: Self.supportEmail), valueBelowTitle: true,
-                                     showsChevron: false, iconColor: Theme.accent) {
+                                     showsChevron: false, iconColor: Color(hex: 0xD6457A)) {
                         openURL(supportMailURL)
                     }
                 }
 
                 PlainSettingsRow(icon: "rectangle.portrait.and.arrow.right",
                                  title: isSigningOut ? "Signing Out…" : "Sign Out",
-                                 showsChevron: false, tint: Theme.negative) {
+                                 showsChevron: false, tint: Theme.negative,
+                                 iconColor: Color(hex: 0xE5484D)) {
                     showSignOutConfirmation = true
                 }
                 .padding(.top, 8)
@@ -173,7 +174,8 @@ struct SettingsScreen: View {
                 }
 
                 PlainSettingsRow(icon: "person.crop.circle.badge.xmark", title: "Delete Account",
-                                 showsChevron: false, tint: Theme.negative) {
+                                 showsChevron: false, tint: Theme.negative,
+                                 iconColor: Color(hex: 0xB42318)) {
                     showDeleteAccount = true
                 }
                 .disabled(isSigningOut)
@@ -492,23 +494,24 @@ struct PlainSettingsRow: View {
     }
 }
 
-/// The colorful rounded-square chip behind a settings-row icon: a soft vertical
-/// gradient of the given color with a white glyph, mirroring iOS Settings so the
-/// list gets pops of color that still follow the app's theme accents.
+/// The rounded-square chip behind a settings-row icon: a flat pastel of the given
+/// color with the glyph in that color, so the list gets soft pops of color. Settings rows pass fixed hues that signal each row's
+/// function (green = money, vermilion = blocked…), so they don't follow the theme.
 struct SettingsIconBadge: View {
     let icon: String
     let color: Color
 
     var body: some View {
         RoundedRectangle(cornerRadius: 9)
-            .fill(color.gradient)
+            .fill(color.mix(with: Theme.background, by: 0.8))
             .frame(width: 32, height: 32)
             .overlay {
                 Image(systemName: icon)
                     .font(.app(size: 15, weight: .semibold))
-                    .foregroundStyle(.white)
+                    // Nudged toward black in light mode and white in dark so the glyph
+                    // keeps its hue but stays legible on its own pastel.
+                    .foregroundStyle(color.mix(with: Color(light: 0x000000, dark: 0xFFFFFF), by: 0.3))
             }
-            .shadow(color: color.opacity(0.35), radius: 4, y: 2)
     }
 }
 

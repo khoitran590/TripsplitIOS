@@ -112,7 +112,7 @@ struct SplashScreen: View {
                     .scaledToFit()
                     .frame(width: 128, height: 128)
                     .clipShape(.rect(cornerRadius: 30, style: .continuous))
-                    .shadow(color: Color(hex: 0x7699CC).opacity(0.35), radius: 18, y: 8)
+                    .shadow(color: Color(hex: 0x14213D).opacity(0.35), radius: 18, y: 8)
                     .scaleEffect(appeared ? 1 : 0.6)
                     .opacity(appeared ? 1 : 0)
 
@@ -120,12 +120,12 @@ struct SplashScreen: View {
                     Text("TripSplit")
                         .font(.app(size: 34, weight: .bold))
                         // The logo's own palette. Adaptive rather than fixed hex: the
-                        // mark's light tones (periwinkle, peach) wash out against a white
+                        // mark's light tones (cream, mango) wash out against a white
                         // background, so light mode runs the deeper half of the ramp.
                         .foregroundStyle(
                             LinearGradient(
-                                colors: [Color(light: 0x334260, dark: 0xAEB7FF),
-                                         Color(light: 0x6E8FC7, dark: 0xFFBF85)],
+                                colors: [Color(light: 0x14213D, dark: 0xFFF8EC),
+                                         Color(light: 0xB86E00, dark: 0xFCA311)],
                                 startPoint: .leading, endPoint: .trailing
                             )
                         )

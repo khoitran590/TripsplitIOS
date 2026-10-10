@@ -256,8 +256,7 @@ struct WelcomeView: View {
                             Image(systemName: "person.2.badge.gearshape.fill")
                                 .font(.app(.largeTitle, .semibold))
                                 .foregroundStyle(
-                                    LinearGradient(colors: [Theme.accent, Theme.accentSecondary],
-                                                   startPoint: .topLeading, endPoint: .bottomTrailing)
+                                    Theme.accent
                                 )
                                 .symbolEffect(.appear, options: reduceMotion ? .nonRepeating : .default)
                                 .accessibilityHidden(true)
@@ -617,8 +616,7 @@ struct ExploreOnboardingView: View {
                     Image(systemName: item.icon)
                         .font(.app(size: 64, weight: .medium))
                         .foregroundStyle(
-                            LinearGradient(colors: [Theme.accent, Theme.accentSecondary],
-                                           startPoint: .topLeading, endPoint: .bottomTrailing)
+                            Theme.accent
                         )
                         .symbolEffect(.bounce, value: page == index)
                         .accessibilityHidden(true)
@@ -949,8 +947,7 @@ struct NewUserOnboardingView: View {
                     Image(systemName: slide.icon)
                         .font(.app(size: 58, weight: .medium))
                         .foregroundStyle(
-                            LinearGradient(colors: [Theme.accent, Theme.accentSecondary],
-                                           startPoint: .topLeading, endPoint: .bottomTrailing)
+                            Theme.accent
                         )
                         .symbolEffect(.bounce, value: featurePage == index)
                         .accessibilityHidden(true)

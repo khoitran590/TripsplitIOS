@@ -68,7 +68,7 @@ struct ProfileDetailView: View {
     @State private var shareCard: ShareCardItem?
     @State private var showCoverPicker = false
     /// The passport cover share cards are printed on, shared with `ProfileShareSheet`.
-    @AppStorage("shareCardCover") private var shareCardCover: ShareCardCover = .unitedStates
+    @AppStorage("shareCardCover") private var shareCardCover: ShareCardCover = .federal
     @State private var audience: ProfileAudience = .me
     @State private var showMomentsPicker = false
     @AppStorage("displayCurrency") private var displayCurrency = "USD"
@@ -110,6 +110,20 @@ struct ProfileDetailView: View {
         stats.trips = myTrips.count
         stats.days = ProfileStats.daysAway(in: myTrips)
         return stats
+    }
+
+    /// Every number the passport card can headline, keyed by the stat the owner can pick.
+    private var passportStatValues: [PassportStat: Int] {
+        let stats = stats
+        let regions = Set(visitedPlaces.compactMap { PlaceRegion.isoCode(forRegionIn: $0.name) })
+        let companions = Set(myTrips.flatMap { $0.members.map(\.id) }).subtracting([store.currentUser.id])
+        return [
+            .countries: stats.countries, .trips: stats.trips, .days: stats.days, .places: stats.places,
+            .continents: PassportStat.continentCount(forRegionCodes: regions),
+            .travelFriends: companions.count,
+            .longestTrip: myTrips.map { ProfileStats.daysAway(in: [$0]) }.max() ?? 0,
+            .bucketList: store.userProfile.showcase.bucketList.count,
+        ]
     }
 
     /// Curated guides the user saved on Explore, resolved back to their catalog entries.
@@ -213,7 +227,7 @@ struct ProfileDetailView: View {
         .onChange(of: store.userProfile.showcase.cover, initial: true) { _, cover in
             if cover != nil {
                 shareCardCover = store.userProfile.showcase.passportCover
-            } else if shareCardCover != .unitedStates {
+            } else if shareCardCover != .federal {
                 store.updateShowcase { $0.cover = shareCardCover.rawValue }
             }
         }
@@ -271,7 +285,7 @@ struct ProfileDetailView: View {
                     name: store.currentUser.name.isEmpty ? "TripSplit User" : store.currentUser.name,
                     imageData: store.profileImageData,
                     avatarPath: store.currentUser.avatarURL,
-                    stats: stats,
+                    statValues: passportStatValues,
                     places: visitedPlaces,
                     shareURL: friends.shareURL()
                 )

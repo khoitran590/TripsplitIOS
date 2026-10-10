@@ -716,18 +716,11 @@ struct RecScreen: View {
             Button { requireAccount(.createItinerary(prefill: nil)) } label: {
                 Label("New trip", systemImage: "plus")
                     .font(.app(.subheadline, .bold))
-                    .foregroundStyle(Theme.onAccent)
+                    .foregroundStyle(Theme.ink)
                     .padding(.horizontal, 16)
                     .frame(minHeight: 42)
                     .contentShape(.capsule)
-                    .background(
-                        LinearGradient(
-                            colors: [Theme.accent, Theme.accentSecondary],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        ),
-                        in: .capsule
-                    )
+                    .background(Theme.accentPastel, in: .capsule)
                     .shadow(color: Theme.elevatedShadow, radius: 8, y: 4)
             }
             .buttonStyle(PressableStyle())

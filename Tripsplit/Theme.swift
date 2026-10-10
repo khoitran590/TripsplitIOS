@@ -717,6 +717,11 @@ enum Theme {
     /// Companion accent for two-hue gradients (follows the chosen theme).
     static var accentSecondary: Color { ThemeManager.shared.selection.accentSecondary }
 
+    /// Flat pastel fill for buttons and icon tiles: the accent washed most of the way
+    /// to the page background, so it stays soft in light mode and muted in dark mode.
+    /// Pair with `ink` for labels and `accent` for glyphs — `onAccent` is unreadable on it.
+    static var accentPastel: Color { accent.mix(with: background, by: 0.75) }
+
     /// Text and icons placed directly on the theme accent.
     static let onAccent = Color(light: 0xFFFFFF, dark: 0x101216)
 

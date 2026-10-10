@@ -43,13 +43,48 @@ final class ProfileShowcaseTests: XCTestCase {
 
     func testShowcaseRoundTrips() throws {
         var profile = UserProfile()
-        profile.showcase.cover = ShareCardCover.japan.rawValue
+        profile.showcase.cover = ShareCardCover.kiku.rawValue
         profile.showcase.homeBase = "Seattle, WA"
         profile.showcase.prompts = [ProfilePrompt(prompt: "bestMeal", answer: "Bún chả")]
         let data = try JSONEncoder().encode(profile)
         let decoded = try JSONDecoder().decode(UserProfile.self, from: data)
         XCTAssertEqual(decoded.showcase, profile.showcase)
-        XCTAssertEqual(decoded.showcase.passportCover, .japan)
+        XCTAssertEqual(decoded.showcase.passportCover, .kiku)
+    }
+
+    // MARK: Passport card
+
+    func testShowcaseWithoutCardStyleUsesDefaults() throws {
+        let showcase = try decode(ProfileShowcase.self, #"{"homeBase":"Seattle, WA"}"#)
+        XCTAssertEqual(showcase.card, PassportCardStyle())
+        XCTAssertEqual(showcase.card.headlineStats, [.countries, .trips, .days])
+        XCTAssertEqual(showcase.card.personalLine, .travelStyle)
+        XCTAssertTrue(showcase.card.showsSeal && showcase.card.showsQR && showcase.card.showsHomeBase)
+    }
+
+    func testHeadlineStatsAreAlwaysThreeDistinctKnownStats() {
+        var card = PassportCardStyle()
+        card.stats = ["places", "nope", "places"]
+        XCTAssertEqual(card.headlineStats, [.places, .countries, .trips])
+    }
+
+    func testRetiredCountryCoversFallBackToFederal() throws {
+        let showcase = try decode(ProfileShowcase.self, #"{"cover":"newZealand"}"#)
+        XCTAssertEqual(showcase.passportCover, .federal)
+        XCTAssertEqual(try decode(ProfileShowcase.self, #"{"cover":"japan"}"#).passportCover, .kiku)
+    }
+
+    func testSealIsStablePerNameAndFollowsPicks() {
+        var card = PassportCardStyle()
+        XCTAssertTrue(card.seal(for: "Sam Lee") == card.seal(for: "Sam Lee"))
+        card.sealFrame = PassportSealFrame.shield.rawValue
+        card.sealMotif = PassportSealMotif.night.rawValue
+        XCTAssertTrue(card.seal(for: "Sam Lee") == (.shield, .night))
+    }
+
+    func testContinentCount() {
+        XCTAssertEqual(PassportStat.continentCount(forRegionCodes: ["JP", "VN", "PT", "US", "ZZ"]), 3)
+        XCTAssertEqual(PassportStat.continentCount(forRegionCodes: []), 0)
     }
 
     // MARK: Privacy defaults
@@ -89,7 +124,7 @@ final class ProfileShowcaseTests: XCTestCase {
         profile.dateOfBirth = UserProfile.dobFormatter.date(from: "1996-03-14")
         profile.showcase.homeBase = "Seattle, WA"
         profile.showcase.prompts = [ProfilePrompt(prompt: "bestMeal", answer: "Pho")]
-        profile.showcase.cover = ShareCardCover.mexico.rawValue
+        profile.showcase.cover = ShareCardCover.trailhead.rawValue
         profile.visibility.bio = false
         profile.visibility.details = false
 
@@ -99,7 +134,7 @@ final class ProfileShowcaseTests: XCTestCase {
         XCTAssertEqual(preview.showcase.prompts, [])
         XCTAssertEqual(preview.showcase.homeBase, "")
         XCTAssertNil(preview.birthday, "Birthday is hidden by default")
-        XCTAssertEqual(preview.showcase.passportCover, .mexico, "The cover is always shown")
+        XCTAssertEqual(preview.showcase.passportCover, .trailhead, "The cover is always shown")
     }
 
     func testPreviewShowsBirthdayAsMonthDayWhenOn() {

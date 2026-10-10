@@ -24,6 +24,10 @@ nonisolated struct ProfileShowcase: Codable, Equatable {
     /// The user's own trip-feed photos picked for the profile. Listing a path here is
     /// what lets people outside that trip load it (`can_read_storage_attachment`).
     var moments: [ProfileMoment] = []
+    /// What the owner chose to print on their passport share card. Never sent to other
+    /// people (`profile_by_token` doesn't list it): the card is rendered on the owner's
+    /// device and shared as a picture.
+    var card = PassportCardStyle()
 
     static let fieldLimit = 60
     static let memoryLimit = 100
@@ -44,10 +48,12 @@ nonisolated struct ProfileShowcase: Codable, Equatable {
         pinnedBadges = (try? c.decodeIfPresent([String].self, forKey: .pinnedBadges)) ?? []
         bucketList = (try? c.decodeIfPresent([String].self, forKey: .bucketList)) ?? []
         moments = (try? c.decodeIfPresent([ProfileMoment].self, forKey: .moments)) ?? []
+        card = (try? c.decodeIfPresent(PassportCardStyle.self, forKey: .card)) ?? PassportCardStyle()
     }
 
-    /// The passport cover, falling back to the default for unset or unknown values.
-    @MainActor var passportCover: ShareCardCover { cover.flatMap(ShareCardCover.init(rawValue:)) ?? .unitedStates }
+    /// The passport cover, falling back to the default for unset or unknown values —
+    /// including the country covers retired when the themes replaced them.
+    @MainActor var passportCover: ShareCardCover { cover.flatMap(ShareCardCover.init(rawValue:)) ?? .federal }
 
     /// Styles this build knows, in the user's order; unknown raw values (from a newer
     /// build) are skipped rather than shown as raw keys.
@@ -80,6 +86,159 @@ nonisolated struct ProfileMoment: Codable, Hashable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         path = (try? c.decodeIfPresent(String.self, forKey: .path)) ?? ""
         caption = (try? c.decodeIfPresent(String.self, forKey: .caption)) ?? ""
+    }
+}
+
+/// The owner's passport-card customizations, stored as `showcase.card`. Every key decodes
+/// with a default, so a profile saved before the card was customizable still loads.
+nonisolated struct PassportCardStyle: Codable, Equatable {
+    /// Visited place names stamped on the card, at most `stampLimit`. Empty means the
+    /// first places on the profile.
+    var featuredPlaces: [String] = []
+    /// `PassportStat` raw values for the three headline numbers. Empty means the defaults.
+    var stats: [String] = []
+    /// `PassportLine` raw value: what the line at the foot of the page shows.
+    var line: String?
+    var motto = ""
+    /// `PassportSealFrame` / `PassportSealMotif` raw values. Nil means derived from the
+    /// traveler's name, so every card has a seal before anyone customizes one.
+    var sealFrame: String?
+    var sealMotif: String?
+    var showsHomeBase = true
+    var showsSeal = true
+    var showsQR = true
+
+    static let stampLimit = 3
+    static let mottoLimit = 40
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        featuredPlaces = (try? c.decodeIfPresent([String].self, forKey: .featuredPlaces)) ?? []
+        stats = (try? c.decodeIfPresent([String].self, forKey: .stats)) ?? []
+        line = try? c.decodeIfPresent(String.self, forKey: .line)
+        motto = (try? c.decodeIfPresent(String.self, forKey: .motto)) ?? ""
+        sealFrame = try? c.decodeIfPresent(String.self, forKey: .sealFrame)
+        sealMotif = try? c.decodeIfPresent(String.self, forKey: .sealMotif)
+        showsHomeBase = (try? c.decodeIfPresent(Bool.self, forKey: .showsHomeBase)) ?? true
+        showsSeal = (try? c.decodeIfPresent(Bool.self, forKey: .showsSeal)) ?? true
+        showsQR = (try? c.decodeIfPresent(Bool.self, forKey: .showsQR)) ?? true
+    }
+
+    /// Exactly three headline numbers: the owner's picks this build knows, without
+    /// repeats, topped up from the defaults.
+    var headlineStats: [PassportStat] {
+        var picked: [PassportStat] = []
+        for stat in stats.compactMap(PassportStat.init(rawValue:)) + PassportStat.defaults
+        where !picked.contains(stat) {
+            picked.append(stat)
+        }
+        return Array(picked.prefix(3))
+    }
+
+    var personalLine: PassportLine { line.flatMap(PassportLine.init(rawValue:)) ?? .travelStyle }
+
+    /// The seal's frame and motif: the owner's picks, else a pair derived from `name`
+    /// (djb2, the stable hash the card's serial uses) so re-sharing prints the same seal.
+    func seal(for name: String) -> (frame: PassportSealFrame, motif: PassportSealMotif) {
+        var hash: UInt64 = 5381
+        for scalar in name.unicodeScalars { hash = hash &* 33 &+ UInt64(scalar.value) }
+        let frames = PassportSealFrame.allCases, motifs = PassportSealMotif.allCases
+        return (sealFrame.flatMap(PassportSealFrame.init(rawValue:)) ?? frames[Int(hash % UInt64(frames.count))],
+                sealMotif.flatMap(PassportSealMotif.init(rawValue:))
+                    ?? motifs[Int((hash / UInt64(frames.count)) % UInt64(motifs.count))])
+    }
+}
+
+/// A number the passport card can headline. Raw values are persisted — never rename one.
+nonisolated enum PassportStat: String, CaseIterable, Identifiable {
+    case countries, trips, days, places, continents, travelFriends, longestTrip, bucketList
+
+    static let defaults: [PassportStat] = [.countries, .trips, .days]
+
+    var id: Self { self }
+
+    var label: LocalizedStringKey {
+        switch self {
+        case .countries: "Countries"
+        case .trips: "Trips"
+        case .days: "Days away"
+        case .places: "Places"
+        case .continents: "Continents"
+        case .travelFriends: "Travel friends"
+        case .longestTrip: "Longest trip (days)"
+        case .bucketList: "On the bucket list"
+        }
+    }
+
+    /// ISO 3166 region codes by continent, for the `continents` count.
+    private static let regionsByContinent: [String] = [
+        "DZ AO BJ BW BF BI CM CV CF TD KM CG CD CI DJ EG GQ ER SZ ET GA GM GH GN GW KE LS LR LY MG MW ML MR MU MA MZ NA NE NG RW ST SN SC SL SO ZA SS SD TZ TG TN UG ZM ZW RE",
+        "AF AM AZ BH BD BT BN KH CN CY GE HK IN ID IR IQ IL JP JO KZ KW KG LA LB MO MY MV MN MM NP KP OM PK PS PH QA SA SG KR LK SY TW TJ TH TL TR TM AE UZ VN YE",
+        "AL AD AT BY BE BA BG HR CZ DK EE FI FR DE GR HU IS IE IT XK LV LI LT LU MT MD MC ME NL MK NO PL PT RO RU SM RS SK SI ES SE CH UA GB VA GI FO",
+        "AG BS BB BZ CA CR CU DM DO SV GD GT HT HN JM MX NI PA KN LC VC TT US PR GL BM KY AW CW VI TC",
+        "AR BO BR CL CO EC GY PY PE SR UY VE GF",
+        "AU FJ KI MH FM NR NZ PW PG WS SB TO TV VU PF NC GU CK",
+        "AQ",
+    ]
+
+    /// How many continents the given region codes fall on. Unknown codes count nothing.
+    static func continentCount(forRegionCodes codes: Set<String>) -> Int {
+        regionsByContinent.count { continent in
+            !codes.isDisjoint(with: continent.split(separator: " ").map(String.init))
+        }
+    }
+}
+
+/// What the line at the foot of the passport page shows. Raw values are persisted.
+nonisolated enum PassportLine: String, CaseIterable, Identifiable {
+    case travelStyle, motto, favoritePlace
+
+    var id: Self { self }
+
+    var label: LocalizedStringKey {
+        switch self {
+        case .travelStyle: "Travel style"
+        case .motto: "Motto"
+        case .favoritePlace: "Favorite place"
+        }
+    }
+}
+
+/// The outline of the personal seal. Raw values are persisted.
+nonisolated enum PassportSealFrame: String, CaseIterable, Identifiable {
+    case octagon, ring, hexagon, diamond, beaded, shield
+
+    var id: Self { self }
+
+    var label: LocalizedStringKey {
+        switch self {
+        case .octagon: "Octagon"
+        case .ring: "Ring"
+        case .hexagon: "Hexagon"
+        case .diamond: "Diamond"
+        case .beaded: "Beaded ring"
+        case .shield: "Shield"
+        }
+    }
+}
+
+/// What the personal seal carries inside its frame. Raw values are persisted.
+nonisolated enum PassportSealMotif: String, CaseIterable, Identifiable {
+    case monogram, compass, peak, wave, plane, night
+
+    var id: Self { self }
+
+    var label: LocalizedStringKey {
+        switch self {
+        case .monogram: "Monogram"
+        case .compass: "Compass"
+        case .peak: "Mountains"
+        case .wave: "Waves"
+        case .plane: "Paper plane"
+        case .night: "Night sky"
+        }
     }
 }
 

@@ -550,15 +550,9 @@ struct ItineraryPlannerSection: View {
                     HStack(spacing: 14) {
                         Image(systemName: "map.fill")
                             .font(.app(.title2))
-                            .foregroundStyle(Theme.onAccent)
+                            .foregroundStyle(Theme.accent)
                             .frame(width: 52, height: 52)
-                            .background(
-                                LinearGradient(
-                                    colors: [Theme.accent, Theme.accentSecondary],
-                                    startPoint: .topLeading, endPoint: .bottomTrailing
-                                ),
-                                in: .rect(cornerRadius: 16)
-                            )
+                            .background(Theme.accentPastel, in: .rect(cornerRadius: 16))
                         VStack(alignment: .leading, spacing: 3) {
                             Text("Build your own itinerary")
                                 .font(Theme.Typography.rowTitle)
@@ -1466,19 +1460,16 @@ struct ItineraryDetailView: View {
                                     .font(.app(.title3, .bold))
                             }
                             Circle()
-                                .fill(isOn ? Theme.onAccent : (hasStops ? Theme.accent : Theme.separator))
+                                .fill(isOn ? Theme.ink : (hasStops ? Theme.accent : Theme.separator))
                                 .frame(width: 5, height: 5)
                                 .padding(.top, 2)
                         }
                         .monospacedDigit()
-                        .foregroundStyle(isOn ? Theme.onAccent : .primary)
+                        .foregroundStyle(isOn ? Theme.ink : .primary)
                         .frame(width: 56, height: 68)
                         .background {
                             if isOn {
-                                LinearGradient(
-                                    colors: [Theme.accent, Theme.accentSecondary],
-                                    startPoint: .topLeading, endPoint: .bottomTrailing
-                                )
+                                Theme.accentPastel
                             } else {
                                 Theme.surface
                             }
@@ -1648,19 +1639,13 @@ struct ItineraryDetailView: View {
             } label: {
                 Label("Add stop", systemImage: "plus")
                     .font(.app(.subheadline, .bold))
-                    .foregroundStyle(Theme.onAccent)
+                    .foregroundStyle(Theme.ink)
                     .frame(maxWidth: .infinity)
                     .frame(height: 46)
                     .contentShape(.capsule)
             }
             .buttonStyle(.plain)
-            .background(
-                LinearGradient(
-                    colors: [Theme.accent, Theme.accentSecondary],
-                    startPoint: .leading, endPoint: .trailing
-                ),
-                in: .capsule
-            )
+            .background(Theme.accentPastel, in: .capsule)
             .shadow(color: Theme.elevatedShadow, radius: 8, y: 4)
             .padding(.top, 4)
         }
@@ -1794,19 +1779,13 @@ struct ItineraryDetailView: View {
                     } label: {
                         Label("Use this plan", systemImage: "checkmark")
                             .font(.app(.subheadline, .bold))
-                            .foregroundStyle(Theme.onAccent)
+                            .foregroundStyle(Theme.ink)
                             .frame(maxWidth: .infinity)
                             .frame(height: 46)
                             .contentShape(.capsule)
                     }
                     .buttonStyle(.plain)
-                    .background(
-                        LinearGradient(
-                            colors: [Theme.accent, Theme.accentSecondary],
-                            startPoint: .leading, endPoint: .trailing
-                        ),
-                        in: .capsule
-                    )
+                    .background(Theme.accentPastel, in: .capsule)
 
                     Button {
                         generateSuggestion(trip, itinerary)
@@ -1855,19 +1834,13 @@ struct ItineraryDetailView: View {
                 } label: {
                     Label("Draft a plan", systemImage: "sparkles")
                         .font(.app(.subheadline, .bold))
-                        .foregroundStyle(Theme.onAccent)
+                        .foregroundStyle(Theme.ink)
                         .frame(maxWidth: .infinity)
                         .frame(height: 46)
                         .contentShape(.capsule)
                 }
                 .buttonStyle(.plain)
-                .background(
-                    LinearGradient(
-                        colors: [Theme.accent, Theme.accentSecondary],
-                        startPoint: .leading, endPoint: .trailing
-                    ),
-                    in: .capsule
-                )
+                .background(Theme.accentPastel, in: .capsule)
                 .disabled(isGeneratingPlan || isAICoolingDown)
             }
 
