@@ -30,12 +30,12 @@ struct FloatingDock: View {
         Group {
             if dynamicTypeSize.isAccessibilitySize {
                 ScrollView(.horizontal) {
-                    dockButtons
+                    tabRow
                         .fixedSize(horizontal: true, vertical: false)
                 }
                 .scrollIndicators(.hidden)
             } else {
-                dockButtons
+                tabRow
             }
         }
         .padding(6)
@@ -59,12 +59,9 @@ struct FloatingDock: View {
         }
         .overlay {
             Capsule()
-                .strokeBorder(
-                    Theme.separator.opacity(softElevation && colorSchemeContrast != .increased ? 0 : 0.95 * backgroundVisibility),
-                    lineWidth: 1
-                )
+                .strokeBorder(borderColor, lineWidth: 1)
         }
-        .shadow(color: .black.opacity(softElevation ? 0 : 0.14 * backgroundVisibility), radius: 14, y: 6)
+        .shadow(color: .black.opacity(shadowOpacity * backgroundVisibility), radius: softElevation ? 14 : 20, y: 6)
         .frame(maxWidth: .infinity)
         .animation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(response: 0.38, dampingFraction: 0.82), value: selectedTab)
         .animation(.snappy, value: navbarTransparency)
@@ -88,6 +85,62 @@ struct FloatingDock: View {
                 }
         )
         .accessibilityHint("Swipe left or right on the dock to change tabs")
+    }
+
+    /// Light mode floats on shadow alone; dark mode needs a faint rim to separate the
+    /// dock from dark map tiles. Increased contrast always gets the full separator.
+    private var borderColor: Color {
+        if colorSchemeContrast == .increased { return Theme.separator.opacity(0.95 * backgroundVisibility) }
+        if softElevation { return .clear }
+        return colorScheme == .dark ? .white.opacity(0.08 * backgroundVisibility) : .clear
+    }
+
+    private var shadowOpacity: Double {
+        if softElevation { return 0 }
+        return colorScheme == .dark ? 0.35 : 0.08
+    }
+
+    /// Wabi-Sabi keeps its labelled, pressed-well dock; every other theme uses the
+    /// minimal icon row.
+    @ViewBuilder
+    private var tabRow: some View {
+        if softElevation {
+            dockButtons
+        } else {
+            minimalDockButtons
+        }
+    }
+
+    /// Line icons with only the active tab filled and labelled, so the dock reads as
+    /// one quiet object rather than four buttons.
+    private var minimalDockButtons: some View {
+        HStack(spacing: 2) {
+            ForEach(DockTab.allCases, id: \.self) { tab in
+                let isActive = tab == selectedTab
+
+                Button { select(tab) } label: {
+                    VStack(spacing: 2) {
+                        Image(systemName: tab.outlineSystemImage)
+                            .symbolVariant(isActive ? .fill : .none)
+                            .font(.app(.body, isActive ? .semibold : .regular))
+                        if isActive {
+                            Text(LocalizedStringKey(tab.rawValue))
+                                .font(.app(.caption2, .semibold))
+                                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+                                .minimumScaleFactor(dynamicTypeSize.isAccessibilitySize ? 1 : 0.85)
+                                .transition(.opacity.combined(with: .scale(scale: 0.85, anchor: .top)))
+                        }
+                    }
+                    .foregroundStyle(colorSchemeContrast == .increased ? highContrastInk : (isActive ? Theme.ink : Theme.textSecondary))
+                    .frame(minWidth: 56, minHeight: 44)
+                    .padding(.horizontal, 4)
+                    .contentShape(.capsule)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text(LocalizedStringKey(tab.rawValue)))
+                .accessibilityAddTraits(isActive ? .isSelected : [])
+            }
+        }
     }
 
     private var dockButtons: some View {

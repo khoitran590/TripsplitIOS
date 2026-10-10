@@ -10,6 +10,8 @@ struct TripDetailView: View {
     @Environment(AuthStore.self) private var auth
     let tripID: Trip.ID
 
+    @State private var exportToShare: TripShareContent?
+    @State private var exportError: String?
     @State private var showAddExpense = false
     @State private var showEditTrip = false
     @State private var showSignInAlert = false
@@ -135,6 +137,17 @@ struct TripDetailView: View {
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: TripPage.self) { page in
                 tripPage(page)
+            }
+            .sheet(item: $exportToShare) { content in
+                TripActivitySheet(content: content)
+            }
+            .alert("Couldn't export report", isPresented: Binding(
+                get: { exportError != nil },
+                set: { if !$0 { exportError = nil } }
+            )) {
+                Button("OK", role: .cancel) { exportError = nil }
+            } message: {
+                Text(exportError ?? "")
             }
             .sheet(isPresented: $showSignInAlert) {
                 AuthenticationSheet(reason: "Sign in to update this shared trip.")
@@ -285,16 +298,19 @@ struct TripDetailView: View {
                     }
                 }
                 Menu {
-                    ShareLink(item: TripExport.text(trip)) {
+                    Button {
+                        exportToShare = TripShareContent(text: TripExport.text(trip))
+                    } label: {
                         Label("Share summary as text", systemImage: "text.alignleft")
                     }
-                    ShareLink(
-                        item: TripReportPDF(trip: trip),
-                        preview: SharePreview(
-                            TripReportPDF.fileName(for: trip),
-                            image: Image(systemName: "doc.richtext")
-                        )
-                    ) {
+                    Button {
+                        do {
+                            let file = try TripReportPDF(trip: trip).writeFile()
+                            exportToShare = TripShareContent(file: file)
+                        } catch {
+                            exportError = String(localized: "The PDF couldn't be created. Please try exporting again.")
+                        }
+                    } label: {
                         Label("Export PDF report", systemImage: "doc.richtext")
                     }
                 } label: {

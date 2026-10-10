@@ -1,21 +1,14 @@
 import SwiftUI
 import UIKit
-import UniformTypeIdentifiers
 
 // MARK: - Shareable PDF expense report
 
 /// A PDF expense report for people who don't have the app: who pays whom, each
 /// person's balance, and the expense-by-expense breakdown behind those numbers.
-/// The file is rendered only when a share destination asks for it, so placing a
-/// `ShareLink` for it costs nothing until the user actually exports.
-nonisolated struct TripReportPDF: Transferable {
+/// Generate the file before presenting the share sheet so every destination receives
+/// an existing PDF URL rather than having to request a deferred representation.
+nonisolated struct TripReportPDF {
     let trip: Trip
-
-    static var transferRepresentation: some TransferRepresentation {
-        FileRepresentation(exportedContentType: .pdf) { report in
-            SentTransferredFile(try await MainActor.run { try report.writeFile() })
-        }
-    }
 
     @MainActor
     static func fileName(for trip: Trip) -> String {
@@ -28,7 +21,7 @@ nonisolated struct TripReportPDF: Transferable {
     /// Writes the report into its own temporary folder so the shared file carries the
     /// trip's name and repeated exports never collide.
     @MainActor
-    private func writeFile() throws -> URL {
+    func writeFile() throws -> URL {
         let folder = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -99,6 +92,14 @@ struct TripReport {
 
     func name(_ id: Person.ID) -> String {
         trip.members.first { $0.id == id }.map(Self.displayName) ?? String(localized: "Unknown")
+    }
+
+    /// Outstanding transfers after confirmed payments, matching the trip's settle-up UI.
+    func remainingBalance(for personID: Person.ID) -> Double {
+        SplitEngine.roundToTwo(payments.reduce(0) { result, payment in
+            result + (payment.settlement.to.id == personID ? payment.remaining : 0)
+                - (payment.settlement.from.id == personID ? payment.remaining : 0)
+        })
     }
 
     func balanceText(_ balance: Double) -> String {
@@ -175,7 +176,7 @@ enum TripReportRenderer {
             return
         }
         canvas.paragraph(
-            String(localized: "Balances are combined so the group settles up with as few payments as possible."),
+            String(localized: "Suggested transfers simplify group debts. Only confirmed payments reduce the amount still owed; pending and rejected payments do not."),
             font: .systemFont(ofSize: 10), color: .reportSecondary, after: 8
         )
         canvas.table(
@@ -201,7 +202,7 @@ enum TripReportRenderer {
     private static func drawBalances(_ report: TripReport, on canvas: ReportCanvas) {
         canvas.section(String(localized: "Balances by person"))
         canvas.paragraph(
-            String(localized: "Paid is what each person covered for the group; share is their part of the costs."),
+            String(localized: "Paid is what each person covered for expenses; share is their part of the costs. Balance is what remains after confirmed settlement payments."),
             font: .systemFont(ofSize: 10), color: .reportSecondary, after: 8
         )
         canvas.table(
@@ -216,7 +217,7 @@ enum TripReportRenderer {
                     TripReport.displayName(summary.person),
                     report.money(summary.paid),
                     report.money(summary.share),
-                    report.balanceText(summary.balance),
+                    report.balanceText(report.remainingBalance(for: summary.person.id)),
                 ]
             },
             total: [
@@ -239,7 +240,7 @@ enum TripReportRenderer {
             let paid = report.money(summary.paid)
             let share = report.money(summary.share)
             canvas.paragraph(
-                String(localized: "Paid \(paid) · Share \(share) · \(report.balanceText(summary.balance))"),
+                String(localized: "Paid \(paid) · Share \(share) · \(report.balanceText(report.remainingBalance(for: summary.person.id)))"),
                 font: .systemFont(ofSize: 10), color: .reportSecondary, after: 6
             )
             if summary.lines.isEmpty {

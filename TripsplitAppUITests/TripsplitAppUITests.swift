@@ -34,6 +34,29 @@ final class TripsplitAppUITests: XCTestCase {
         try performAccessibilityAudit()
     }
 
+    func testTripExportsPresentNativeShareSheet() throws {
+        launchDemoTrip(theme: "classic")
+        for action in ["Export PDF report", "Share summary as text"] {
+            let share = app.buttons["Share trip summary"]
+            if !share.isHittable { app.swipeDown() }
+            XCTAssertTrue(share.waitForExistence(timeout: 5))
+            share.tap()
+            let option = app.buttons[action]
+            XCTAssertTrue(option.waitForExistence(timeout: 5))
+            option.tap()
+            let copy = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Copy")).firstMatch
+            XCTAssertTrue(copy.waitForExistence(timeout: 10), "Share sheet didn't open for \(action)")
+            if action == "Export PDF report" {
+                XCTAssertTrue(app.otherElements["Tokyo Together Expense Report"].exists)
+                XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Save to Files")).firstMatch.exists)
+            }
+            captureDesignScreen(action)
+            // Copy completes the activity and dismisses the sheet for the next export.
+            copy.tap()
+            XCTAssertTrue(share.waitForExistence(timeout: 5))
+        }
+    }
+
     func testTripOverviewDestinationsKeepHistoryAndEditingAccessible() throws {
         launchDemoTrip(theme: "classic")
 

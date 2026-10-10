@@ -102,6 +102,16 @@ enum DockTab: String, CaseIterable, Identifiable, Hashable {
         case .profile: "person.fill"
         }
     }
+
+    /// Base symbol for the minimal dock, which fills it only while the tab is active.
+    var outlineSystemImage: String {
+        switch self {
+        case .explore: "sparkles"
+        case .map: "map"
+        case .trips: "suitcase"
+        case .profile: "person"
+        }
+    }
 }
 
 struct ContentView: View {

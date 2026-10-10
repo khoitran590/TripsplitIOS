@@ -971,6 +971,71 @@ final class TripsplitAppTests: XCTestCase {
         XCTAssertEqual(TripReportPDF.fileName(for: trip), "Weekend Away Expense Report.pdf")
     }
 
+    func testExportsSubtractOnlyConfirmedPayments() throws {
+        let dinner = Expense(title: "Dinner", amount: 60, payerID: alice.id,
+                             participantIDs: [alice.id, bob.id], date: .now, shares: [alice.id: 30, bob.id: 30])
+        let settlement = Settlement(from: bob, to: alice, amount: 30)
+        var trip = Trip(name: "Dinner trip", currencyCode: "USD", creatorID: alice.id,
+                        members: [alice, bob], budgets: [:], expenses: [dinner])
+        trip.settlementRecords[settlement.id] = [
+            SettlementRecord(amount: 10, method: .cash, note: "", status: .confirmed, date: .now),
+            SettlementRecord(amount: 5, method: .cash, note: "", status: .pending, date: .now),
+            SettlementRecord(amount: 5, method: .cash, note: "", status: .rejected, date: .now)
+        ]
+        let report = TripReport(trip: trip)
+        XCTAssertEqual(report.payments.first?.remaining, 20)
+        XCTAssertEqual(report.remainingBalance(for: bob.id), -20)
+        let text = TripExport.text(trip)
+        XCTAssertTrue(text.contains("Bob owes Alice: $20.00"))
+        XCTAssertTrue(text.contains("Confirmed paid: $10.00"))
+        XCTAssertTrue(text.contains("Share of costs: $30.00"))
+        XCTAssertTrue(text.contains("Owes $20.00"))
+        let pdf = try XCTUnwrap(PDFDocument(data: TripReportRenderer.data(for: report))?.string)
+        XCTAssertTrue(pdf.contains("Owes $20.00"))
+        XCTAssertFalse(pdf.contains("Owes $30.00"))
+
+        trip.settlementRecords[settlement.id] = [
+            SettlementRecord(amount: 30, method: .cash, note: "", status: .confirmed, date: .now)
+        ]
+        XCTAssertTrue(TripExport.text(trip).contains("Everyone is settled up"))
+        XCTAssertEqual(TripReport(trip: trip).remainingBalance(for: bob.id), 0)
+    }
+
+    func testPDFExportWritesRealFileAndPreservesMultipageExpenses() throws {
+        let expenses = (1...45).map { index in
+            Expense(title: "Expense \(index)", amount: 60, payerID: alice.id,
+                    participantIDs: [alice.id, bob.id],
+                    date: Date(timeIntervalSince1970: Double(index) * 86400))
+        }
+        let trip = Trip(name: "Weekend / Away", currencyCode: "USD", creatorID: alice.id,
+                        members: [alice, bob], budgets: [:], expenses: expenses)
+        let url = try TripReportPDF(trip: trip).writeFile()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        XCTAssertEqual(url.pathExtension, "pdf")
+        XCTAssertEqual(url.lastPathComponent, "Weekend - Away Expense Report.pdf")
+        let data = try Data(contentsOf: url)
+        XCTAssertTrue(data.starts(with: Data("%PDF-".utf8)))
+        let document = try XCTUnwrap(PDFDocument(data: data))
+        XCTAssertGreaterThan(document.pageCount, 1)
+        let text = try XCTUnwrap(document.string)
+        for expected in ["WHO PAYS WHOM", "Bob", "Alice", "ALL EXPENSES", "Expense 1", "Expense 45"] {
+            XCTAssertTrue(text.contains(expected), "Missing \(expected)")
+        }
+        XCTAssertTrue(TripShareContent(file: url).activityItems.first is URL)
+        XCTAssertTrue(TripShareContent(text: TripExport.text(trip)).activityItems.first is String)
+        let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "com.adobe.pdf")
+        attachment.name = "Expense report"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        for index in 0..<document.pageCount {
+            let page = try XCTUnwrap(document.page(at: index))
+            let preview = XCTAttachment(image: page.thumbnail(of: CGSize(width: 918, height: 1188), for: .mediaBox))
+            preview.name = "Expense report page \(index + 1)"
+            preview.lifetime = .keepAlways
+            add(preview)
+        }
+    }
+
     private func calculate(
         total: Double, method: SplitMethod, people: [Person], selected: Set<Person.ID>,
         assignee: Person.ID? = nil, percentages: [Person.ID: Double] = [:], amounts: [Person.ID: Double] = [:]

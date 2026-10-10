@@ -5,14 +5,12 @@ import Foundation
 /// receiving apps strip rich formatting.
 enum TripExport {
     static func text(_ trip: Trip) -> String {
-        let expenses = trip.expenses.sorted {
-            if $0.date != $1.date { return $0.date < $1.date }
-            return $0.id.uuidString < $1.id.uuidString
-        }
-        let totalSpent = SplitEngine.roundToTwo(expenses.reduce(0) { $0 + $1.amount })
+        let report = TripReport(trip: trip)
+        let expenses = report.expenses
+        let totalSpent = report.totalSpent
         let budgets = trip.members.filter { trip.budget(for: $0.id) > 0.005 }
 
-        var lines = ["TRIPSPLIT", displayTripName(trip)]
+        var lines = [String(localized: "TRIPSPLIT EXPENSE SUMMARY"), displayTripName(trip)]
         if let location = trip.location?.trimmingCharacters(in: .whitespacesAndNewlines),
            !location.isEmpty {
             lines.append("📍 \(location)")
@@ -26,6 +24,31 @@ enum TripExport {
         lines.append(labeled("Travelers", String(trip.members.count)))
         lines.append(labeled("Expenses", String(expenses.count)))
         lines.append(labeled("Currency", trip.currencyCode))
+
+        appendSection(String(localized: "SETTLE UP · WHO PAYS WHOM"), to: &lines)
+        let openPayments = report.payments.filter { $0.remaining > 0.005 }
+        if expenses.isEmpty {
+            lines.append(String(localized: "No expenses recorded. No payments are needed."))
+        } else if openPayments.isEmpty {
+            lines.append(String(localized: "Everyone is settled up. No payments are needed."))
+        } else {
+            for payment in openPayments {
+                let settlement = payment.settlement
+                let direction = String(localized: "\(displayName(settlement.from)) owes \(displayName(settlement.to))")
+                lines.append("• \(direction): \(report.money(payment.remaining))")
+                if payment.paid > 0.005 {
+                    lines.append("  \(String(localized: "Confirmed paid")): \(report.money(payment.paid)) · \(String(localized: "Original amount")): \(report.money(settlement.amount))")
+                }
+            }
+        }
+        lines.append(String(localized: "Suggested transfers simplify group debts. Only confirmed payments reduce the amounts due."))
+
+        appendSection(String(localized: "BALANCES BY PERSON"), to: &lines)
+        for person in report.people {
+            lines.append("• \(displayName(person.person))")
+            lines.append("  \(labeled("Paid for expenses", report.money(person.paid))) · \(labeled("Share of costs", report.money(person.share)))")
+            lines.append("  \(report.balanceText(report.remainingBalance(for: person.person.id)))")
+        }
 
         if !budgets.isEmpty {
             appendSection(String(localized: "BUDGETS"), to: &lines)
@@ -41,22 +64,6 @@ enum TripExport {
             for (index, expense) in expenses.enumerated() {
                 if index > 0 { lines.append("") }
                 appendExpense(expense, number: index + 1, trip: trip, to: &lines)
-            }
-        }
-
-        appendSection(String(localized: "SETTLE UP"), to: &lines)
-        let openSettlements = trip.settlements().compactMap { settlement -> (Settlement, Double)? in
-            let remaining = remainingAmount(for: settlement, in: trip)
-            return remaining > 0.005 ? (settlement, remaining) : nil
-        }
-        if openSettlements.isEmpty {
-            lines.append("✓ \(String(localized: "Everyone is settled up"))")
-        } else {
-            for (settlement, remaining) in openSettlements {
-                let direction = String(
-                    localized: "\(displayName(settlement.from)) pays \(displayName(settlement.to))"
-                )
-                lines.append("• \(direction): \(money(remaining, trip.currencyCode))")
             }
         }
 
@@ -116,14 +123,6 @@ enum TripExport {
                 lines.append("     • \(displayName(member)): \(money(share, trip.currencyCode))")
             }
         }
-    }
-
-    private static func remainingAmount(for settlement: Settlement, in trip: Trip) -> Double {
-        let key = "\(settlement.from.id.uuidString)->\(settlement.to.id.uuidString)"
-        let confirmed = (trip.settlementRecords[key] ?? [])
-            .filter { $0.status == .confirmed }
-            .reduce(0.0) { $0 + $1.amount }
-        return max(0, SplitEngine.roundToTwo(settlement.amount - confirmed))
     }
 
     private static func appendSection(_ title: String, to lines: inout [String]) {

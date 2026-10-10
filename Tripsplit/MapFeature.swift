@@ -122,6 +122,9 @@ struct MapScreen: View {
     @State private var searchFeedback: String?
     @State private var showsSavedPlaces = false
     @State private var showsSavedList = false
+    @State private var showsMapFilters = false
+    /// Set from the filter sheet so the saved list opens once that sheet has dismissed.
+    @State private var opensSavedListAfterFilters = false
     @State private var itineraryPlace: MapPlace?
     @State private var correctingStop: ItineraryStop?
     /// `nil` represents All trips.
@@ -324,6 +327,16 @@ struct MapScreen: View {
                 isSaved: savedBinding(for: place),
                 onAddToItinerary: { itineraryPlace = place }
             )
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showsMapFilters, onDismiss: {
+            if opensSavedListAfterFilters {
+                opensSavedListAfterFilters = false
+                showsSavedList = true
+            }
+        }) {
+            mapFiltersSheet
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
@@ -545,21 +558,34 @@ struct MapScreen: View {
                 .animation(.easeInOut(duration: 0.2), value: showsSearchThisArea)
         }
         .overlay(alignment: .trailing) {
-            if userHasMovedMap, selectedTripID != nil, mapModel.focus == nil {
+            VStack(spacing: 10) {
+                if userHasMovedMap, selectedTripID != nil, mapModel.focus == nil {
+                    Button {
+                        userHasMovedMap = false
+                        fitTripCamera(force: true)
+                    } label: {
+                        Image(systemName: "scope")
+                            .font(.app(.body, .semibold))
+                            .frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .mapControlSurface(in: .circle)
+                    .accessibilityLabel("Recenter trip")
+                }
                 Button {
-                    userHasMovedMap = false
-                    fitTripCamera(force: true)
+                    locationManager.locate()
                 } label: {
-                    Image(systemName: "scope")
+                    Image(systemName: "location")
                         .font(.app(.body, .semibold))
+                        .foregroundStyle(Theme.accent)
                         .frame(width: 44, height: 44)
                 }
                 .buttonStyle(.plain)
-                .glassEffect(.regular.interactive(), in: .circle)
-                .padding(.trailing, 14)
-                .offset(y: 55)
-                .accessibilityLabel("Recenter trip")
+                .mapControlSurface(in: .circle)
+                .accessibilityLabel("Near me")
             }
+            .padding(.trailing, 14)
+            .offset(y: 55)
         }
         .overlay(alignment: .bottom) {
             bottomCard
@@ -608,6 +634,7 @@ struct MapScreen: View {
     /// chip rail, and the "Search this area" button — all floating over the map.
     private var topControls: some View {
         VStack(spacing: 10) {
+            if mapModel.focus != nil || (selectedTripID != nil && selectedItinerary != nil) {
             HStack {
                 if mapModel.focus != nil {
                     Button {
@@ -624,33 +651,9 @@ struct MapScreen: View {
                             .frame(width: 38, height: 38)
                     }
                     .buttonStyle(.plain)
-                    .glassEffect(.regular.interactive(), in: .circle)
+                    .mapControlSurface(in: .circle)
                 }
                 Spacer()
-
-                Menu {
-                    Button {
-                        selectTrip(nil)
-                    } label: {
-                        if selectedTripID == nil { Label("All trips", systemImage: "checkmark") }
-                        else { Text("All trips") }
-                    }
-                    ForEach(store.myTrips) { trip in
-                        Button {
-                            selectTrip(trip.id)
-                        } label: {
-                            if selectedTripID == trip.id { Label(trip.name, systemImage: "checkmark") }
-                            else { Text(trip.name) }
-                        }
-                    }
-                } label: {
-                    Label(selectedTripName, systemImage: "suitcase.rolling")
-                        .font(.app(.subheadline, .semibold))
-                        .padding(.horizontal, 13)
-                        .frame(height: 38)
-                }
-                .buttonStyle(.plain)
-                .glassEffect(.regular.interactive(), in: .capsule)
 
                 if let selectedTripID, selectedItinerary != nil {
                     Button {
@@ -667,7 +670,7 @@ struct MapScreen: View {
                             .frame(height: 38)
                     }
                     .buttonStyle(.plain)
-                    .glassEffect(.regular.interactive(), in: .capsule)
+                    .mapControlSurface(in: .capsule)
                     .accessibilityLabel(Text("Open \(selectedTripName) in Explore"))
                 }
             }
@@ -677,8 +680,9 @@ struct MapScreen: View {
                         .font(.app(.subheadline, .semibold))
                         .padding(.horizontal, 14)
                         .padding(.vertical, 9)
-                        .glassEffect(.regular, in: .capsule)
+                        .mapControlSurface(in: .capsule, interactive: false)
                 }
+            }
             }
 
             searchBar
@@ -689,8 +693,20 @@ struct MapScreen: View {
                 recentSearchChips
             }
 
-            if let category = activeCategory {
-                exploringPill(category)
+            if activeCategory != nil {
+                HStack {
+                    Button {
+                        openNowOnly.toggle()
+                        startCategorySearch()
+                    } label: {
+                        Label("Open now", systemImage: "clock")
+                            .mapChipLabel()
+                    }
+                    .buttonStyle(.plain)
+                    .mapChipSurface(isSelected: openNowOnly)
+                    .accessibilityAddTraits(openNowOnly ? .isSelected : [])
+                    Spacer(minLength: 0)
+                }
             } else {
                 categoryChips
             }
@@ -699,12 +715,13 @@ struct MapScreen: View {
                 Button {
                     startCategorySearch()
                 } label: {
+                    // Inverted ink so it reads as the one call to action in both modes.
                     Label("Search this area", systemImage: "arrow.clockwise")
                         .font(.app(.subheadline, .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color(uiColor: .systemBackground))
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
-                        .background(.black.opacity(0.85), in: .capsule)
+                        .background(Color.primary.opacity(0.9), in: .capsule)
                 }
                 .buttonStyle(.plain)
                 .transition(.scale.combined(with: .opacity))
@@ -719,7 +736,7 @@ struct MapScreen: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
-                .glassEffect(.regular, in: .capsule)
+                .mapControlSurface(in: .capsule, interactive: false)
             }
 
             if let searchFeedback {
@@ -737,127 +754,101 @@ struct MapScreen: View {
         .padding(.bottom, 12)
     }
 
-    /// Wanderlog's "Exploring: Restaurants ✕" pill shown while a category is active.
-    private func exploringPill(_ category: MapCategory) -> some View {
-        HStack(spacing: 8) {
-            Text("Exploring:")
-                .font(.app(.subheadline, .bold))
-            Text(category.title)
-                .font(.app(.subheadline))
-            Button(action: clearCategory) {
-                Image(systemName: "xmark")
-                    .font(.app(.caption, .bold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 44, height: 44)
-                    .contentShape(.circle)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(Text("Stop exploring \(category.title)"))
-
-            Divider().frame(height: 18)
-
-            Button {
-                openNowOnly.toggle()
-                startCategorySearch()
-            } label: {
-                Label("Open now", systemImage: openNowOnly ? "clock.badge.checkmark.fill" : "clock")
-                    .font(.app(.caption, .semibold))
-                    .foregroundStyle(openNowOnly ? Color.green : Color.secondary)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.leading, 16)
-        .padding(.trailing, 8)
-        .padding(.vertical, 7)
-        .glassEffect(.regular, in: .capsule)
-    }
-
     private var categoryChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                Button {
-                    locationManager.locate()
-                } label: {
-                    Label("Near me", systemImage: "location.fill")
-                        .font(.app(.subheadline, .medium))
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 9)
-                }
-                .buttonStyle(.plain)
-                .glassEffect(.regular.interactive(), in: .capsule)
-
-                Menu {
-                    Button {
-                        showsSavedPlaces.toggle()
-                        if showsSavedPlaces { fitSavedPlaces() }
-                    } label: {
-                        Label("Saved places", systemImage: showsSavedPlaces ? "checkmark" : "bookmark")
-                    }
-                    Button("View saved list", systemImage: "list.bullet") { showsSavedList = true }
-                    Button {
-                        showsSpending.toggle()
-                        selectedPlaceID = nil
-                        if showsSpending {
-                            userHasMovedMap = false
-                            fitCamera(to: expensePins.map(\.coordinate), force: true)
-                        }
-                    } label: {
-                        Label("Spending", systemImage: showsSpending ? "checkmark" : "dollarsign.circle")
-                    }
-                    if selectedTripID != nil {
-                        Button {
-                            showsTripPlaces.toggle()
-                            selectedPlaceID = nil
-                            if showsTripPlaces {
-                                userHasMovedMap = false
-                                fitTripCamera(force: true)
-                            }
-                        } label: {
-                            Label("Shared trip places", systemImage: showsTripPlaces ? "checkmark" : "person.2")
-                        }
-                        Button {
-                            showsFeedPlaces.toggle()
-                            selectedPlaceID = nil
-                        } label: {
-                            Label("Trip feed places", systemImage: showsFeedPlaces ? "checkmark" : "photo")
-                        }
-                    }
-                    Menu("Map style", systemImage: mapStyle.icon) {
-                        ForEach(TripMapStyle.allCases) { style in
-                            Button {
-                                mapStyle = style
-                            } label: {
-                                if mapStyle == style { Label(style.title, systemImage: "checkmark") }
-                                else { Label(style.title, systemImage: style.icon) }
-                            }
-                        }
-                    }
-                } label: {
-                    Label("Layers & Filters", systemImage: "line.3.horizontal.decrease.circle")
-                        .font(.app(.subheadline, .medium))
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 9)
-                }
-                .buttonStyle(.plain)
-                .glassEffect(.regular.interactive(), in: .capsule)
-
+            HStack(spacing: 6) {
                 ForEach(MapCategory.discoveryCases) { category in
                     Button {
                         activeCategory = category
                         startCategorySearch()
                     } label: {
-                        Label(category.title, systemImage: category.icon)
-                            .font(.app(.subheadline, .medium))
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 9)
+                        Text(LocalizedStringKey(category.title))
+                            .mapChipLabel()
                     }
                     .buttonStyle(.plain)
-                    .glassEffect(.regular.interactive(), in: .capsule)
+                    .mapChipSurface(isSelected: false)
                 }
             }
             .padding(.horizontal)
+            // Room for the chip shadows, which a ScrollView would otherwise clip.
+            .padding(.vertical, 6)
         }
         .padding(.horizontal, -16)
+        .padding(.vertical, -6)
+    }
+
+    /// Trip scope, map layers and style in one sheet, replacing the trip menu and the
+    /// "Layers & Filters" chip that used to crowd the top of the map.
+    private var mapFiltersSheet: some View {
+        NavigationStack {
+            Form {
+                if !store.myTrips.isEmpty {
+                    Section("Trip") {
+                        Picker("Trip", selection: Binding(get: { selectedTripID }, set: { selectTrip($0) })) {
+                            Text("All trips").tag(Trip.ID?.none)
+                            ForEach(store.myTrips) { trip in
+                                Text(verbatim: trip.name).tag(Optional(trip.id))
+                            }
+                        }
+                        .pickerStyle(.inline)
+                        .labelsHidden()
+                    }
+                }
+
+                Section {
+                    Toggle("Saved places", isOn: Binding(get: { showsSavedPlaces }, set: { isOn in
+                        showsSavedPlaces = isOn
+                        if isOn { fitSavedPlaces() }
+                    }))
+                    Toggle("Spending", isOn: Binding(get: { showsSpending }, set: { isOn in
+                        showsSpending = isOn
+                        selectedPlaceID = nil
+                        if isOn {
+                            userHasMovedMap = false
+                            fitCamera(to: expensePins.map(\.coordinate), force: true)
+                        }
+                    }))
+                    if selectedTripID != nil {
+                        Toggle("Shared trip places", isOn: Binding(get: { showsTripPlaces }, set: { isOn in
+                            showsTripPlaces = isOn
+                            selectedPlaceID = nil
+                            if isOn {
+                                userHasMovedMap = false
+                                fitTripCamera(force: true)
+                            }
+                        }))
+                        Toggle("Trip feed places", isOn: Binding(get: { showsFeedPlaces }, set: { isOn in
+                            showsFeedPlaces = isOn
+                            selectedPlaceID = nil
+                        }))
+                    }
+                    if !store.userProfile.savedMapPlaces.isEmpty {
+                        Button("View saved list", systemImage: "list.bullet") {
+                            opensSavedListAfterFilters = true
+                            showsMapFilters = false
+                        }
+                    }
+                }
+                .tint(Theme.accent)
+
+                Section("Map style") {
+                    Picker("Map style", selection: $mapStyle) {
+                        ForEach(TripMapStyle.allCases) { style in
+                            Text(LocalizedStringKey(style.title)).tag(style)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
+            }
+            .navigationTitle("Layers & Filters")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { showsMapFilters = false }
+                }
+            }
+        }
     }
 
     private var itineraryControls: some View {
@@ -979,11 +970,10 @@ struct MapScreen: View {
                         startTextSearch()
                     } label: {
                         Label(query, systemImage: "clock.arrow.circlepath")
-                            .font(.app(.caption, .medium))
-                            .padding(.horizontal, 10).padding(.vertical, 7)
+                            .mapChipLabel()
                     }
                     .buttonStyle(.plain)
-                    .glassEffect(.regular.interactive(), in: .capsule)
+                    .mapChipSurface(isSelected: false)
                 }
             }
         }
@@ -1030,38 +1020,66 @@ struct MapScreen: View {
     }
 
     private var searchBar: some View {
-        HStack(spacing: 9) {
+        HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
-            TextField("Search places or addresses", text: $searchQuery)
-                .font(.app(.subheadline))
-                .focused($isSearchFocused)
-                .submitLabel(.search)
-                .onSubmit { isSearchFocused = false; startTextSearch() }
-            if !searchQuery.isEmpty {
-                Button {
-                    searchQuery = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
+            if let category = activeCategory {
+                Text(LocalizedStringKey(category.title))
+                    .font(.app(.body, .semibold))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button(action: clearCategory) {
+                    Image(systemName: "xmark")
+                        .font(.app(.subheadline, .semibold))
+                        .frame(width: 40, height: 40)
+                        .contentShape(.circle)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Clear search")
-            }
-            if !store.userProfile.savedMapPlaces.isEmpty {
-                Button {
-                    showsSavedList = true
-                } label: {
-                    Image(systemName: "list.bullet")
-                        .foregroundStyle(.primary)
+                .accessibilityLabel(Text("Stop exploring \(category.title)"))
+            } else {
+                TextField("Search places or addresses", text: $searchQuery)
+                    .font(.app(.body))
+                    .focused($isSearchFocused)
+                    .submitLabel(.search)
+                    .onSubmit { isSearchFocused = false; startTextSearch() }
+                if !searchQuery.isEmpty {
+                    Button {
+                        searchQuery = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                            .frame(width: 40, height: 40)
+                            .contentShape(.circle)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Clear search")
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("View saved places list")
             }
+            Button {
+                isSearchFocused = false
+                showsMapFilters = true
+            } label: {
+                Image(systemName: "line.3.horizontal.decrease")
+                    .font(.app(.body, .medium))
+                    .frame(width: 40, height: 40)
+                    // The trip menu no longer sits on the map, so mark a scoped trip here.
+                    .overlay(alignment: .topTrailing) {
+                        if selectedTripID != nil {
+                            Circle()
+                                .fill(Theme.accent)
+                                .frame(width: 7, height: 7)
+                                .offset(x: -7, y: 8)
+                        }
+                    }
+                    .contentShape(.circle)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Layers & Filters")
+            .accessibilityValue(Text(verbatim: selectedTripName))
         }
-        .padding(.horizontal, 13)
-        .frame(height: 42)
-        .glassEffect(.regular, in: .capsule)
+        .padding(.leading, 16)
+        .padding(.trailing, 4)
+        .frame(height: 48)
+        .mapControlSurface(in: .capsule, interactive: false)
     }
 
     // MARK: Bottom card
@@ -2076,3 +2094,57 @@ struct MapScreen: View {
 
 /// A Wanderlog-style teardrop pin: dark circle with the category icon, white ring,
 /// and a pointer tail. Grows and tints when selected.
+
+// MARK: - Map control surfaces
+
+private extension View {
+    /// Floating map controls: Wabi-Sabi keeps the Liquid Glass it has always used;
+    /// other themes get the minimal opaque surface from the redesign.
+    func mapControlSurface<S: InsettableShape>(in shape: S, interactive: Bool = true) -> some View {
+        modifier(MapControlSurface(shape: shape, interactive: interactive))
+    }
+
+    func mapChipLabel() -> some View {
+        font(.app(.subheadline, .medium))
+            .padding(.horizontal, 14)
+            .frame(minHeight: 36)
+    }
+
+    /// Selected chips invert to the primary ink so state reads without an accent fill.
+    @ViewBuilder
+    func mapChipSurface(isSelected: Bool) -> some View {
+        if isSelected {
+            foregroundStyle(Color(uiColor: .systemBackground))
+                .background(Color.primary, in: .capsule)
+        } else {
+            mapControlSurface(in: .capsule)
+        }
+    }
+}
+
+private struct MapControlSurface<S: InsettableShape>: ViewModifier {
+    let shape: S
+    let interactive: Bool
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+
+    func body(content: Content) -> some View {
+        if ThemeManager.shared.selection.usesSoftElevation {
+            content.glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
+        } else {
+            content
+                .background(Theme.surface.opacity(0.95), in: shape)
+                .overlay {
+                    // Dark map tiles swallow a dark surface's shadow; a faint rim keeps
+                    // the edge. Increased contrast gets the full separator in both modes.
+                    shape.strokeBorder(rimColor, lineWidth: 1)
+                }
+                .shadow(color: .black.opacity(colorScheme == .dark ? 0.35 : 0.08), radius: 14, y: 5)
+        }
+    }
+
+    private var rimColor: Color {
+        if colorSchemeContrast == .increased { return Theme.separator }
+        return colorScheme == .dark ? .white.opacity(0.08) : .clear
+    }
+}
