@@ -9,6 +9,10 @@ struct TripDetailView: View {
     @Environment(TripStore.self) private var store
     @Environment(AuthStore.self) private var auth
     let tripID: Trip.ID
+    var initialGuideAction: QuickGuideAction = .openTrip
+    @State private var guidePath: [TripPage] = []
+    @State private var didRouteGuide = false
+    @State private var showQuickGuide = false
 
     @State private var exportToShare: TripShareContent?
     @State private var exportError: String?
@@ -76,7 +80,7 @@ struct TripDetailView: View {
     private var trip: Trip? { store.trip(tripID) }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $guidePath) {
             ZStack {
                 LinearGradient(
                     colors: Theme.sheetGradient,
@@ -94,6 +98,10 @@ struct TripDetailView: View {
                                     detailTabPicker
                                     switch detailTab {
                                     case .overview:
+                                        FirstTripChecklist(trip: trip, userID: store.currentUser.id,
+                                                           onMembers: { guidePath.append(.members) },
+                                                           onExpense: { requireAuthentication(for: .addExpense) },
+                                                           onBalances: { guidePath.append(.balances) })
                                         budgetOverviewCard(trip)
                                         balancesCard(trip, preview: true).id("settle")
                                         itineraryCard(trip)
@@ -134,6 +142,18 @@ struct TripDetailView: View {
                     ContentUnavailableView("Trip not found", systemImage: "suitcase")
                 }
             }
+            .onAppear {
+                store.recordTripVisit(tripID)
+                guard !didRouteGuide else { return }
+                didRouteGuide = true
+                switch initialGuideAction {
+                case .members: guidePath.append(.members)
+                case .balances: guidePath.append(.balances)
+                case .addExpense: requireAuthentication(for: .addExpense)
+                default: break
+                }
+            }
+            .quickGuide(isPresented: $showQuickGuide, tripID: tripID)
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: TripPage.self) { page in
                 tripPage(page)
@@ -292,6 +312,7 @@ struct TripDetailView: View {
             HStack {
                 heroCornerButton("xmark", label: "Close") { dismiss() }
                 Spacer()
+                heroCornerButton("questionmark.circle", label: "Quick guide") { showQuickGuide = true }
                 if store.isCreator(of: trip) {
                     heroCornerButton("pencil", label: "Edit trip") {
                         requireAuthentication(for: .editTrip)

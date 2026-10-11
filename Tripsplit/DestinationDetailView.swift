@@ -687,8 +687,8 @@ struct DestinationDetailView: View {
     private func planRow(index: Int, item: TravelPlanItem, isRestaurant: Bool) -> some View {
         HStack(alignment: .top, spacing: 14) {
             ZStack {
-                LinearGradient(colors: destination.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
-                Text("\(index + 1)").font(Theme.Typography.sectionTitle).foregroundStyle(.white)
+                Theme.accentPastel
+                Text("\(index + 1)").font(Theme.Typography.sectionTitle).foregroundStyle(Theme.ink)
             }
             .frame(width: 44, height: 44)
             .clipShape(.rect(cornerRadius: 12))

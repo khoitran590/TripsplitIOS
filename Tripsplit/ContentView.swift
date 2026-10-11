@@ -1,6 +1,11 @@
 import SwiftUI
 import UIKit
 
+struct IncomingAppLink: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
 private struct PendingTripInvitation {
     let url: URL
     let preview: TripsRepository.InvitationPreview
@@ -118,8 +123,11 @@ struct ContentView: View {
     /// Set by the welcome flow when the user asked to create an account, so the
     /// sign-in sheet opens as the app appears.
     var startsAtSignIn = false
+    var incomingLink: IncomingAppLink?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var selectedTab: DockTab = .explore
     /// Curated guides have their own sticky bottom action bar. Hide the floating
     /// dock while one is open so the two controls never overlap.
@@ -136,20 +144,25 @@ struct ContentView: View {
     /// positions, resolved images) on every dock tap, which made navigation feel laggy.
     @State private var visitedTabs: Set<DockTab> = [.explore]
     /// Drives the post-sign-in onboarding steps (see `OnboardingCoordinator`): it
-    /// only ever fires for a sign-in performed in this session, never for a session
-    /// restored at launch.
+    /// restores saved progress and offers optional help after a long absence.
     @State private var onboarding = OnboardingCoordinator()
     @State private var showProfileSetup = false
     @State private var showNewUserOnboarding = false
     @State private var pendingQuickStartAction: QuickStartAction?
     @State private var showAddTripFromOnboarding = false
+    @State private var showPractice = false
+    @State private var showQuickGuide = false
+    @State private var createdTripID: Trip.ID?
+    @State private var guidedTrip: GuideTripDestination?
+    @State private var showInviteAuthentication = false
+    @State private var settledIdentityID: UUID?
     /// Sign-in sheet opened straight from the welcome flow.
     @State private var showWelcomeSignIn = false
     /// An invite link opened while signed out, held until the user signs in.
     @State private var pendingInviteURL: URL?
-    @State private var showInviteSignInAlert = false
     @State private var inviteErrorMessage: String?
     @State private var invitationToConfirm: PendingTripInvitation?
+    @State private var invitationActionInFlight = false
 
     var body: some View {
         ZStack {
@@ -179,40 +192,65 @@ struct ContentView: View {
             }
         }
         .animation(.snappy, value: store.syncState)
-        // A returning account gets this instead of the first-run sequence.
-        .overlay(alignment: .top) {
-            if let summary = onboarding.visibleReturningSummary {
+        .safeAreaInset(edge: .top) {
+            if let url = pendingInviteURL, !onboarding.invitationOwnsPresentation {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("You have a trip invitation.").font(.app(.subheadline))
+                    HStack {
+                        Button("Continue invitation") {
+                            onboarding.invitationOwnsPresentation = true
+                            if auth.isAuthenticated { redeemPendingInviteIfReady() }
+                            else { showInviteAuthentication = true }
+                        }.frame(minHeight: 44)
+                        Spacer()
+                        Button {
+                            clearPendingInvitation()
+                        } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }
+                            .accessibilityLabel("Dismiss invitation reminder")
+                    }
+                }
+                .padding(14).background(Theme.surface)
+                .id(url)
+            } else if let summary = onboarding.visibleReturningSummary {
                 ReturningUserBanner(
                     summary: summary,
                     onViewTrips: {
-                        withAnimation(.snappy) {
-                            selectedTab = .trips
-                            onboarding.dismissReturningSummary()
-                        }
+                        selectedTab = .trips
+                        if let trip = store.recommendedTrip { guidedTrip = GuideTripDestination(id: trip.id) }
+                        OnboardingAnalytics.shared.record(.returnResumed, source: .return)
+                        onboarding.dismissReturningSummary(recordDismissal: false)
                     },
-                    onDismiss: {
-                        onboarding.dismissReturningSummary()
-                    }
+                    onGuide: { onboarding.guideOpened(); showQuickGuide = true },
+                    onDismiss: { onboarding.dismissReturningSummary() }
                 )
-                .padding(.top, 8)
-                .transition(.topBanner(reduceMotion: reduceMotion))
-            } else if let name = onboarding.welcomeBackName {
-                WelcomeBackToast(name: name)
-                    .padding(.top, 8)
-                    .transition(.topBanner(reduceMotion: reduceMotion))
+                .padding(.vertical, 8)
+            } else if onboarding.hasUnfinishedSetup, onboarding.step == nil,
+                      !onboarding.isPaused, !onboarding.invitationOwnsPresentation {
+                let layout = dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading)) : AnyLayout(HStackLayout())
+                layout {
+                    Text("Your setup is saved. Continue when you're ready.")
+                        .font(.app(.subheadline))
+                    Button("Continue setup") { onboarding.resumeSetup() }
+                        .frame(minHeight: 44)
+                }
+                .padding(14)
+                .background(Theme.surface)
             }
         }
-        .animation(.snappy, value: onboarding.visibleReturningSummary)
-        .animation(.snappy, value: onboarding.welcomeBackName)
-        .onChange(of: selectedTab) { _, tab in visitedTabs.insert(tab) }
-        // Keep the user on the tab that requested authentication so the presenting
-        // screen can replay the original intent after the sheet closes.
-        .onChange(of: auth.isAuthenticated) { _, isAuthenticated in
-            // Redeem an invitation link that was opened before the user signed in.
-            if isAuthenticated, let url = pendingInviteURL {
-                pendingInviteURL = nil
-                Task { await prepareInvite(url) }
+        .safeAreaInset(edge: .top) {
+            if auth.isAuthenticated { ProfileSyncBanner().padding(.horizontal) }
+        }
+        .onChange(of: selectedTab) { _, tab in
+            visitedTabs.insert(tab)
+            onboarding.recordActivity()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                onboarding.checkForReturn(displayName: store.currentUser.name)
+                OnboardingAnalytics.shared.retry()
+                if auth.isAuthenticated { Task { await store.retryProfileSync() } }
             }
+            else if phase == .background { onboarding.recordActivity() }
         }
         // Tapping a place inside a curated Explore trip asks the Map tab to focus it;
         // remember the current tab first so the map's Back button can return here.
@@ -238,36 +276,48 @@ struct ContentView: View {
         // `onDismiss` covers every way out of the sheet — Save, Skip, and swipe-down
         // alike — so the sequence always moves on rather than stalling on a step that
         // is no longer on screen.
-        .sheet(isPresented: $showProfileSetup, onDismiss: { onboarding.profileSetupFinished() }) {
-            ProfileSetupView(isFirstRun: onboarding.isFirstRunFlow)
+        .sheet(isPresented: $showProfileSetup, onDismiss: { onboarding.profileSetupFinished(); auth.clearPendingDisplayName() }) {
+            ProfileSetupView(coordinator: onboarding, isFirstRun: onboarding.isFirstRunFlow)
         }
         .sheet(isPresented: $showNewUserOnboarding, onDismiss: {
+            guard let action = pendingQuickStartAction else { onboarding.suspendSetup(); return }
+            pendingQuickStartAction = nil
             onboarding.newUserOnboardingFinished()
-            if let action = pendingQuickStartAction {
-                pendingQuickStartAction = nil
-                switch action {
-                case .createTrip:
-                    selectedTab = .trips
-                    showAddTripFromOnboarding = true
-                case .sampleTrip:
-                    store.installAppStoreDemoData()
-                    friends.store = store
-                    selectedTab = .trips
-                case .explore:
-                    selectedTab = .explore
-                }
+            switch action {
+            case .createTrip:
+                selectedTab = .trips
+                showAddTripFromOnboarding = true
+            case .sampleTrip:
+                showPractice = true
+            case .explore:
+                selectedTab = .explore
             }
         }) {
-            NewUserOnboardingView { action in
+            NewUserOnboardingView(coordinator: onboarding, displayName: store.currentUser.name,
+                                  appleName: auth.pendingDisplayName) { action in
                 pendingQuickStartAction = action
                 showNewUserOnboarding = false
             }
         }
-        .sheet(isPresented: $showAddTripFromOnboarding) {
-            AddTripView()
+        .sheet(isPresented: $showAddTripFromOnboarding, onDismiss: {
+            if let id = createdTripID {
+                createdTripID = nil
+                guidedTrip = GuideTripDestination(id: id)
+            }
+        }) {
+            AddTripView { createdTripID = $0.id }
         }
-        .sheet(isPresented: $showWelcomeSignIn) {
-            WelcomeSignInSheet()
+        .sheet(item: $guidedTrip) { target in
+            TripDetailView(tripID: target.id, initialGuideAction: target.action)
+        }
+        .sheet(isPresented: $showPractice) { PracticeTripView() }
+        .quickGuide(isPresented: $showQuickGuide)
+        .sheet(isPresented: $showWelcomeSignIn, onDismiss: { onboarding.isPaused = false }) { WelcomeSignInSheet() }
+        .sheet(isPresented: $showInviteAuthentication, onDismiss: {
+            if auth.isAuthenticated { redeemPendingInviteIfReady() }
+            else { onboarding.invitationOwnsPresentation = false }
+        }) {
+            AuthenticationSheet(reason: "Sign in or create an account to join this trip.")
         }
         // Same rule as above: attach before the `.environment(...)` modifiers so the
         // shared profile sheet inherits FriendsStore/AuthStore/TripStore.
@@ -284,7 +334,10 @@ struct ContentView: View {
         .task {
             // The welcome flow's "Create an account" hands over here; a sign-in that
             // already happened (e.g. a restored session) needs no sheet.
-            if startsAtSignIn, !auth.isAuthenticated { showWelcomeSignIn = true }
+            if startsAtSignIn, !auth.isAuthenticated {
+                onboarding.isPaused = true
+                showWelcomeSignIn = true
+            }
         }
         // Reading the step as a `task` id (rather than inside a custom Binding) keeps
         // the read in the body's observation scope, so a queued step reliably presents.
@@ -296,7 +349,21 @@ struct ContentView: View {
             if AppStoreDemoData.isEnabled {
                 store.installAppStoreDemoData()
                 friends.store = store
+                #if DEBUG
+                let arguments = ProcessInfo.processInfo.arguments
+                if arguments.contains("-ui-test-empty-trips") { store.trips = [] }
+                if arguments.contains("-ui-test-new-user-onboarding") {
+                    onboarding.update(userID: nil, displayName: "")
+                    onboarding.update(userID: AppStoreDemoData.userID, displayName: "", authIntent: .newRegistration)
+                    if arguments.contains("-ui-test-quick-start") {
+                        onboarding.saveProgress(step: .quickStart, name: "Test traveler", page: 0)
+                    }
+                } else {
+                    onboarding.update(userID: AppStoreDemoData.userID, displayName: store.currentUser.name, authIntent: .sessionRestored)
+                }
+                #else
                 onboarding.update(userID: AppStoreDemoData.userID, displayName: store.currentUser.name, authIntent: .sessionRestored)
+                #endif
                 return
             }
             // Keep the trip store's token + identity in sync with the auth session and
@@ -306,6 +373,9 @@ struct ContentView: View {
                 try await auth.refreshSession().accessToken
             }
             store.bindIdentity(accessToken: auth.session?.accessToken)
+            OnboardingAnalytics.shared.bind(userID: auth.isAuthenticated ? store.currentUser.id : nil, store: store)
+            let expectedID = store.currentUser.id
+            settledIdentityID = nil
             // Wire the friends store to the session before any awaits so the Profile
             // tab's own refresh never races an unset store reference.
             friends.store = store
@@ -317,6 +387,8 @@ struct ContentView: View {
             // Load the cloud profile first so `loadFromCloud`'s member healing uses
             // the authoritative name/avatar rather than the local cache.
             await store.loadProfileFromCloud()
+            guard !Task.isCancelled, auth.isAuthenticated, store.currentUser.id == expectedID else { return }
+            settledIdentityID = expectedID
             let intent = auth.consumeAuthIntent()
             // Hand the settled identity to onboarding before the (slower) trip load,
             // so a new account isn't left staring at an empty app first. Called on
@@ -327,21 +399,24 @@ struct ContentView: View {
                 displayName: store.currentUser.name,
                 authIntent: intent
             )
+            // An invitation or requested trip action may defer the identity form.
+            // Preserve Apple's one-time name before a process interruption, too.
+            if intent != nil, onboarding.hasUnfinishedSetup, onboarding.savedName.isEmpty,
+               let name = auth.pendingDisplayName {
+                onboarding.saveProgress(step: onboarding.savedStep, name: name, page: onboarding.savedFeaturePage)
+            }
             // Friends are secondary to painting the user's cached/current trips. Run
             // that independent fetch alongside trip synchronization so it does not add
             // another full network round-trip to the post-sign-in refresh sequence.
+            redeemPendingInviteIfReady()
             async let friendsRefresh: Void = friends.refresh()
+            async let ratesRefresh: Void = store.refreshRates()
             await store.loadFromCloud()
+            await ratesRefresh
             await friendsRefresh
-            let totals = store.homeTotals(in: "USD")
-            onboarding.didFinishCloudSync(
-                tripsCount: store.myTrips.count,
-                netBalanceOwed: totals.owedToYou - totals.youOwe,
-                currencyCode: "USD",
-                avatarURL: store.currentUser.avatarURL
-            )
         }
-        .onOpenURL { url in
+        .task(id: incomingLink?.id) {
+            guard let url = incomingLink?.url else { return }
             // Profile share links open a viewable profile card; they don't need to be
             // held for sign-in (SharedProfileView shows its own signed-out prompt).
             if url.scheme == "tripsplit", url.host == "profile",
@@ -349,39 +424,49 @@ struct ContentView: View {
                let token = components.queryItems?.first(where: { $0.name == "token" })?.value,
                !token.isEmpty {
                 sharedProfile = SharedProfileLink(token: token)
-            } else if auth.isAuthenticated {
-                Task { await prepareInvite(url) }
             } else {
-                // Hold the link and point the user at sign-in; redeemed automatically
-                // in `onChange(of: auth.isAuthenticated)` once they're in.
+                guard PendingInvitationStore.accepts(url) else {
+                    inviteErrorMessage = String(localized: "This invitation link is invalid.")
+                    return
+                }
                 pendingInviteURL = url
-                showInviteSignInAlert = true
+                PendingInvitationStore().save(url)
+                onboarding.invitationOwnsPresentation = true
+                if auth.isAuthenticated { redeemPendingInviteIfReady() }
+                else { showInviteAuthentication = true }
             }
-        }
-        .alert("Sign In to Join the Trip", isPresented: $showInviteSignInAlert) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("Sign in (or create an account) from the Profile tab. TripSplit will show who invited you and ask before joining.")
         }
         .confirmationDialog(
             invitationToConfirm.map { "Join \($0.preview.tripName)?" } ?? "Join trip?",
             isPresented: Binding(
                 get: { invitationToConfirm != nil },
-                set: { if !$0 { invitationToConfirm = nil } }
+                set: {
+                    if !$0, !invitationActionInFlight {
+                        invitationToConfirm = nil
+                        clearPendingInvitation()
+                        onboarding.invitationOwnsPresentation = false
+                    }
+                }
             ),
             titleVisibility: .visible
         ) {
             Button("Join Trip") {
                 guard let pending = invitationToConfirm else { return }
+                invitationActionInFlight = true
                 invitationToConfirm = nil
                 Task { await acceptInvite(pending.url) }
             }
             Button("Decline Invitation", role: .destructive) {
                 guard let pending = invitationToConfirm else { return }
+                invitationActionInFlight = true
                 invitationToConfirm = nil
                 Task { await declineInvite(pending.url) }
             }
-            Button("Cancel", role: .cancel) { invitationToConfirm = nil }
+            Button("Cancel", role: .cancel) {
+                invitationToConfirm = nil
+                clearPendingInvitation()
+                onboarding.invitationOwnsPresentation = false
+            }
         } message: {
             if let pending = invitationToConfirm {
                 Text("Invited by \(pending.preview.inviterName). This invitation expires \(pending.preview.expiresAt.formatted(.relative(presentation: .named))).")
@@ -398,34 +483,62 @@ struct ContentView: View {
     }
 
     private func acceptInvite(_ url: URL) async {
+        let acceptingUserID = store.currentUser.id
+        defer { invitationActionInFlight = false; onboarding.invitationOwnsPresentation = false }
         do {
-            if try await store.acceptInvitationLink(url) != nil {
-                // The invitation flow's natural destination is the trip list. Leaving
-                // the user on Explore made a successful deep link look like a no-op.
+            if let trip = try await store.acceptInvitationLink(url) {
+                guard auth.isAuthenticated, store.currentUser.id == acceptingUserID else { return }
+                OnboardingAnalytics.shared.record(.invitationAccepted, source: .trip, userID: acceptingUserID)
+                clearPendingInvitation()
+                onboarding.deferSetupForInvitation()
+                auth.clearPendingDisplayName()
                 selectedTab = .trips
+                UserDefaults.standard.set(true, forKey: FirstTripChecklist.key(userID: store.currentUser.id, tripID: trip))
+                guidedTrip = GuideTripDestination(id: trip)
             }
         } catch {
+            pendingInviteURL = url
             inviteErrorMessage = (error as? AuthError)?.message ?? error.localizedDescription
         }
     }
 
     private func declineInvite(_ url: URL) async {
+        defer { invitationActionInFlight = false; onboarding.invitationOwnsPresentation = false }
         do {
             try await store.declineInvitationLink(url)
+            clearPendingInvitation()
         } catch {
+            pendingInviteURL = url
             inviteErrorMessage = (error as? AuthError)?.message ?? error.localizedDescription
         }
     }
 
+    private func redeemPendingInviteIfReady() {
+        guard auth.isAuthenticated, !showInviteAuthentication,
+              settledIdentityID == store.currentUser.id,
+              let url = pendingInviteURL else { return }
+        pendingInviteURL = nil
+        Task { await prepareInvite(url) }
+    }
+
     private func prepareInvite(_ url: URL) async {
+        let expectedID = store.currentUser.id
         do {
             guard let preview = try await store.previewInvitationLink(url) else {
                 throw AuthError(message: "This invitation link is invalid.")
             }
+            guard auth.isAuthenticated, store.currentUser.id == expectedID, !Task.isCancelled else { return }
             invitationToConfirm = PendingTripInvitation(url: url, preview: preview)
         } catch {
+            pendingInviteURL = url
+            onboarding.invitationOwnsPresentation = false
             inviteErrorMessage = (error as? AuthError)?.message ?? error.localizedDescription
         }
+    }
+
+    private func clearPendingInvitation() {
+        pendingInviteURL = nil
+        PendingInvitationStore().delete()
     }
 
     @ViewBuilder

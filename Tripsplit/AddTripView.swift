@@ -99,13 +99,10 @@ struct AddTripView: View {
                 if let coverImage {
                     Image(uiImage: coverImage).resizable().scaledToFill()
                 } else {
-                    LinearGradient(
-                        colors: [Theme.accent, Theme.accentSecondary],
-                        startPoint: .topLeading, endPoint: .bottomTrailing
-                    )
+                    Theme.accentPastel
                     Image(systemName: "airplane.departure")
                         .font(.app(size: 42, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.75))
+                        .foregroundStyle(Theme.accent.opacity(0.75))
                 }
             }
             .frame(height: 170)
@@ -170,6 +167,8 @@ struct AddTripView: View {
                     .background(.secondary.opacity(0.12), in: .capsule)
                 }
             }
+            Text("Expenses and balances in this trip use this currency. Home totals use your selected home currency.")
+                .font(.app(.footnote)).foregroundStyle(.secondary)
         }
     }
 
@@ -235,7 +234,7 @@ struct AddTripView: View {
 
     private var tripmatesCard: some View {
         TripCard(title: "Tripmates", icon: "person.2.fill") {
-            Text("You can invite people with an account after the trip is created.")
+            Text("Adding a name creates a participant for splitting. It does not send an invitation. Invite people to their accounts from Members & invitations after creating the trip.")
                 .font(.app(.footnote))
                 .foregroundStyle(.secondary)
 

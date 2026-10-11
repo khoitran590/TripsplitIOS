@@ -14,40 +14,8 @@ enum AppLanguage: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    /// Languages offered in the picker. The first release is English-only until the
-    /// es/zh-Hans catalog has complete, human-reviewed translations (readiness item UX-02).
-    static let released: [AppLanguage] = [.english]
-
     /// The code passed to `Locale` / `.lproj` lookup.
     var code: String { rawValue }
-
-    /// The language's name written in that language (what a native speaker expects
-    /// to see in a language list). Intentionally not localized.
-    var endonym: String {
-        switch self {
-        case .english: "English"
-        case .spanish: "Español"
-        case .chineseSimplified: "简体中文"
-        }
-    }
-
-    /// The English name, shown as a secondary line so a lost user can still find their
-    /// way back to English.
-    var englishName: String {
-        switch self {
-        case .english: "English"
-        case .spanish: "Spanish"
-        case .chineseSimplified: "Chinese (Simplified)"
-        }
-    }
-
-    var flag: String {
-        switch self {
-        case .english: "🇺🇸"
-        case .spanish: "🇪🇸"
-        case .chineseSimplified: "🇨🇳"
-        }
-    }
 
     /// Best match for the user's current device languages, used as the first-launch
     /// default before they've picked one explicitly.
@@ -134,52 +102,5 @@ extension Bundle {
         _ = swizzleMainBundle
         let target = Bundle.main.path(forResource: language, ofType: "lproj").flatMap(Bundle.init(path:))
         objc_setAssociatedObject(Bundle.main, &localizedBundleKey, target, .OBJC_ASSOCIATION_RETAIN)
-    }
-}
-
-// MARK: - Language picker
-
-/// Pushed from Settings → Language. Selecting a row switches the whole app's language live;
-/// the checkmark moves and the page stays, as in iOS Settings.
-struct LanguagePickerView: View {
-    @Environment(LocalizationManager.self) private var localization
-
-    var body: some View {
-        List {
-            Section {
-                ForEach(AppLanguage.released) { language in
-                    Button {
-                        localization.language = language
-                    } label: {
-                        HStack(spacing: 14) {
-                            Text(language.flag)
-                                .font(.app(.title2))
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(language.endonym)
-                                    .font(.app(.body))
-                                    .foregroundStyle(.primary)
-                                Text(language.englishName)
-                                    .font(.app(.caption))
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            if language == localization.language {
-                                Image(systemName: "checkmark")
-                                    .font(.app(.body, .semibold))
-                                    .foregroundStyle(.tint)
-                                    .accessibilityHidden(true)
-                            }
-                        }
-                        .contentShape(.rect)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(language == localization.language ? .isSelected : [])
-                }
-            } footer: {
-                Text("Additional reviewed languages will be added in a future update.")
-            }
-        }
-        .navigationTitle("Language")
-        .navigationBarTitleDisplayMode(.inline)
     }
 }

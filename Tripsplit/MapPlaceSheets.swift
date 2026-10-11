@@ -316,11 +316,10 @@ struct PlaceCard: View {
                 LookAroundPreview(initialScene: lookAroundScene, allowsNavigation: false, badgePosition: .bottomTrailing)
             } else {
                 ZStack {
-                    LinearGradient(colors: [.accentColor.opacity(0.7), .accentColor.opacity(0.35)],
-                                   startPoint: .topLeading, endPoint: .bottomTrailing)
+                    Theme.accentPastel
                     Image(systemName: place.category.icon)
                         .font(.app(.title3))
-                        .foregroundStyle(.white.opacity(0.85))
+                        .foregroundStyle(Theme.accent)
                 }
             }
         }

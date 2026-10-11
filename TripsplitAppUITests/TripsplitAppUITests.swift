@@ -184,7 +184,7 @@ final class TripsplitAppUITests: XCTestCase {
         let appearance = app.buttons["Appearance & theme"]
         XCTAssertTrue(appearance.waitForExistence(timeout: 5))
         XCTAssertEqual(appearance.value as? String, "Light")
-        XCTAssertEqual(app.buttons["Language"].value as? String, "English")
+        XCTAssertFalse(app.buttons["Language"].exists, "Settings should not offer language options")
         let currency = app.buttons["Home currency"]
         XCTAssertTrue(currency.exists)
         XCTAssertFalse((currency.value as? String ?? "").isEmpty, "Home currency should announce its value")
@@ -203,11 +203,6 @@ final class TripsplitAppUITests: XCTestCase {
         XCTAssertEqual(app.collectionViews.buttons.matching(selected).count, 1, "Exactly one payment method should be selected")
         app.navigationBars["Payment method"].buttons.element(boundBy: 0).tap()
 
-        tapAfterScrolling(app.buttons["Language"])
-        XCTAssertTrue(app.navigationBars["Language"].waitForExistence(timeout: 5))
-        XCTAssertEqual(app.collectionViews.buttons.matching(selected).count, 1, "The current language should be selected")
-        app.navigationBars["Language"].buttons.element(boundBy: 0).tap()
-
         tapAfterScrolling(app.buttons["Appearance & theme"])
         tapAfterScrolling(app.buttons["Typeface"])
         XCTAssertTrue(app.navigationBars["Change fonts"].waitForExistence(timeout: 5))
@@ -217,7 +212,7 @@ final class TripsplitAppUITests: XCTestCase {
     func testSettingsPagesPushAndReturn() throws {
         openDemoSettings()
         for (row, title) in [("Default payment method", "Payment method"), ("Appearance & theme", "Appearance"),
-                             ("Language", "Language"), ("Privacy & AI", "Privacy & AI"),
+                             ("Privacy & AI", "Privacy & AI"),
                              ("Blocked accounts", "Blocked accounts"),
                              ("Community Standards", "Community Standards"), ("Privacy Policy", "Privacy Policy")] {
             tapAfterScrolling(app.buttons[row])

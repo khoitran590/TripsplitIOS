@@ -246,8 +246,7 @@ struct EditProfileView: View {
                         showcase.cover = cover.rawValue
                     } label: {
                         Circle()
-                            .fill(LinearGradient(colors: cover.colors, startPoint: .topLeading,
-                                                 endPoint: .bottomTrailing))
+                            .fill(cover.colors[1])
                             .frame(width: 40, height: 40)
                             .padding(3)
                             .overlay(Circle().stroke(selected ? Theme.accent : .clear, lineWidth: 2.5))

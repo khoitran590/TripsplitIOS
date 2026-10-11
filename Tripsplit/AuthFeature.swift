@@ -598,6 +598,11 @@ final class AuthStore {
     var session: AuthSession?
     /// The intent behind the most recent authentication change, consumed by coordinators.
     private(set) var lastAuthIntent: AuthIntent?
+    /// Apple prefill belongs to this successful authentication attempt, never to
+    /// a device-wide UserDefaults key that another account could inherit.
+    private(set) var pendingDisplayName: String?
+
+    func clearPendingDisplayName() { pendingDisplayName = nil }
 
     /// Injectable only so the local-first sign-out contract can be tested without
     /// contacting Docker or production. App instances use Supabase global revocation.
@@ -619,6 +624,7 @@ final class AuthStore {
         restorePersistedSession: Bool = true
     ) {
         self.remoteSessionRevoker = remoteSessionRevoker
+        UserDefaults.standard.removeObject(forKey: "pendingAppleDisplayName")
         guard restorePersistedSession else { return }
         if AppStoreDemoData.isEnabled {
             session = AuthSession(
@@ -640,6 +646,7 @@ final class AuthStore {
     }
 
     func signIn(email: String, password: String) async throws {
+        pendingDisplayName = nil
         lastAuthIntent = .existingSignIn
         persist(try await AuthService.shared.signIn(email: email, password: password))
     }
@@ -647,6 +654,7 @@ final class AuthStore {
     /// Returns `true` when the user was signed in immediately, `false` when they must
     /// confirm their email first.
     func signUp(email: String, password: String) async throws -> Bool {
+        pendingDisplayName = nil
         switch try await AuthService.shared.signUp(email: email, password: password) {
         case .signedIn(let session):
             lastAuthIntent = .newRegistration
@@ -661,10 +669,14 @@ final class AuthStore {
         try await AuthService.shared.resetPassword(email: email)
     }
 
-    func signInWithApple(identityToken: String, nonce: String) async throws {
-        let isNewAppleUser = UserDefaults.standard.string(forKey: "pendingAppleDisplayName") != nil
-        lastAuthIntent = isNewAppleUser ? .newRegistration : .existingSignIn
-        persist(try await AuthService.shared.signInWithApple(identityToken: identityToken, nonce: nonce))
+    func signInWithApple(identityToken: String, nonce: String, displayName: String? = nil) async throws {
+        pendingDisplayName = nil
+        let session = try await AuthService.shared.signInWithApple(identityToken: identityToken, nonce: nonce)
+        pendingDisplayName = displayName
+        // Profile/completion state determines whether setup is needed. Apple may
+        // return a name for an existing account, or none for a newly linked one.
+        lastAuthIntent = .existingSignIn
+        persist(session)
     }
 
     /// Reads and clears the last recorded auth intent so it is not processed twice.
@@ -753,6 +765,7 @@ final class AuthStore {
         refreshTask = nil
         session = nil
         lastAuthIntent = nil
+        pendingDisplayName = nil
         AuthSessionStore.delete()
         UserDefaults.standard.removeObject(forKey: storageKey)
     }
@@ -783,6 +796,8 @@ struct AuthView: View {
             }
         }
     }
+
+    init(initialMode: Mode = .signIn) { _mode = State(initialValue: initialMode) }
 
     @State private var mode: Mode = .signIn
     @State private var email = ""
@@ -1008,21 +1023,16 @@ struct AuthView: View {
                 errorMessage = "Apple didn't return a usable credential. Try again."
                 return
             }
-            // Apple provides the name only on the very first authorization for this
-            // account — stash it so the profile-setup step can prefill it.
-            if let name = credential.fullName {
-                let display = [name.givenName, name.familyName].compactMap(\.self).joined(separator: " ")
-                if !display.isEmpty {
-                    UserDefaults.standard.set(display, forKey: "pendingAppleDisplayName")
-                }
-            }
+            let display = credential.fullName.map {
+                [$0.givenName, $0.familyName].compactMap(\.self).joined(separator: " ")
+            }.flatMap { $0.isEmpty ? nil : $0 }
             errorMessage = nil
             infoMessage = nil
             isWorking = true
             let nonce = appleNonce
             Task {
                 do {
-                    try await auth.signInWithApple(identityToken: identityToken, nonce: nonce)
+                    try await auth.signInWithApple(identityToken: identityToken, nonce: nonce, displayName: display)
                 } catch {
                     errorMessage = (error as? AuthError)?.message ?? error.localizedDescription
                 }
@@ -1089,13 +1099,13 @@ struct AuthView: View {
                 case .signUp:
                     let signedIn = try await auth.signUp(email: email, password: password)
                     if !signedIn {
-                        infoMessage = "Account created. Check your email to confirm, then log in."
                         switchMode(.signIn)
+                        infoMessage = "Account created. Check your email to confirm, then log in."
                     }
                 case .forgot:
                     try await auth.resetPassword(email: email)
-                    infoMessage = "If an account exists for that email, a reset link is on its way."
                     switchMode(.signIn)
+                    infoMessage = "If an account exists for that email, a reset link is on its way."
                 }
             } catch {
                 errorMessage = (error as? AuthError)?.message ?? error.localizedDescription

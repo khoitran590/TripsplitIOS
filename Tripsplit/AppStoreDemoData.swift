@@ -32,6 +32,7 @@ extension TripStore {
     /// multi-person expense, and a confirmed payment. Stable UUIDs keep screenshots
     /// and UI tests reproducible across launches.
     func installAppStoreDemoData() {
+        guard AppStoreDemoData.isEnabled else { return }
         let alex = Person(id: AppStoreDemoData.userID, name: "Alex Rivera", color: Color(hex: 0x256A99))
         let jamie = Person(id: UUID(uuidString: "D0000000-0000-0000-0000-000000000002")!,
                            name: "Jamie Chen", color: Color(hex: 0xB94730))

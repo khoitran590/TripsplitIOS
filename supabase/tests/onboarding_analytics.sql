@@ -1,0 +1,11 @@
+begin;
+create extension if not exists pgtap with schema extensions;
+select plan(6);
+select ok((select relrowsecurity from pg_class where oid='public.onboarding_events'::regclass), 'analytics has RLS enabled');
+select ok(not has_table_privilege('authenticated','public.onboarding_events','SELECT'), 'ordinary users cannot read usage events');
+select ok(not has_table_privilege('authenticated','public.onboarding_events','INSERT'), 'ordinary users must use the constrained write RPC');
+select ok(not has_function_privilege('anon','public.record_onboarding_events_v1(jsonb)','EXECUTE'), 'anonymous event submission is denied');
+select ok(has_function_privilege('authenticated','public.record_onboarding_events_v1(jsonb)','EXECUTE'), 'authenticated event submission is available');
+select ok(not has_function_privilege('authenticated','public.onboarding_metrics_v1(timestamptz)','EXECUTE'), 'shared reports are restricted to administrative tooling');
+select * from finish();
+rollback;

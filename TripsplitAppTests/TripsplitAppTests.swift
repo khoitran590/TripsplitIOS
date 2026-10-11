@@ -1083,37 +1083,11 @@ final class TripsplitAppTests: XCTestCase {
     func testOnboardingCoordinatorTriggersReturningSummaryOnExistingSignIn() {
         let coordinator = OnboardingCoordinator()
         let testID = UUID()
-
-        // Bootstrap as existing onboarded user
         coordinator.update(userID: testID, displayName: "Alice", authIntent: .sessionRestored)
-
-        // Simulate sign-out
         coordinator.update(userID: nil, displayName: "")
-        XCTAssertNil(coordinator.step)
-        XCTAssertNil(coordinator.returningUserSummary)
-
-        // Simulate sign back in
         coordinator.update(userID: testID, displayName: "Alice", authIntent: .existingSignIn)
-
         XCTAssertNil(coordinator.step)
-        XCTAssertNotNil(coordinator.returningUserSummary)
         XCTAssertEqual(coordinator.returningUserSummary?.displayName, "Alice")
-        XCTAssertEqual(coordinator.returningUserSummary?.tripsCount, 0)
-
-        // Simulate cloud sync completion
-        coordinator.didFinishCloudSync(
-            tripsCount: 3,
-            netBalanceOwed: 45.50,
-            currencyCode: "USD",
-            avatarURL: "path/to/avatar.jpg"
-        )
-
-        XCTAssertEqual(coordinator.returningUserSummary?.tripsCount, 3)
-        XCTAssertEqual(coordinator.returningUserSummary?.netBalanceOwed, 45.50)
-        XCTAssertEqual(coordinator.returningUserSummary?.currencyCode, "USD")
-        XCTAssertEqual(coordinator.returningUserSummary?.avatarURL, "path/to/avatar.jpg")
-
-        // Dismiss summary
         coordinator.dismissReturningSummary()
         XCTAssertNil(coordinator.returningUserSummary)
     }
@@ -1176,26 +1150,12 @@ final class TripsplitAppTests: XCTestCase {
         XCTAssertEqual(actions.count, 3)
     }
 
-    func testReturningUserSummaryBalanceVariations() {
-        let positive = ReturningUserSummary(
-            displayName: "Bob",
-            avatarURL: nil,
-            tripsCount: 2,
-            netBalanceOwed: 150.00,
-            currencyCode: "EUR"
-        )
-        XCTAssertGreaterThan(positive.netBalanceOwed, 0)
-
-        let negative = ReturningUserSummary(
-            displayName: "Bob",
-            avatarURL: nil,
-            tripsCount: 1,
-            netBalanceOwed: -75.50,
-            currencyCode: "USD"
-        )
-        XCTAssertLessThan(negative.netBalanceOwed, 0)
-        XCTAssertEqual(negative.currencyCode, "USD")
+    func testReturningUserSummaryOnlyCarriesIdentity() {
+        // Financial values come from live store state, not a stale sign-in snapshot.
+        let summary = ReturningUserSummary(displayName: "Bob")
+        XCTAssertEqual(summary.displayName, "Bob")
     }
+
 }
 
 private actor RemoteSignOutProbe {

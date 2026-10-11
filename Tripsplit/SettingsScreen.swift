@@ -10,18 +10,18 @@ struct SettingsScreen: View {
 
     @Environment(AuthStore.self) private var auth
     @Environment(TripStore.self) private var store
-    @Environment(LocalizationManager.self) private var localization
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
 
     /// Pages pushed within Settings. Self-contained tasks with Cancel/Save (editing the
     /// profile, changing the password, deleting the account) stay sheets instead.
     private enum Page: Hashable {
-        case profile, appearance, paymentMethod, language, privacyAI, blockedAccounts, communityStandards, privacyPolicy
+        case profile, appearance, paymentMethod, privacyAI, blockedAccounts, communityStandards, privacyPolicy
     }
 
     @State private var path: [Page] = []
     @State private var showPersonalInfo = false
+    @State private var showQuickGuide = false
     @State private var showChangePassword = false
     @State private var showDeleteAccount = false
     @State private var isSigningOut = false
@@ -49,10 +49,16 @@ struct SettingsScreen: View {
 
                         AuthView()
                     }
-                    .toolbar { doneButton }
+                    .toolbar {
+                        doneButton
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("Quick guide") { showQuickGuide = true }
+                        }
+                    }
                 }
             }
         }
+        .quickGuide(isPresented: $showQuickGuide)
         // Signing in happens inside this sheet (AuthView above). Close the sheet on
         // success so the user lands on Home instead of the settings content.
         .onChange(of: auth.isAuthenticated) { _, isAuthenticated in
@@ -115,11 +121,6 @@ struct SettingsScreen: View {
                                      iconColor: Color(hex: 0xB043C6)) {
                         path.append(.appearance)
                     }
-                    PlainSettingsRow(icon: "globe", title: "Language",
-                                     value: Text(verbatim: localization.language.endonym),
-                                     iconColor: Color(hex: 0x0E94A8)) {
-                        path.append(.language)
-                    }
                 }
 
                 settingsSection("Privacy & Safety") {
@@ -142,6 +143,9 @@ struct SettingsScreen: View {
                 }
 
                 settingsSection("Support") {
+                    PlainSettingsRow(icon: "questionmark.circle", title: "Quick guide", iconColor: Theme.accent) {
+                        showQuickGuide = true
+                    }
                     // The address doubles as the value, so it's still usable when Mail
                     // isn't set up and the link can't open.
                     PlainSettingsRow(icon: "envelope.fill", title: "Contact support",
@@ -190,7 +194,6 @@ struct SettingsScreen: View {
             case .profile: ProfileDetailView()
             case .appearance: AppearanceSettingsView()
             case .paymentMethod: PaymentPreferencesView()
-            case .language: LanguagePickerView()
             case .privacyAI: AIPrivacyChoicesView()
             case .blockedAccounts: BlockedAccountsView()
             case .communityStandards: CommunityStandardsView()
@@ -540,15 +543,12 @@ struct ProfileAvatar: View {
                     .resizable()
                     .scaledToFill()
             } else if !initials.isEmpty {
-                LinearGradient(
-                    colors: [Color(hex: 0x818CF8), Color(hex: 0x4F46E5)],
-                    startPoint: .topLeading, endPoint: .bottomTrailing
-                )
-                .overlay(
-                    Text(verbatim: initials)
-                        .font(.app(size: size * 0.4, weight: .semibold))
-                        .foregroundStyle(.white)
-                )
+                Theme.accentPastel
+                    .overlay(
+                        Text(verbatim: initials)
+                            .font(.app(size: size * 0.4, weight: .semibold))
+                            .foregroundStyle(Theme.ink)
+                    )
             } else {
                 Image(systemName: "person.crop.circle.fill")
                     .resizable()

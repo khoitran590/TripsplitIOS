@@ -1419,7 +1419,11 @@ struct ItineraryDetailView: View {
             if budget > 0 {
                 MeterBar(
                     fraction: min(planned / budget, 1),
-                    colors: over ? [Theme.negative, Theme.negative] : [Theme.accent, Theme.accentSecondary],
+                    // Same blend as the Home trip rows: amber at the tip from 80% of the
+                    // budget, amber into red once over.
+                    colors: over ? [Theme.warning, Theme.negative]
+                        : planned / budget >= 0.8 ? [Theme.accent, Theme.warning]
+                        : [Theme.accent, Theme.accentSecondary],
                     track: Theme.fieldBackground,
                     height: 10
                 )

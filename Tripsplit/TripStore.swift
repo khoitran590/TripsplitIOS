@@ -163,6 +163,16 @@ final class TripStore {
     /// the next sync, and used to stop `loadFromCloud` from resurrecting them.
     private(set) var pendingDeletions: Set<Trip.ID> = []
 
+    enum ProfileSyncState { case synced, pending, syncing }
+    private(set) var profileSyncState: ProfileSyncState = .synced
+    private var profileEditGeneration = 0
+    private var profileRevision: UUID?
+    private var pendingAvatarUpload = false
+    private var profileSyncTask: Task<Bool, Never>?
+    private var profileSyncGeneration = UUID()
+    // Injectable for deterministic recovery and concurrent-edit tests.
+    var profileSyncTransport: ((UserProfile, Data?, UUID) async throws -> String?)?
+
     private static let pendingDeletionsKey = "tripsplit.pendingDeletions"
     private struct StoredProfile: Codable {
         var name: String
@@ -181,6 +191,8 @@ final class TripStore {
         /// Cached for the same reason: a bookmark saved before the cloud fetch lands
         /// pushes the whole profile, and an empty showcase would overwrite the real one.
         var showcase: ProfileShowcase?
+        var pendingRevision: UUID?
+        var pendingAvatarUpload: Bool?
     }
 
     /// Returns a UserDefaults key scoped to the given user UUID, so different accounts
@@ -272,43 +284,16 @@ final class TripStore {
         }
     }
 
-    /// Uploads the given JPEG to Supabase Storage as the user's avatar, stores the storage
-    /// path on `currentUser.avatarURL`, and pushes the updated Person into every trip so
-    /// other members see the new photo on their next sync. (The field name is historical;
-    /// it now holds a path that `signedImageURL` resolves at display time.)
-    /// Returns false when the upload never reached Storage, so an editor can tell the
-    /// user their new photo was not saved instead of closing as if it had been.
-    @discardableResult
-    func uploadAndSetAvatar(_ jpeg: Data) async -> Bool {
-        guard let accessToken = try? await authorizedAccessToken() else { return false }
-        let path = "\(currentUser.id.uuidString.lowercased())/profile.jpg"
-        guard let url = try? await withFreshTokenIfNeeded(initialToken: accessToken, operation: { token in
-            try await ReceiptStorage.shared.upload(
-                jpeg,
-                path: path,
-                assetType: "avatar",
-                recordID: currentUser.id,
-                accessToken: token
-            )
-        }) else { return false }
-        currentUser.avatarURL = url
-        userProfile.avatarPath = url
-        // Persist locally so the URL survives a relaunch.
-        persistLocalProfile()
-        // Push the updated Person (name + avatarURL) into every trip the user belongs to
-        // so other members pick up the change on their next loadFromCloud.
-        for index in trips.indices {
-            if let memberIndex = trips[index].members.firstIndex(where: { $0.id == currentUser.id }) {
-                trips[index].members[memberIndex].name = currentUser.name
-                trips[index].members[memberIndex].avatarURL = url
-                persist(trips[index])
-            }
-        }
-        return true
-    }
-
     /// Clears the in-memory profile. Called on sign-out so the next account starts blank.
     func resetProfile() {
+        profileSyncTask?.cancel()
+        profileSyncTask = nil
+        profileSyncGeneration = UUID()
+        profileEditGeneration += 1
+        profileRevision = nil
+        pendingAvatarUpload = false
+        profileSyncState = .synced
+        currentUser.avatarURL = nil
         currentUser.name = ""
         profileImageData = nil
         userProfile = UserProfile()
@@ -318,6 +303,8 @@ final class TripStore {
     /// data remains authoritative; this prevents the next device user from recovering
     /// trip/profile/media data from the prior account's caches.
     func purgeLocalData(for userID: UUID) async {
+        OnboardingAnalytics.shared.purge(for: userID)
+        UserDefaults.standard.removeObject(forKey: "tripsplit.lastVisitedTrip.\(userID.uuidString.lowercased())")
         cancelScheduledTripSaves()
         cancelPendingCacheWrite()
         UserDefaults.standard.removeObject(forKey: Self.profileKey(for: userID))
@@ -356,7 +343,9 @@ final class TripStore {
             savedMapPlaces: userProfile.savedMapPlaces,
             savedDestinationIDs: userProfile.savedDestinationIDs,
             visibility: userProfile.visibility,
-            showcase: userProfile.showcase
+            showcase: userProfile.showcase,
+            pendingRevision: profileRevision,
+            pendingAvatarUpload: pendingAvatarUpload
         )
         if let data = try? JSONEncoder().encode(stored) {
             UserDefaults.standard.set(data, forKey: Self.profileKey(for: currentUser.id))
@@ -374,23 +363,116 @@ final class TripStore {
     /// Returns whether the avatar upload and the cloud row both went through. The local
     /// copy is saved either way, so a false result means "this device is up to date but
     /// your other devices are not" — worth telling the user, not worth discarding edits.
-    @discardableResult
-    func saveProfile(_ profile: UserProfile, imageData: Data?, removePhoto: Bool = false) async -> Bool {
+    /// Applies the edit before starting any network work. The persisted revision and
+    /// JPEG are the durable retry queue; a cloud read cannot overwrite a pending edit.
+    func queueProfileSave(_ profile: UserProfile, imageData: Data?, removePhoto: Bool = false) {
+        let previousImage = profileImageData
         userProfile = profile
         userProfile.avatarPath = currentUser.avatarURL
-        let previousImageData = profileImageData
-        updateProfile(name: profile.displayName,
-                      imageData: removePhoto ? nil : (imageData ?? profileImageData))
-        var uploaded = true
-        if let imageData, !removePhoto, imageData != previousImageData || currentUser.avatarURL == nil {
-            uploaded = await uploadAndSetAvatar(imageData)
-        } else if removePhoto {
+        if removePhoto {
             currentUser.avatarURL = nil
             userProfile.avatarPath = nil
-            persistLocalProfile()
+            pendingAvatarUpload = false
+        } else if let imageData, imageData != previousImage || currentUser.avatarURL == nil {
+            pendingAvatarUpload = true
         }
-        let pushed = await pushProfileToCloud()
-        return uploaded && pushed
+        profileEditGeneration += 1
+        profileRevision = UUID()
+        profileSyncState = .pending
+        updateProfile(name: profile.displayName, imageData: removePhoto ? nil : (imageData ?? previousImage))
+        scheduleProfileSync()
+    }
+
+    @discardableResult
+    func saveProfile(_ profile: UserProfile, imageData: Data?, removePhoto: Bool = false) async -> Bool {
+        queueProfileSave(profile, imageData: imageData, removePhoto: removePhoto)
+        return await retryProfileSync()
+    }
+
+    private func markProfilePending() {
+        profileEditGeneration += 1
+        profileRevision = UUID()
+        profileSyncState = .pending
+        persistLocalProfile()
+        scheduleProfileSync()
+    }
+
+    private func scheduleProfileSync() {
+        guard profileRevision != nil, profileSyncTask == nil else { return }
+        let userID = currentUser.id
+        let generation = profileSyncGeneration
+        profileSyncTask = Task { [weak self] in
+            guard let self else { return false }
+            let success = await self.drainProfileQueue(userID: userID, generation: generation)
+            if self.profileSyncGeneration == generation { self.profileSyncTask = nil }
+            return success
+        }
+    }
+
+    @discardableResult
+    func retryProfileSync() async -> Bool {
+        scheduleProfileSync()
+        return await profileSyncTask?.value ?? (profileRevision == nil)
+    }
+
+    private func drainProfileQueue(userID: UUID, generation: UUID) async -> Bool {
+        while let revision = profileRevision {
+            guard currentUser.id == userID, profileSyncGeneration == generation, !Task.isCancelled else { return false }
+            profileSyncState = .syncing
+            var snapshot = userProfile
+            snapshot.displayName = currentUser.name
+            snapshot.avatarPath = currentUser.avatarURL
+            let image = pendingAvatarUpload ? profileImageData : nil
+            do {
+                let avatar: String?
+                if let profileSyncTransport {
+                    avatar = try await profileSyncTransport(snapshot, image, userID)
+                } else {
+                    guard let token = try await authorizedAccessToken() else {
+                        guard currentUser.id == userID, profileSyncGeneration == generation else { return false }
+                        profileSyncState = .pending
+                        return false
+                    }
+                    guard currentUser.id == userID, profileSyncGeneration == generation else { return false }
+                    if let image {
+                        let path = "\(userID.uuidString.lowercased())/profile.jpg"
+                        avatar = try await withFreshTokenIfNeeded(initialToken: token) { token in
+                            try await ReceiptStorage.shared.upload(image, path: path, assetType: "avatar", recordID: userID, accessToken: token)
+                        }
+                        snapshot.avatarPath = avatar
+                    } else { avatar = snapshot.avatarPath }
+                    guard currentUser.id == userID, profileSyncGeneration == generation else { return false }
+                    // A newer photo or removal must be uploaded after this request, not
+                    // overwritten locally by this older upload's completion.
+                    if profileRevision != revision { continue }
+                    try await withFreshTokenIfNeeded(initialToken: token) { token in
+                        try await ProfilesRepository.shared.update(snapshot, userID: userID, accessToken: token)
+                    }
+                }
+                guard currentUser.id == userID, profileSyncGeneration == generation else { return false }
+                guard profileRevision == revision else { continue }
+                currentUser.avatarURL = avatar
+                userProfile.avatarPath = avatar
+                pendingAvatarUpload = false
+                profileRevision = nil
+                profileSyncState = .synced
+                persistLocalProfile()
+                for index in trips.indices {
+                    if let member = trips[index].members.firstIndex(where: { $0.id == userID }) {
+                        trips[index].members[member].name = currentUser.name
+                        trips[index].members[member].avatarURL = avatar
+                        persist(trips[index])
+                    }
+                }
+            } catch {
+                guard currentUser.id == userID, profileSyncGeneration == generation else { return false }
+                if profileRevision != revision { continue }
+                profileSyncState = .pending
+                BackendSecurity.log("Profile sync pending", error: error)
+                return false
+            }
+        }
+        return true
     }
 
     /// Updates the cloud-backed bookmark lists (map places and/or Explore destinations),
@@ -403,39 +485,44 @@ final class TripStore {
         if let mapKeys { userProfile.savedPlaceKeys = mapKeys }
         if let mapPlaces { userProfile.savedMapPlaces = mapPlaces }
         if let destinationIDs { userProfile.savedDestinationIDs = destinationIDs }
-        persistLocalProfile()
-        Task { await pushProfileToCloud() }
+        markProfilePending()
     }
 
     /// Applies a quick showcase edit made outside the editor (pinning a badge, picking a
     /// card cover), persisting locally and upserting `public.profiles`.
     func updateShowcase(_ change: (inout ProfileShowcase) -> Void) {
         change(&userProfile.showcase)
-        persistLocalProfile()
-        Task { await pushProfileToCloud() }
+        markProfilePending()
     }
 
     /// Applies a quick privacy change made outside the editor (the bucket list's
     /// visibility button), persisting locally and upserting `public.profiles`.
     func updateVisibility(_ change: (inout ProfileVisibility) -> Void) {
         change(&userProfile.visibility)
-        persistLocalProfile()
-        Task { await pushProfileToCloud() }
+        markProfilePending()
     }
 
     /// Loads the account's profile row from Supabase, replacing the local cache. When
     /// the cloud row is still empty (fresh account or pre-profile install) but a local
     /// profile exists, the local one is pushed up instead.
     func loadProfileFromCloud() async {
+        if profileRevision != nil {
+            await retryProfileSync()
+            guard profileRevision == nil else { return }
+        }
+        let generation = profileSyncGeneration
+        let editGeneration = profileEditGeneration
         guard let accessToken = try? await authorizedAccessToken() else { return }
         let userID = currentUser.id
         guard let fetched = try? await withFreshTokenIfNeeded(initialToken: accessToken, operation: { token in
             try await ProfilesRepository.shared.fetch(userID: userID, accessToken: token)
         }) else { return }
 
+        guard currentUser.id == userID, profileSyncGeneration == generation, profileEditGeneration == editGeneration, profileRevision == nil else { return }
         if fetched.displayName.trimmingCharacters(in: .whitespaces).isEmpty && !currentUser.name.isEmpty {
             // Cloud row never populated — seed it from this device's profile.
-            await pushProfileToCloud()
+            markProfilePending()
+            await retryProfileSync()
             return
         }
         // Bookmarks saved on this device before the cloud fetch (e.g. while offline, or
@@ -453,35 +540,14 @@ final class TripStore {
         userProfile.savedDestinationIDs = fetched.savedDestinationIDs
             + localDestinationIDs.filter { !fetched.savedDestinationIDs.contains($0) }
         currentUser.name = fetched.displayName
-        if let path = fetched.avatarPath, !path.isEmpty {
-            currentUser.avatarURL = path
-        }
+        if currentUser.avatarURL != fetched.avatarPath { profileImageData = nil }
+        currentUser.avatarURL = fetched.avatarPath.flatMap { $0.isEmpty ? nil : $0 }
         persistLocalProfile()
         if userProfile.savedPlaceKeys != fetched.savedPlaceKeys
             || userProfile.savedMapPlaces != fetched.savedMapPlaces
             || userProfile.savedDestinationIDs != fetched.savedDestinationIDs {
-            await pushProfileToCloud()
-        }
-    }
-
-    /// Upserts the in-memory profile into `public.profiles`. Failures are logged and
-    /// reported back (the local copy is already saved); callers that edit on the user's
-    /// behalf surface them, background callers ignore the result.
-    @discardableResult
-    private func pushProfileToCloud() async -> Bool {
-        guard let accessToken = try? await authorizedAccessToken() else { return false }
-        var profile = userProfile
-        profile.displayName = currentUser.name
-        profile.avatarPath = currentUser.avatarURL
-        let userID = currentUser.id
-        do {
-            try await withFreshTokenIfNeeded(initialToken: accessToken) { token in
-                try await ProfilesRepository.shared.update(profile, userID: userID, accessToken: token)
-            }
-            return true
-        } catch {
-            BackendSecurity.log("Profile cloud save failed", error: error)
-            return false
+            markProfilePending()
+            await retryProfileSync()
         }
     }
 
@@ -496,6 +562,22 @@ final class TripStore {
     /// Trips the user archived are excluded here so they drop out of the home cards,
     /// totals, and pickers, but remain reachable via `archivedTrips`.
     var myTrips: [Trip] { trips.filter { !$0.isArchived(for: currentUser.id) } }
+
+    var recommendedTrip: Trip? {
+        let active = myTrips
+        if let saved = UserDefaults.standard.string(forKey: "tripsplit.lastVisitedTrip.\(currentUser.id.uuidString.lowercased())"),
+           let id = UUID(uuidString: saved), let trip = active.first(where: { $0.id == id }) { return trip }
+        let today = Calendar.current.startOfDay(for: Date())
+        if let ongoing = active.first(where: { ($0.startDate ?? .distantFuture) <= today && ($0.endDate ?? .distantPast) >= today }) { return ongoing }
+        if let upcoming = active.filter({ ($0.startDate ?? .distantPast) > today }).min(by: { $0.startDate! < $1.startDate! }) { return upcoming }
+        return active.first
+    }
+
+    func recordTripVisit(_ id: Trip.ID) {
+        guard myTrips.contains(where: { $0.id == id }) else { return }
+        UserDefaults.standard.set(id.uuidString, forKey: "tripsplit.lastVisitedTrip.\(currentUser.id.uuidString.lowercased())")
+    }
+
 
     /// Trips the signed-in user has archived for themselves.
     var archivedTrips: [Trip] { trips.filter { $0.isArchived(for: currentUser.id) } }
@@ -706,6 +788,9 @@ final class TripStore {
     func isCreator(of trip: Trip) -> Bool { trip.creatorID == currentUser.id }
 
     func addTrip(_ trip: Trip) {
+        if myTrips.isEmpty {
+            UserDefaults.standard.set(true, forKey: FirstTripChecklist.key(userID: currentUser.id, tripID: trip.id))
+        }
         trips.append(trip)
         persist(trip)
     }
@@ -713,6 +798,9 @@ final class TripStore {
     func addExpense(_ expense: Expense, to tripID: Trip.ID) {
         guard let index = trips.firstIndex(where: { $0.id == tripID }) else { return }
         trips[index].expenses.append(expense)
+        if expense.amount.isFinite, expense.amount > 0 {
+            OnboardingAnalytics.shared.record(.firstExpenseSaved, source: .trip, userID: currentUser.id)
+        }
         persist(trips[index])
     }
 
@@ -992,6 +1080,7 @@ final class TripStore {
         // Identity changed: drop cached feeds so a different account never sees the
         // previous user's loaded posts.
         if currentUser.id != uuid {
+            resetProfile()
             cancelScheduledTripSaves()
             cancelPendingCacheWrite()
             resetFeedState()
@@ -1003,6 +1092,9 @@ final class TripStore {
         currentUser.id = uuid
         // Load this specific user's saved profile (name, photo, avatarURL) keyed to their UUID.
         let stored = Self.loadProfile(for: uuid)
+        profileRevision = stored?.pendingRevision
+        pendingAvatarUpload = stored?.pendingAvatarUpload ?? false
+        profileSyncState = profileRevision == nil ? .synced : .pending
         currentUser.name = stored?.name ?? ""
         profileImageData = stored?.imageData
         currentUser.avatarURL = stored?.avatarURL
@@ -1271,6 +1363,7 @@ final class TripStore {
     /// still inside their debounce, and if anything failed to reach the cloud, re-pushes
     /// every trip once (as Retry does). Returns false when changes would still be lost.
     func flushPendingChanges() async -> Bool {
+        guard await retryProfileSync() else { return false }
         for task in Array(tripSaveTasks.values) { await task.value }
         guard syncState == .failed || !pendingDeletions.isEmpty else { return true }
         do {
@@ -1390,6 +1483,8 @@ final class TripStore {
     // Internal (not private): the trip-feed extension in FeedFeature.swift runs its
     // repository calls through the same token validation/refresh pipeline.
     func authorizedAccessToken(requireServerAccepted: Bool = false) async throws -> String? {
+        // Screenshot fixtures are never a network-backed account.
+        guard !AppStoreDemoData.isEnabled else { return nil }
         // Reuse the stored token only while it's a real, non-expired user JWT. Sending an
         // expired/malformed one lets the request reach Postgres as the anonymous role,
         // where RLS rejects the write with a 403 (auth.uid() is null) — the failure mode

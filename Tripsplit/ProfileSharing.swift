@@ -1068,7 +1068,7 @@ struct ProfileShareSheet: View {
     private func coverSwatch(_ option: ShareCardCover) -> some View {
         let isSelected = cover == option
         return RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .fill(LinearGradient(colors: option.colors, startPoint: .topLeading, endPoint: .bottomTrailing))
+            .fill(option.colors[1])
             .frame(width: 44, height: 56)
             .overlay {
                 VStack(spacing: 3) {
@@ -1163,8 +1163,7 @@ struct ShareCardCoverPicker: View {
         let isSelected = cover == option
         return VStack(spacing: 7) {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(LinearGradient(colors: option.colors,
-                                     startPoint: .topLeading, endPoint: .bottomTrailing))
+                .fill(option.colors[1])
                 .frame(height: 64)
                 .overlay {
                     VStack(spacing: 0) {

@@ -272,3 +272,36 @@ Validation on September 14, 2026 (iPhone 17, iOS 26.5): 10/10 Hanoi pins and 10/
 These are landmark-level checks, not entrance-level verification or a guarantee for arbitrary restaurants and branches. Add the user's exact failing venue names, address context, and independently verified coordinates as new fixtures when available. Do not use confidence-score fixtures or the traveler-confirmation percentage as a substitute for the live gate.
 
 Route ordering minimizes geographic distance using nearest-neighbor and 2-opt candidates, keeping the existing order if neither is shorter. The first stop, last stop, scheduled stops, and missing-location stops stay in place. Pin numbering and the drawer use the same order. Optimization affects the Map preview; Restore order returns to the itinerary order. Walking geometry is fetched separately; a failed leg leaves a dashed estimate and a retryable explanation instead of displaying an invented solid walking route.
+
+### Onboarding measurement
+
+`20261010000000_onboarding_analytics.sql` adds first-party shared measurement. The iOS
+client queues events per account, retries on foreground and new actions, and excludes
+practice/demo data. Settings → Privacy & AI → Help improve onboarding stops future
+collection and clears unsent events. Events include fixed task names and timing, without
+names, receipt contents, financial amounts, trip IDs, or invitation tokens.
+
+An administrator can run this in the Supabase SQL editor to inspect the last 30 days:
+
+```sql
+select public.onboarding_metrics_v1();
+```
+
+The result includes per-task opens, explicit reviews, action selections, dismissals,
+setup skips/deferrals, invitation acceptance, return resumes, and new-user activation
+cohorts. Activation means saving a first real expense; completing setup or reviewing a
+guide does not count. Existing accounts without a measured setup start are excluded
+from activation cohorts. Median and p90 timing are observed values, not promised guide
+durations. The initial report is empty until real usage arrives.
+
+The write RPC supplies the authenticated identity, validates fixed event fields, and
+ignores duplicate retries and duplicate first-expense milestones. Ordinary clients
+cannot read events or shared reports. Account deletion cascades to its events. Verify
+these boundaries with a rollback-only fixture transaction:
+
+```sh
+supabase db query --linked --file scripts/verify-onboarding-analytics.sql
+```
+
+The local repository includes the hosted September 28–30 migration history so future
+migration pushes remain in sync with the linked database.

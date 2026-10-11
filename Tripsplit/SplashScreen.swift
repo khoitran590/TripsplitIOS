@@ -15,6 +15,7 @@ struct RootView: View {
     /// Set when the welcome flow ends on "Create an account", so `ContentView` can
     /// open sign-in instead of leaving the user to find it.
     @State private var startsAtSignIn = false
+    @State private var incomingLink = PendingInvitationStore().load().map { IncomingAppLink(url: $0) }
 
     /// Launch-argument overrides are launch state. SwiftUI re-creates `RootView` whenever
     /// state it observed changes — including the theme set just below — so re-applying
@@ -26,13 +27,22 @@ struct RootView: View {
         Self.appliedLaunchOverrides = true
 
         let arguments = ProcessInfo.processInfo.arguments
+        #if DEBUG
+        if arguments.contains("-ui-test-clear-invitation") {
+            PendingInvitationStore().delete()
+            _incomingLink = State(initialValue: nil)
+        }
+        #endif
         let isUITest = arguments.contains("-ui-test-reset-onboarding")
             || arguments.contains("-ui-test-skip-onboarding")
 
         // Accessibility audits must be repeatable on a clean CI runner and on a
         // developer Simulator that may have unrelated personal appearance settings.
         if isUITest {
-            UserDefaults.standard.set(AppearancePreference.light.rawValue, forKey: "appearancePreference")
+            let requestedAppearance = arguments.firstIndex(of: "-ui-test-appearance").flatMap { index in
+                arguments.indices.contains(index + 1) ? AppearancePreference(rawValue: arguments[index + 1]) : nil
+            } ?? .light
+            UserDefaults.standard.set(requestedAppearance.rawValue, forKey: "appearancePreference")
             UserDefaults.standard.set(0.0, forKey: "navbarTransparency")
             let requestedTheme = arguments.firstIndex(of: "-ui-test-theme").flatMap { index in
                 arguments.indices.contains(index + 1) ? AppTheme(rawValue: arguments[index + 1]) : nil
@@ -44,19 +54,37 @@ struct RootView: View {
         }
 
         if AppStoreDemoData.isEnabled {
+            #if DEBUG
+            let prefix = "tripsplit.onboarding.v1.\(AppStoreDemoData.userID.uuidString.lowercased())."
+            if arguments.contains("-ui-test-reset-setup") {
+                for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix(prefix) {
+                    UserDefaults.standard.removeObject(forKey: key)
+                }
+            }
+            if arguments.contains("-ui-test-returning-user") {
+                UserDefaults.standard.set(Date().addingTimeInterval(-31 * 24 * 60 * 60), forKey: prefix + "lastActivity")
+            }
+            #endif
             UserDefaults.standard.set(true, forKey: "hasSeenWelcome")
         } else if arguments.contains("-ui-test-reset-onboarding") {
             UserDefaults.standard.removeObject(forKey: "hasSeenWelcome")
         } else if arguments.contains("-ui-test-skip-onboarding") {
             UserDefaults.standard.set(true, forKey: "hasSeenWelcome")
         }
+        #if DEBUG
+        if let index = arguments.firstIndex(of: "-ui-test-invite-url"), arguments.indices.contains(index + 1),
+           let url = URL(string: arguments[index + 1]) {
+            _incomingLink = State(initialValue: IncomingAppLink(url: url))
+            UserDefaults.standard.set(true, forKey: "hasSeenWelcome")
+        }
+        #endif
     }
 
     var body: some View {
         ZStack {
             if isActive {
-                if hasSeenWelcome || isSignedInAtLaunch {
-                    ContentView(startsAtSignIn: startsAtSignIn)
+                if hasSeenWelcome || isSignedInAtLaunch || incomingLink != nil {
+                    ContentView(startsAtSignIn: startsAtSignIn, incomingLink: incomingLink)
                         .transition(.opacity)
                 } else {
                     WelcomeView { intent in
@@ -76,6 +104,14 @@ struct RootView: View {
         // every `Text` re-renders in the chosen language without an app restart. Reading
         // `localization.locale` here re-runs this body when the user picks a new language.
         // Tapping empty space anywhere in the app hides the keyboard.
+        .onOpenURL { url in
+            // Capture links even while the splash/welcome is visible. A new event
+            // identity lets reopening the same invitation work after cancellation.
+            incomingLink = IncomingAppLink(url: url)
+            PendingInvitationStore().save(url)
+            startsAtSignIn = false
+            hasSeenWelcome = true
+        }
         .background(KeyboardDismissInstaller())
         .environment(localization)
         .environment(\.locale, localization.locale)

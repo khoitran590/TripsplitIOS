@@ -232,11 +232,12 @@ struct PrivacyPolicyPage: View {
             VStack(alignment: .leading, spacing: 18) {
                 Text("TripSplit Privacy Policy")
                     .font(.app(.title2, .bold))
-                Text("Last updated August 5, 2026")
+                Text("Last updated October 10, 2026")
                     .font(.app(.caption))
                     .foregroundStyle(.secondary)
                 policySection("Data we use", "Account and profile details, trip membership, itineraries, expenses, settlements, receipts, photos, posts, comments, friendships, place information, and privacy choices are used to provide the features you request.")
                 policySection("Cloud providers", "TripSplit stores account and app data with Supabase. After receipt-processing consent, TripSplit sends the receipt image to Anthropic Claude first and to Google Gemini only if Claude cannot complete the scan. AI itinerary planning sends the destination, dates, budget, and existing plan text to Anthropic Claude first and to Google Gemini only if Claude cannot draft a plan; either provider may search the web for current places. Both happen only after separate consent.")
+                policySection("Onboarding measurement", "With usage measurement enabled, TripSplit stores account-linked onboarding and guide actions, task choices, and completion timing in Supabase to improve setup and return visits. These events do not contain names, trip details, receipt contents, or financial amounts. You can stop future collection in Settings → Privacy & AI. Account deletion removes these events.")
                 policySection("Retention", "TripSplit retains cloud data while your account or shared records need it. The app's AI proxy does not intentionally persist prompts, receipt images, or provider responses in logs. Provider-side retention is governed by the production cloud agreements. Device caches are protected and removed at sign-out or account deletion.")
                 policySection("Your choices", "You can decline or revoke cloud AI, use manual and on-device alternatives, edit profile information, sign out, and permanently delete your account in Settings. Deletion removes owned trips and user-generated content; shared financial history may retain a pseudonymous participant record so other members' balances remain accurate.")
                 policySection("Security and contact", "TripSplit uses HTTPS, private object storage, row-level authorization, Keychain session storage, and server-side provider credentials. Privacy questions can be sent to support@tripsplit.app.")
@@ -258,12 +259,21 @@ struct PrivacyPolicyPage: View {
 }
 
 struct AIPrivacyChoicesView: View {
+    @AppStorage("onboardingAnalyticsEnabled") private var analyticsEnabled = true
     @Environment(TripStore.self) private var store
     @State private var workingPurpose: AIConsentPurpose?
     @State private var message: String?
 
     var body: some View {
         List {
+            Section {
+                Toggle("Help improve onboarding", isOn: $analyticsEnabled)
+            } header: {
+                Text("Usage measurement")
+            } footer: {
+                Text("Shares onboarding and guide actions and completion timing with TripSplit. No names, trip details, receipt contents, or financial amounts are included. Turning this off clears unsent events and stops future collection.")
+            }
+
             Section {
                 ForEach(AIConsentPurpose.allCases) { purpose in
                     HStack {
@@ -287,6 +297,7 @@ struct AIPrivacyChoicesView: View {
             if let message { Section { Text(verbatim: message).foregroundStyle(Theme.negative) } }
         }
         .navigationTitle("Privacy & AI")
+        .onChange(of: analyticsEnabled) { _, enabled in OnboardingAnalytics.shared.setEnabled(enabled) }
     }
 
     private func revoke(_ purpose: AIConsentPurpose) {

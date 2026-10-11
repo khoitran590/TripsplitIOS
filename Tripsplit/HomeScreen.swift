@@ -7,12 +7,15 @@ struct HomeScreen: View {
     var onBrowseIdeas: () -> Void = {}
     @Environment(TripStore.self) private var store
     @Environment(AuthStore.self) private var auth
+    @Environment(OnboardingCoordinator.self) private var onboarding
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var showQuickGuide = false
     @State private var showAddTrip = false
     @State private var showSignInAlert = false
     @State private var resumeAddTripAfterSignIn = false
     @State private var selectedTrip: Trip?
+    @State private var createdTrip: Trip?
 
     /// The quick action a user tapped, awaiting a trip choice.
     private enum QuickAction { case split, addExpense }
@@ -49,9 +52,19 @@ struct HomeScreen: View {
                         .transition(.topBanner(reduceMotion: reduceMotion))
                         .animation(.snappy, value: store.syncState)
                     BalanceCard()
-                    quickActions
-                    tripsSection
-                    recentTransactions
+                    if isBrandNew {
+                        // With nothing to add an expense to, the quick actions, the trips
+                        // header and the empty Recent list were four more ways to say
+                        // "no trips" around the one thing worth tapping.
+                        if case .failed(let message) = store.cloudLoadState {
+                            cloudLoadFailure(message)
+                        }
+                        emptyTripsCard
+                    } else {
+                        quickActions
+                        tripsSection
+                        recentTransactions
+                    }
                 }
                 .padding(.horizontal, Theme.contentInset)
                 .padding(.bottom, 110)
@@ -59,6 +72,9 @@ struct HomeScreen: View {
             .background { AppBackground() }
             .navigationTitle("Your trips")
             .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Quick guide", systemImage: "questionmark.circle") { showQuickGuide = true }
+                }
                 if store.syncState == .syncing {
                     ToolbarItem(placement: .topBarTrailing) {
                         ProgressView()
@@ -71,10 +87,24 @@ struct HomeScreen: View {
                 // cache or another trip member's recent edits remain invisible.
                 await store.loadFromCloud(forceRefresh: true)
                 await store.refreshRates()
+                await store.retryProfileSync()
+                OnboardingAnalytics.shared.retry()
             }
         }
-        .sheet(isPresented: $showAddTrip) {
-            AddTripView()
+        .quickGuide(isPresented: $showQuickGuide)
+        .sheet(isPresented: $showAddTrip, onDismiss: {
+            if let created = createdTrip {
+                createdTrip = nil
+                if onboarding.hasUnfinishedSetup {
+                    if store.currentUser.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        onboarding.suspendSetup()
+                    } else { onboarding.newUserOnboardingFinished() }
+                }
+                selectedTrip = created
+            } else { onboarding.suspendSetup() }
+            onboarding.isPaused = false
+        }) {
+            AddTripView { createdTrip = $0 }
         }
         .sheet(isPresented: $showArchivedTrips) {
             ArchivedTripsSheet()
@@ -112,22 +142,35 @@ struct HomeScreen: View {
         } message: {
             Text(tripToDelete.map { "“\($0.name)” and its expenses will be removed from your synced trips." } ?? "")
         }
-        .sheet(isPresented: $showSignInAlert) {
+        .sheet(isPresented: $showSignInAlert, onDismiss: {
+            guard auth.isAuthenticated else {
+                resumeAddTripAfterSignIn = false
+                pendingAction = nil
+                onboarding.isPaused = false
+                return
+            }
+            resumeAuthenticatedAction()
+        }) {
             AuthenticationSheet(reason: "Sign in to create trips and save shared expenses.")
         }
-        .onChange(of: auth.isAuthenticated) { _, signedIn in
-            guard signedIn else { return }
-            if resumeAddTripAfterSignIn {
-                resumeAddTripAfterSignIn = false
-                showAddTrip = true
-            } else if pendingAction != nil {
-                if store.myTrips.isEmpty { showAddTrip = true }
-                else { showTripPicker = true }
-            }
-        }
+        .task(id: onboarding.identityID) { resumeAuthenticatedAction() }
         .task {
             // Load USD exchange rates so the balance card can normalize every trip's currency.
             await store.refreshRates()
+        }
+    }
+
+    /// Wait for the account's profile handoff as well as the auth sheet dismissal.
+    /// A slow profile fetch cannot put setup on top of the requested trip action.
+    private func resumeAuthenticatedAction() {
+        guard auth.isAuthenticated, !showSignInAlert,
+              onboarding.identityID == store.currentUser.id else { return }
+        if resumeAddTripAfterSignIn {
+            resumeAddTripAfterSignIn = false
+            showAddTrip = true
+        } else if pendingAction != nil, !showAddTrip, !showTripPicker {
+            if store.myTrips.isEmpty { showAddTrip = true }
+            else { onboarding.suspendSetup(); showTripPicker = true }
         }
     }
 
@@ -135,6 +178,7 @@ struct HomeScreen: View {
     private func startQuickAction(_ action: QuickAction) {
         pendingAction = action
         guard auth.isAuthenticated else {
+            onboarding.isPaused = true
             showSignInAlert = true
             return
         }
@@ -148,6 +192,7 @@ struct HomeScreen: View {
     private func requestAddTrip() {
         guard auth.isAuthenticated else {
             resumeAddTripAfterSignIn = true
+            onboarding.isPaused = true
             showSignInAlert = true
             return
         }
@@ -158,13 +203,20 @@ struct HomeScreen: View {
     /// sheet. Routing here (rather than while the picker is still up) avoids presenting two
     /// sheets at once, which SwiftUI drops.
     private func routePendingAction() {
-        defer { pendingAction = nil; pendingTrip = nil }
+        defer { pendingAction = nil; pendingTrip = nil; onboarding.isPaused = false }
         guard let trip = pendingTrip else { return }
         switch pendingAction {
         case .split: splitTrip = trip
         case .addExpense: expenseTrip = trip
         case nil: break
         }
+    }
+
+    /// No trips at all, archived ones included, and not merely still loading: the page is
+    /// given over to starting the first one.
+    private var isBrandNew: Bool {
+        store.myTrips.isEmpty && store.archivedTrips.isEmpty
+            && !(store.cloudLoadState == .loading && auth.isAuthenticated)
     }
 
     private var tripsSection: some View {
@@ -270,52 +322,116 @@ struct HomeScreen: View {
 
     }
 
+    /// The invitation to start a first trip: a glimpse of what a trip looks like, what
+    /// it's for in one line, the three steps it takes, and one filled action. Browsing
+    /// ideas stays available but quiet, so there is a single obvious thing to tap.
     private var emptyTripsCard: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "suitcase")
-                .font(.app(.largeTitle))
-                .foregroundStyle(Theme.textSecondary)
+        VStack(spacing: 20) {
+            tripPreview
+                .padding(.top, 8)
                 .accessibilityHidden(true)
-            Text("No trips yet")
-                .font(.app(.subheadline, .medium))
-            Text("Start with a guide or create an empty trip when you already know where you're going.")
-                .font(Theme.Typography.metadata)
-                .foregroundStyle(highContrastInk)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(highContrastSurface, in: .rect(cornerRadius: 12))
-            Button {
-                onBrowseIdeas()
-            } label: {
-                Label("Browse trip ideas", systemImage: "sparkles")
-                    .font(Theme.Typography.rowTitle)
-                    .foregroundStyle(Theme.onAccent)
-                    .padding(.horizontal, 18)
-                    .frame(minHeight: 44)
-                    .contentShape(.capsule)
-                    .actionFill(tint: Theme.accent)
-            }
-            .buttonStyle(PressableStyle())
 
-            .padding(.top, 4)
-
-            Button {
-                requestAddTrip()
-            } label: {
-                Label("Create empty trip", systemImage: "plus")
-                    .font(Theme.Typography.rowTitle)
-                    .foregroundStyle(highContrastInk)
-                    .padding(.horizontal, 12)
-                    .frame(minHeight: 48)
-                    .background(highContrastSurface, in: .capsule)
-                    .contentShape(.rect)
+            VStack(spacing: 8) {
+                Text("Plan your first trip")
+                    .font(.app(.title2, .bold))
+                    .foregroundStyle(Theme.ink)
+                Text("Set a budget, add your friends, and split every expense fairly as you go.")
+                    .font(Theme.Typography.secondary)
+                    .foregroundStyle(Theme.textSecondary)
+                    .multilineTextAlignment(.center)
             }
-            .buttonStyle(PressableStyle())
+
+            HStack(alignment: .top, spacing: 8) {
+                firstTripStep("mappin.and.ellipse", "Name it")
+                firstTripStep("person.2.fill", "Add friends")
+                firstTripStep("divide", "Split costs")
+            }
+
+            VStack(spacing: 4) {
+                Button {
+                    requestAddTrip()
+                } label: {
+                    Label("Create a trip", systemImage: "plus")
+                }
+                .buttonStyle(AppActionStyle())
+
+                Button {
+                    onBrowseIdeas()
+                } label: {
+                    Label("Browse trip ideas", systemImage: "sparkles")
+                        .font(Theme.Typography.rowTitle)
+                        .foregroundStyle(Theme.accent)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(PressableStyle())
+            }
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 28)
-        .homePanel()
+        .padding(20)
+        .homePanel(cornerRadius: 24)
+    }
+
+    /// A trip card in miniature — place, tripmates, a budget meter — sitting on a second
+    /// one, so the empty page shows what is about to exist instead of an empty suitcase.
+    private var tripPreview: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(Theme.accentPastel)
+                .frame(width: 210, height: 118)
+                .rotationEffect(.degrees(-7))
+                .offset(x: -10, y: 4)
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Image(systemName: "mappin.and.ellipse")
+                        .font(.app(.subheadline, .semibold))
+                        .foregroundStyle(Theme.accent)
+                        .frame(width: 36, height: 36)
+                        .background(Theme.accentPastel, in: .circle)
+                    Spacer()
+                    HStack(spacing: -8) {
+                        ForEach([Theme.accent, Theme.accentSecondary, Theme.warning], id: \.self) { tone in
+                            Circle()
+                                .fill(tone)
+                                .frame(width: 24, height: 24)
+                                .overlay(Circle().stroke(Theme.surface, lineWidth: 2))
+                        }
+                    }
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Capsule().fill(Theme.ink.opacity(0.22)).frame(width: 110, height: 8)
+                    Capsule().fill(Theme.ink.opacity(0.12)).frame(width: 70, height: 8)
+                }
+                MeterBar(fraction: 0.62, colors: [Theme.accent, Theme.accentSecondary],
+                         track: Theme.fieldBackground, height: 8)
+            }
+            .padding(16)
+            .frame(width: 220, height: 128)
+            .background(Theme.surface, in: .rect(cornerRadius: 22, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .strokeBorder(Theme.separator, lineWidth: 0.5)
+            }
+            .shadow(color: Theme.elevatedShadow, radius: 10, y: 5)
+            .rotationEffect(.degrees(3))
+        }
+        .frame(height: 150)
+    }
+
+    private func firstTripStep(_ icon: String, _ label: LocalizedStringKey) -> some View {
+        VStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.app(.footnote, .semibold))
+                .foregroundStyle(Theme.accent)
+                .frame(width: 34, height: 34)
+                .background(Theme.accentPastel, in: .circle)
+                .accessibilityHidden(true)
+            Text(label)
+                .font(.app(.caption, .semibold))
+                .foregroundStyle(Theme.ink)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
     }
 
     private func cloudLoadFailure(_ message: String) -> some View {
@@ -984,11 +1100,8 @@ struct BalanceCard: View {
                 HStack(spacing: 14) {
                     ForEach(trips) { trip in
                         HStack(spacing: 6) {
-                            LinearGradient(
-                                colors: TripCoverView.palette(for: trip.id),
-                                startPoint: .topLeading, endPoint: .bottomTrailing
-                            )
-                            .frame(width: 22, height: 22)
+                            (TripCoverView.palette(for: trip.id).first ?? Theme.accent)
+                                .frame(width: 22, height: 22)
                             .clipShape(.rect(cornerRadius: 7))
                             Text(verbatim: summaryMoney(trip.convertedSpent ?? 0, displayCurrency, compact: true))
                                 .font(.app(.caption, .semibold))
@@ -1302,9 +1415,11 @@ struct TripRow: View {
     private var accent: Color {
         isOver ? Theme.negative : isNear ? Theme.warning : Theme.positive
     }
+    /// A blend that warms toward the limit: the bar's leading end stays the accent and
+    /// its tip turns amber once the budget is running low, then amber into red when over.
     private var progressColors: [Color] {
-        isOver ? [Theme.negative]
-            : isNear ? [Theme.warning]
+        isOver ? [Theme.warning, Theme.negative]
+            : isNear ? [Theme.accent, Theme.warning]
             : [Theme.accent, Theme.accentSecondary]
     }
 
@@ -1638,8 +1753,6 @@ struct CurrencyConverterCard: View {
 struct QuickActionButton: View {
     let title: LocalizedStringKey
     let icon: String
-    /// Gradient behind the icon disc on card themes.
-    let tint: [Color]
     let action: () -> Void
     @Environment(\.colorScheme) private var colorScheme
 
@@ -1652,12 +1765,9 @@ struct QuickActionButton: View {
             HStack(spacing: 12) {
                 Image(systemName: icon)
                     .font(.app(.body, .bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Theme.accent)
                     .frame(width: 44, height: 44)
-                    .background(
-                        LinearGradient(colors: tint, startPoint: .topLeading, endPoint: .bottomTrailing),
-                        in: .circle
-                    )
+                    .background(Theme.accentPastel, in: .circle)
                     // The title labels the whole button.
                     .accessibilityHidden(true)
                 Text(title)
@@ -1967,5 +2077,7 @@ struct TransactionRow: View {
 
 #Preview {
     HomeScreen()
+        .environment(OnboardingCoordinator())
+        .environment(AuthStore())
         .environment(TripStore())
 }

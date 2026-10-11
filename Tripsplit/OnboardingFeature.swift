@@ -3,202 +3,212 @@ import PhotosUI
 
 // MARK: - Onboarding coordinator
 
-/// Summary of account status presented in the returning-user banner when an
-/// existing account signs back into the app after having signed out.
+/// Identity for the return card. Financial status is derived from the live store,
+/// so currency changes, sync failures, and FX updates cannot leave stale totals.
 struct ReturningUserSummary: Equatable, Sendable {
     let displayName: String
-    let avatarURL: String?
-    let tripsCount: Int
-    let netBalanceOwed: Double
-    let currencyCode: String
 }
 
-/// Sequences the post-sign-in onboarding steps and remembers which accounts have
-/// already been through them on this device.
-///
-/// Onboarding hangs off the **sign-in event**, not app launch: an account whose
-/// session is restored from the Keychain is already in, so it is marked onboarded
-/// silently and never interrupted. A sign-in the user actually performs starts the
-/// flow — the full sequence for an account new to this device, and a returning
-/// summary banner for one that has signed back in after signing out.
+struct ReturningBalances: Equatable {
+    let youOwe: Double
+    let owedToYou: Double
+    let isComplete: Bool
+
+    var isSettled: Bool { isComplete && youOwe < 0.005 && owedToYou < 0.005 }
+
+    init(totals: TripStore.HomeTotals, loadState: TripStore.CloudLoadState) {
+        youOwe = totals.youOwe
+        owedToYou = totals.owedToYou
+        isComplete = loadState == .loaded && totals.unavailableCurrencies.isEmpty
+    }
+}
+
+/// Account-scoped progress survives interruptions. Restored sessions never force
+/// a modal; unfinished setup and long absences get an optional inline offer.
 @MainActor
 @Observable
 final class OnboardingCoordinator {
-    /// One screen of the post-sign-in sequence.
-    enum Step: Equatable {
-        /// Display name + avatar. Shown whenever the account still has no name.
-        case profileSetup
-        /// The Explore walkthrough, for accounts new to this device.
-        case exploreTour
-        /// The comprehensive multi-step onboarding flow for newly created users.
-        case newUserFlow
-    }
+    enum Step: Equatable { case profileSetup, exploreTour, newUserFlow }
+    enum Completion: String { case inProgress, interrupted, skipped, completed }
 
-    /// The step waiting to be shown, if any.
     private(set) var step: Step?
-
-    /// Summary data for the returning user floating banner, if active.
     private(set) var returningUserSummary: ReturningUserSummary?
-
-    /// Set while another flow owns the screen — an Explore action replayed right
-    /// after sign-in, say. Presenters watch `visibleStep`, so a queued step waits
-    /// its turn instead of stacking a sheet on top of whatever is already up.
+    private(set) var hasUnfinishedSetup = false
+    private(set) var offersRefresher = false
     var isPaused = false
-
-    /// The name to greet a returning account with, until it times out.
-    private(set) var welcomeBackName: String?
-
-    /// The step presenters should show right now.
-    var visibleStep: Step? { isPaused ? nil : step }
-
-    /// The returning user summary presenters should show right now.
-    var visibleReturningSummary: ReturningUserSummary? { isPaused ? nil : returningUserSummary }
-
-    /// Whether the account is mid-way through the first-run sequence, so steps can
-    /// tell the user how much is left.
-    var isFirstRunFlow: Bool {
-        guard let id = currentUserID else { return false }
-        return !isOnboarded(id)
+    var invitationOwnsPresentation = false
+    var visibleStep: Step? { isPaused || invitationOwnsPresentation ? nil : step }
+    var visibleReturningSummary: ReturningUserSummary? { isPaused || invitationOwnsPresentation ? nil : returningUserSummary }
+    var isFirstRunFlow: Bool { hasUnfinishedSetup }
+    var savedStep: NewUserStep {
+        NewUserStep(rawValue: defaults.integer(forKey: key("phase"))) ?? .identity
+    }
+    var savedName: String { defaults.string(forKey: key("name")) ?? "" }
+    var savedAvatar: Data? { defaults.data(forKey: key("avatar")) }
+    func saveAvatar(_ data: Data?) {
+        guard currentUserID != nil else { return }
+        defaults.set(data, forKey: key("avatar"))
+    }
+    var savedFeaturePage: Int { min(2, max(0, defaults.integer(forKey: key("page")))) }
+    var completion: Completion? {
+        defaults.string(forKey: key("completion")).flatMap(Completion.init(rawValue:))
     }
 
-    private let defaults = UserDefaults.standard
-    private let onboardedKey = "onboardedUserIDs"
+    private let defaults: UserDefaults
+    private let now: () -> Date
     private var currentUserID: UUID?
-    /// Guards the once-per-launch pass, which never starts the flow.
+    var identityID: UUID? { currentUserID }
     private var didBootstrap = false
+    private let onboardedKey = "onboardedUserIDs"
+    static let inactivityInterval: TimeInterval = 30 * 24 * 60 * 60
+    static let guideVersion = 1
 
-    /// Reports the signed-in account (nil when signed out). Safe to call on every
-    /// auth refresh — a rotated access token reports the same account and is ignored,
-    /// so only a genuine sign-in, registration, or account switch starts the flow.
+    init(defaults: UserDefaults = .standard, now: @escaping () -> Date = Date.init) {
+        self.defaults = defaults
+        self.now = now
+    }
+
+    private func key(_ suffix: String) -> String {
+        "tripsplit.onboarding.v1.\(currentUserID?.uuidString.lowercased() ?? "guest").\(suffix)"
+    }
+
     func update(userID: UUID?, displayName: String, authIntent: AuthIntent? = nil) {
         let previous = currentUserID
+        let isBootstrap = !didBootstrap
+        didBootstrap = true
+        guard isBootstrap || userID != previous || authIntent != nil else { return }
         currentUserID = userID
-
-        guard didBootstrap else {
-            didBootstrap = true
-            // A session restored at launch: the user never signed in here, so nothing
-            // is shown. Remembering the account keeps a later sign-out/sign-in cycle
-            // on the "returning user" path.
-            if let userID { markOnboarded(userID) }
-            return
-        }
-        guard userID != previous || authIntent != nil else { return }
+        step = nil
+        returningUserSummary = nil
+        hasUnfinishedSetup = false
+        offersRefresher = false
         guard let userID else {
-            step = nil
-            returningUserSummary = nil
-            welcomeBackName = nil
-            return
-        }
-        start(userID: userID, displayName: displayName, authIntent: authIntent)
-    }
-
-    private func start(userID: UUID, displayName: String, authIntent: AuthIntent?) {
-        let name = displayName.trimmingCharacters(in: .whitespaces)
-
-        // A session restored at cold launch or background token rotation: never interrupt.
-        if authIntent == .sessionRestored { return }
-
-        // 1. Newly created user (explicit new registration OR brand new account on device without name):
-        if authIntent == .newRegistration || (!isOnboarded(userID) && name.isEmpty) {
-            step = .newUserFlow
-            returningUserSummary = nil
-            return
-        }
-
-        // 2. User signing back in after signing out (or an account already onboarded):
-        if authIntent == .existingSignIn || isOnboarded(userID) {
-            if name.isEmpty {
-                step = .profileSetup
-            } else {
-                step = nil
-                returningUserSummary = ReturningUserSummary(
-                    displayName: name,
-                    avatarURL: nil,
-                    tripsCount: 0,
-                    netBalanceOwed: 0,
-                    currencyCode: "USD"
-                )
-                greet(name)
+            if previous != nil {
+                invitationOwnsPresentation = false
+                isPaused = false
             }
-            markOnboarded(userID)
             return
         }
 
-        // Fallback for un-onboarded user:
-        if name.isEmpty {
-            step = .newUserFlow
-        } else {
-            markOnboarded(userID)
-            step = nil
+        let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let legacyComplete = (defaults.stringArray(forKey: onboardedKey) ?? []).contains(userID.uuidString)
+        // Migrate existing accounts without overwriting a newer interrupted draft.
+        if completion == nil && (legacyComplete || (isBootstrap && authIntent != .newRegistration) || (authIntent == .existingSignIn && !name.isEmpty)) {
+            defaults.set(Completion.completed.rawValue, forKey: key("completion"))
         }
-    }
+        hasUnfinishedSetup = completion == .inProgress || completion == .interrupted
+        let lastActivity = defaults.object(forKey: key("lastActivity")) as? Date
+        let lastOffer = defaults.object(forKey: key("lastOffer")) as? Date
+        offersRefresher = lastActivity.map { now().timeIntervalSince($0) >= Self.inactivityInterval } ?? false
+        if let lastOffer, now().timeIntervalSince(lastOffer) < Self.inactivityInterval { offersRefresher = false }
+        if offersRefresher && !hasUnfinishedSetup {
+            returningUserSummary = ReturningUserSummary(displayName: name)
+        }
+        recordActivity()
 
-    /// Called when background cloud sync completes with trip totals, enriching the returning banner.
-    func didFinishCloudSync(
-        tripsCount: Int,
-        netBalanceOwed: Double,
-        currencyCode: String,
-        avatarURL: String? = nil
-    ) {
-        guard let current = returningUserSummary else { return }
-        returningUserSummary = ReturningUserSummary(
-            displayName: current.displayName,
-            avatarURL: avatarURL ?? current.avatarURL,
-            tripsCount: tripsCount,
-            netBalanceOwed: netBalanceOwed,
-            currencyCode: currencyCode
-        )
-    }
-
-    /// Dismisses the returning user banner with animation.
-    func dismissReturningSummary() {
-        withAnimation(.snappy) {
+        // No compulsory setup on launch, including an interrupted registration.
+        if isBootstrap && authIntent != .newRegistration || authIntent == .sessionRestored { return }
+        if authIntent == .newRegistration || (completion == nil && name.isEmpty) || hasUnfinishedSetup {
+            if authIntent == .newRegistration || (completion == nil && name.isEmpty) {
+                OnboardingAnalytics.shared.record(.setupStarted, source: .setup, userID: userID)
+            }
+            hasUnfinishedSetup = true
+            defaults.set(Completion.inProgress.rawValue, forKey: key("completion"))
             returningUserSummary = nil
+            if authIntent == .newRegistration {
+                defaults.set(false, forKey: key("profileOnly"))
+            }
+            step = defaults.bool(forKey: key("profileOnly")) ? .profileSetup : .newUserFlow
+        } else if name.isEmpty {
+            hasUnfinishedSetup = true
+            defaults.set(Completion.inProgress.rawValue, forKey: key("completion"))
+            defaults.set(true, forKey: key("profileOnly"))
+            step = .profileSetup
+        } else {
+            returningUserSummary = ReturningUserSummary(displayName: name)
         }
     }
 
-    /// Called when the new user onboarding flow completes.
-    func newUserOnboardingFinished() {
-        step = nil
-        if let currentUserID { markOnboarded(currentUserID) }
+    func saveProgress(step: NewUserStep, name: String, page: Int) {
+        guard currentUserID != nil else { return }
+        defaults.set(step.rawValue, forKey: key("phase"))
+        defaults.set(name, forKey: key("name"))
+        defaults.set(page, forKey: key("page"))
     }
 
-    /// Called when the profile step leaves the screen, however it was closed.
+    func suspendSetup() {
+        guard hasUnfinishedSetup else { return }
+        OnboardingAnalytics.shared.record(.setupDeferred, source: .setup, userID: currentUserID)
+        defaults.set(Completion.interrupted.rawValue, forKey: key("completion"))
+        step = nil
+    }
+
+    func resumeSetup() {
+        guard hasUnfinishedSetup else { return }
+        defaults.set(Completion.inProgress.rawValue, forKey: key("completion"))
+        step = defaults.bool(forKey: key("profileOnly")) ? .profileSetup : .newUserFlow
+    }
+
+    func skipSetup() { finish(.skipped) }
+    func newUserOnboardingFinished() { finish(.completed) }
+
+    private func finish(_ completion: Completion) {
+        guard let currentUserID else { return }
+        OnboardingAnalytics.shared.record(completion == .skipped ? .setupSkipped : .setupCompleted, source: .setup, userID: currentUserID)
+        defaults.set(completion.rawValue, forKey: key("completion"))
+        for suffix in ["phase", "name", "page", "avatar", "profileOnly"] { defaults.removeObject(forKey: key(suffix)) }
+        var ids = Set(defaults.stringArray(forKey: onboardedKey) ?? [])
+        ids.insert(currentUserID.uuidString)
+        defaults.set(Array(ids), forKey: onboardedKey)
+        hasUnfinishedSetup = false
+        step = nil
+    }
+
     func profileSetupFinished() {
-        guard step == .profileSetup || step == .newUserFlow else { return }
-        step = nil
-        if let currentUserID { markOnboarded(currentUserID) }
+        if step == .profileSetup { suspendSetup() }
     }
 
-    /// Called when the Explore walkthrough closes — including when the user opens it
-    /// themselves from the help button, which counts just as well.
     func exploreTourFinished() {
-        if let currentUserID { markOnboarded(currentUserID) }
         if step == .exploreTour { step = nil }
     }
 
-    private func greet(_ name: String) {
-        welcomeBackName = name
-        Task {
-            try? await Task.sleep(for: .seconds(2.6))
-            withAnimation(.snappy) { welcomeBackName = nil }
+    /// A successful join owns the first action; generic setup remains optional.
+    func deferSetupForInvitation() {
+        suspendSetup()
+        returningUserSummary = nil
+    }
+
+    func dismissReturningSummary(recordDismissal: Bool = true) {
+        if recordDismissal { OnboardingAnalytics.shared.record(.returnDismissed, source: .return, userID: currentUserID) }
+        returningUserSummary = nil
+        offersRefresher = false
+        defaults.set(now(), forKey: key("lastOffer"))
+    }
+
+    func guideOpened() {
+        defaults.set(Self.guideVersion, forKey: key("guideVersion"))
+        dismissReturningSummary(recordDismissal: false)
+    }
+
+    /// Called on foreground before recording activity; preserves the prior visit
+    /// when a process stayed alive during a long absence.
+    func checkForReturn(displayName: String) {
+        guard currentUserID != nil else { return }
+        if let last = defaults.object(forKey: key("lastActivity")) as? Date,
+           now().timeIntervalSince(last) >= Self.inactivityInterval,
+           !hasUnfinishedSetup {
+            let lastOffer = defaults.object(forKey: key("lastOffer")) as? Date
+            if lastOffer.map({ now().timeIntervalSince($0) >= Self.inactivityInterval }) ?? true {
+                offersRefresher = true
+                returningUserSummary = ReturningUserSummary(displayName: displayName)
+            }
         }
+        recordActivity()
     }
 
-    // MARK: Per-account persistence
-
-    private var onboardedIDs: Set<String> {
-        Set(defaults.stringArray(forKey: onboardedKey) ?? [])
-    }
-
-    private func isOnboarded(_ id: UUID) -> Bool {
-        onboardedIDs.contains(id.uuidString)
-    }
-
-    private func markOnboarded(_ id: UUID) {
-        var ids = onboardedIDs
-        guard ids.insert(id.uuidString).inserted else { return }
-        defaults.set(Array(ids), forKey: onboardedKey)
+    func recordActivity() {
+        guard currentUserID != nil else { return }
+        defaults.set(now(), forKey: key("lastActivity"))
     }
 }
 
@@ -341,7 +351,7 @@ struct WelcomeSignInSheet: View {
         NavigationStack {
             ZStack {
                 AppBackground()
-                AuthView()
+                AuthView(initialMode: .signUp)
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -378,130 +388,112 @@ struct WelcomeBackToast: View {
     }
 }
 
-/// An elevated, non-blocking floating card presented at the top of the screen
-/// when an existing account signs back into the app after having signed out.
+/// A persistent, dismissible return card. Unknown totals never imply settlement.
 struct ReturningUserBanner: View {
     let summary: ReturningUserSummary
     var onViewTrips: () -> Void
+    var onGuide: () -> Void
     var onDismiss: () -> Void
 
     @Environment(TripStore.self) private var store
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @AppStorage("displayCurrency") private var displayCurrency = "USD"
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            AvatarView(
-                person: store.currentUser,
-                imageData: store.profileImageData,
-                size: 40
-            )
-
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 4) {
-                    Text("Welcome back,")
-                        .font(.app(.subheadline, .medium))
-                        .foregroundStyle(.secondary)
-                    Text(verbatim: summary.displayName)
-                        .font(.app(.subheadline, .bold))
-                        .foregroundStyle(.primary)
-                }
-
-                if store.cloudLoadState == .loading {
-                    HStack(spacing: 5) {
-                        ProgressView()
-                            .scaleEffect(0.6)
-                            .frame(width: 10, height: 10)
-                        Text("Syncing trips…")
-                            .font(.app(.caption2, .medium))
-                            .foregroundStyle(.secondary)
-                    }
-                } else {
-                    HStack(spacing: 8) {
-                        HStack(spacing: 3) {
-                            Image(systemName: "suitcase.fill")
-                                .font(.app(size: 9))
-                            Text(summary.tripsCount == 1 ? "1 trip" : "\(summary.tripsCount) trips")
-                                .font(.app(.caption2, .semibold))
-                        }
-                        .foregroundStyle(.secondary)
-
-                        balancePill
-                    }
-                }
-            }
-
-            Spacer(minLength: 4)
-
-            Button(action: onViewTrips) {
-                Text("View Trips")
-                    .font(.app(.caption, .bold))
-                    .foregroundStyle(Theme.onAccent)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 7)
-                    .background(Theme.accent, in: .capsule)
-            }
-            .buttonStyle(.plain)
-            .contentShape(.capsule)
-
-            Button(action: onDismiss) {
-                Image(systemName: "xmark")
-                    .font(.app(size: 11, weight: .bold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 26, height: 26)
-                    .background(Color.secondary.opacity(0.12), in: .circle)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Dismiss welcome banner")
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                ScrollView { cardContent }
+                    .frame(height: 280)
+                    .accessibilityIdentifier("returning-user-card-scroll")
+            } else { cardContent }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Theme.surface)
-                .shadow(color: Color.black.opacity(0.12), radius: 14, x: 0, y: 5)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(Theme.separator, lineWidth: 1)
-        }
+        .padding(14)
+        .background(Theme.surface, in: .rect(cornerRadius: 16))
+        .overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(Theme.separator) }
         .padding(.horizontal, 16)
-        .task {
-            // Auto-dismiss after 8 seconds so it does not crowd the top navigation
-            try? await Task.sleep(for: .seconds(8.0))
-            onDismiss()
+        .accessibilityIdentifier("returning-user-card")
+    }
+
+    private var cardContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(dynamicTypeSize.isAccessibilitySize ? "Welcome back" : "Welcome back, \(summary.displayName)")
+                        .font(.app(.headline))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityAddTraits(.isHeader)
+                    if !dynamicTypeSize.isAccessibilitySize { status }
+                }
+                Spacer(minLength: 0)
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 18, weight: .semibold))
+                        .frame(width: 44, height: 44)
+                }
+                .accessibilityLabel("Dismiss welcome card")
+            }
+            if dynamicTypeSize.isAccessibilitySize {
+                Button("Quick refresher", action: onGuide)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                resumeButton
+                status.fixedSize(horizontal: false, vertical: true)
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) { actions }
+                    VStack(alignment: .leading, spacing: 8) { actions }
+                }
+            }
         }
     }
 
-    @ViewBuilder
-    private var balancePill: some View {
-        if summary.netBalanceOwed > 0.009 {
-            HStack(spacing: 2) {
-                Image(systemName: "arrow.down.left")
-                    .font(.app(size: 8, weight: .bold))
-                Text("+\(money(summary.netBalanceOwed, summary.currencyCode))")
-                    .font(.app(.caption2, .bold))
+    @ViewBuilder private var status: some View {
+        switch store.cloudLoadState {
+        case .idle, .loading:
+            Label("Syncing trips…", systemImage: "arrow.triangle.2.circlepath")
+                .font(.app(.subheadline))
+        case .failed:
+            Text(store.myTrips.isEmpty ? "Couldn't refresh your trips. Your balance is unavailable." : "Couldn't refresh your trips. Showing saved data.")
+                .font(.app(.subheadline))
+            Button("Retry sync") {
+                Task { await store.loadFromCloud(forceRefresh: true); await store.refreshRates() }
             }
-            .foregroundStyle(Theme.positive)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(Theme.positive.opacity(0.12), in: .capsule)
-        } else if summary.netBalanceOwed < -0.009 {
-            HStack(spacing: 2) {
-                Image(systemName: "arrow.up.right")
-                    .font(.app(size: 8, weight: .bold))
-                Text(money(abs(summary.netBalanceOwed), summary.currencyCode))
-                    .font(.app(.caption2, .bold))
+            .frame(minHeight: 44)
+        case .loaded:
+            let totals = store.homeTotals(in: displayCurrency)
+            let balances = ReturningBalances(totals: totals, loadState: store.cloudLoadState)
+            if store.myTrips.isEmpty {
+                Text("No trips yet. Create a trip or try the quick guide.")
+                    .font(.app(.subheadline))
+            } else if !balances.isComplete {
+                Text("Some exchange rates are unavailable. View each trip for its balance.")
+                    .font(.app(.subheadline))
+                Button("Retry exchange rates") { Task { await store.refreshRates() } }
+                    .frame(minHeight: 44)
+            } else if balances.isSettled {
+                Text("All settled up")
+                    .font(.app(.subheadline))
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("You owe \(money(balances.youOwe, displayCurrency))")
+                    Text("You're owed \(money(balances.owedToYou, displayCurrency))")
+                }
+                .font(.app(.subheadline))
             }
-            .foregroundStyle(Theme.negative)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(Theme.negative.opacity(0.12), in: .capsule)
-        } else {
-            Text("Settled up")
-                .font(.app(.caption2, .semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(Color.secondary.opacity(0.12), in: .capsule)
+        }
+    }
+
+    @ViewBuilder private var actions: some View {
+        resumeButton
+        Button("Quick refresher", action: onGuide)
+            .font(.app(.subheadline, .semibold))
+            .frame(minHeight: 44)
+    }
+
+    private var resumeButton: some View {
+        Button(action: onViewTrips) {
+            Text(store.myTrips.isEmpty ? "View Trips" : "Resume trip")
+                .font(.app(.subheadline, .semibold))
+                .frame(minHeight: 44)
         }
     }
 }
@@ -516,6 +508,8 @@ struct ExploreOnboardingView: View {
     let onBuildItinerary: () -> Void
 
     @State private var page = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AccessibilityFocusState private var pageFocused: Bool
 
     private struct Page {
         let icon: String
@@ -565,14 +559,18 @@ struct ExploreOnboardingView: View {
                             .frame(width: index == page ? 24 : 7, height: 7)
                     }
                 }
-                .animation(.snappy, value: page)
+                .accessibilityHidden(true)
+                .animation(reduceMotion ? nil : .snappy, value: page)
                 .padding(.bottom, 22)
 
+                Text("Page \(page + 1) of \(pages.count)")
+                    .font(.app(.subheadline))
+                    .padding(.bottom, 12)
                 Button {
                     if page == pages.count - 1 {
                         onDismiss()
                     } else {
-                        withAnimation(.snappy) { page += 1 }
+                        withAnimation(reduceMotion ? nil : .snappy) { page += 1 }
                     }
                 } label: {
                     Label(page == pages.count - 1 ? "Start exploring" : "Continue",
@@ -594,13 +592,14 @@ struct ExploreOnboardingView: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityHint("Opens a new blank itinerary")
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    .transition(.opacity)
                 }
 
                 Spacer().frame(height: 18)
             }
         }
         .interactiveDismissDisabled()
+        .onChange(of: page) { _, _ in pageFocused = true }
     }
 
     private func explorePage(_ item: Page, index: Int) -> some View {
@@ -618,7 +617,7 @@ struct ExploreOnboardingView: View {
                         .foregroundStyle(
                             Theme.accent
                         )
-                        .symbolEffect(.bounce, value: page == index)
+                        .symbolEffect(.bounce, value: reduceMotion ? false : page == index)
                         .accessibilityHidden(true)
                 }
 
@@ -629,6 +628,7 @@ struct ExploreOnboardingView: View {
                         .foregroundStyle(Theme.accent)
                     Text(item.title)
                         .font(.app(.largeTitle, .bold))
+                        .accessibilityFocused($pageFocused)
                         .multilineTextAlignment(.center)
                     Text(item.message)
                         .font(.app(.body))
@@ -661,11 +661,10 @@ enum NewUserStep: Int, CaseIterable {
     case quickStart = 3
 }
 
-/// A cohesive 3-step first-run onboarding flow:
-/// 1. Tripmate identity (name + avatar)
-/// 2. Core value showcase (Plan, Split & Scan, Settle)
-/// 3. Quick-start decision (Create trip, Try demo trip, Explore)
+/// Identity followed by a useful first action. The overview is optional, and
+/// interrupted identity, overview, and quick-start choices can be resumed.
 struct NewUserOnboardingView: View {
+    let coordinator: OnboardingCoordinator
     var onFinish: (QuickStartAction) -> Void
 
     @Environment(TripStore.self) private var store
@@ -676,10 +675,13 @@ struct NewUserOnboardingView: View {
 
     @State private var step: NewUserStep = .identity
     @State private var name: String
+    @State private var isPreparingPhoto = false
+    @State private var photoPreparationFailed = false
     @State private var avatarPick: PhotosPickerItem?
     @State private var avatarData: Data?
     @State private var isSaving = false
     @State private var featurePage = 0
+    @AccessibilityFocusState private var contentFocused: Bool
 
     private struct FeatureSlide {
         let icon: String
@@ -699,19 +701,23 @@ struct NewUserOnboardingView: View {
             icon: "doc.viewfinder.fill",
             eyebrow: "SMART SPLIT",
             title: "Scan receipts, split every item",
-            message: "Snap a photo of any receipt to itemize instantly. Split bills equally, by exact item, or custom percentage."
+            message: "Scan a receipt, review the items and total, then choose who shares each item or split the bill equally."
         ),
         FeatureSlide(
             icon: "arrow.left.arrow.right.circle.fill",
             eyebrow: "SETTLE UP",
             title: "Zero-drama settle-ups",
-            message: "TripSplit calculates who owes whom with the fewest payments possible. Record payments with a single tap."
+            message: "See who owes whom, pay your tripmates outside the app, then record and confirm the repayment in TripSplit."
         )
     ]
 
-    init(onFinish: @escaping (QuickStartAction) -> Void) {
+    init(coordinator: OnboardingCoordinator, displayName: String, appleName: String?, onFinish: @escaping (QuickStartAction) -> Void) {
+        self.coordinator = coordinator
         self.onFinish = onFinish
-        _name = State(initialValue: UserDefaults.standard.string(forKey: "pendingAppleDisplayName") ?? "")
+        _step = State(initialValue: coordinator.savedStep)
+        _featurePage = State(initialValue: coordinator.savedFeaturePage)
+        _name = State(initialValue: coordinator.savedName.isEmpty ? (appleName ?? displayName) : coordinator.savedName)
+        _avatarData = State(initialValue: coordinator.savedAvatar)
     }
 
     var body: some View {
@@ -726,18 +732,35 @@ struct NewUserOnboardingView: View {
 
                 stepContent
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                let footerLayout = dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(spacing: 0)) : AnyLayout(HStackLayout(spacing: 24))
+                footerLayout {
+                    Button("Finish later") { coordinator.suspendSetup(); dismiss() }.frame(minHeight: 44)
+                    Button("Skip setup") { coordinator.skipSetup(); auth.clearPendingDisplayName(); dismiss() }.frame(minHeight: 44)
+                }
+                .font(.app(.subheadline))
+                .frame(minHeight: 44)
+                .padding(.bottom, 12)
+                .disabled(isSaving)
             }
         }
         .interactiveDismissDisabled(isSaving)
-        .onChange(of: avatarPick) { _, newValue in
-            guard let newValue else { return }
-            Task {
-                if let data = try? await newValue.loadTransferable(type: Data.self),
-                   let image = UIImage(data: data),
-                   let jpeg = image.jpegData(compressionQuality: 0.8) {
-                    avatarData = jpeg
-                }
-            }
+        .onAppear { persistProgress() }
+        .onChange(of: step) { _, _ in persistProgress(); contentFocused = true }
+        .onChange(of: name) { _, _ in persistProgress() }
+        .onChange(of: featurePage) { _, _ in persistProgress(); contentFocused = true }
+        .onChange(of: avatarData) { _, data in coordinator.saveAvatar(data) }
+        .task(id: avatarPick) {
+            guard let avatarPick else { return }
+            isPreparingPhoto = true
+            photoPreparationFailed = false
+            let data = try? await avatarPick.loadTransferable(type: Data.self)
+            let jpeg: Data?
+            if let data { jpeg = await UploadImagePreparation.jpegData(from: data, maxPixelSize: 320, compressionQuality: 0.8) }
+            else { jpeg = nil }
+            guard !Task.isCancelled else { return }
+            isPreparingPhoto = false
+            if let jpeg { avatarData = jpeg }
+            else { photoPreparationFailed = true }
         }
     }
 
@@ -747,8 +770,8 @@ struct NewUserOnboardingView: View {
         HStack {
             if step != .identity {
                 Button {
-                    withAnimation(.snappy) {
-                        step = step == .quickStart ? .featureTour : .identity
+                    withAnimation(reduceMotion ? nil : .snappy) {
+                        step = step == .featureTour ? .quickStart : .identity
                     }
                 } label: {
                     HStack(spacing: 4) {
@@ -767,7 +790,7 @@ struct NewUserOnboardingView: View {
 
             Spacer()
 
-            Text("Step \(step.rawValue) of 3")
+            Text(stepTitle)
                 .font(.app(.caption, .bold))
                 .tracking(0.6)
                 .foregroundStyle(Theme.accent)
@@ -790,7 +813,7 @@ struct NewUserOnboardingView: View {
                 .disabled(isSaving)
             } else if step == .featureTour {
                 Button {
-                    withAnimation(.snappy) { step = .quickStart }
+                    withAnimation(reduceMotion ? nil : .snappy) { step = .quickStart }
                 } label: {
                     Text("Skip")
                         .font(.app(.subheadline, .semibold))
@@ -844,10 +867,16 @@ struct NewUserOnboardingView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Profile photo picker")
+                if isPreparingPhoto { ProgressView("Preparing photo…") }
+                if photoPreparationFailed {
+                    Text("This photo could not be opened. Choose another photo or continue without one.")
+                        .font(.app(.footnote)).foregroundStyle(Theme.negative)
+                }
 
                 VStack(spacing: 8) {
                     Text("What should we call you?")
                         .font(.app(.title, .bold))
+                        .accessibilityFocused($contentFocused)
                         .multilineTextAlignment(.center)
                     Text("Your name is how trip mates see you on shared trips and settle-ups.")
                         .font(.app(.subheadline))
@@ -883,7 +912,7 @@ struct NewUserOnboardingView: View {
                 }
                 .buttonStyle(.plain)
                 .actionFill(tint: Theme.accent)
-                .disabled(trimmedName.isEmpty || isSaving)
+                .disabled(trimmedName.isEmpty || isSaving || isPreparingPhoto)
                 .opacity(trimmedName.isEmpty || isSaving ? 0.5 : 1)
                 .padding(.horizontal, 28)
                 .padding(.bottom, 24)
@@ -911,14 +940,18 @@ struct NewUserOnboardingView: View {
                         .frame(width: index == featurePage ? 24 : 7, height: 7)
                 }
             }
-            .animation(.snappy, value: featurePage)
+            .accessibilityHidden(true)
+            .animation(reduceMotion ? nil : .snappy, value: featurePage)
             .padding(.bottom, 22)
 
+            Text("Page \(featurePage + 1) of \(featureSlides.count)")
+                .font(.app(.subheadline))
+                .padding(.bottom, 12)
             Button {
                 if featurePage == featureSlides.count - 1 {
-                    withAnimation(.snappy) { step = .quickStart }
+                    withAnimation(reduceMotion ? nil : .snappy) { step = .quickStart }
                 } else {
-                    withAnimation(.snappy) { featurePage += 1 }
+                    withAnimation(reduceMotion ? nil : .snappy) { featurePage += 1 }
                 }
             } label: {
                 Label(featurePage == featureSlides.count - 1 ? "Next: Get Started" : "Continue",
@@ -949,7 +982,7 @@ struct NewUserOnboardingView: View {
                         .foregroundStyle(
                             Theme.accent
                         )
-                        .symbolEffect(.bounce, value: featurePage == index)
+                        .symbolEffect(.bounce, value: reduceMotion ? false : featurePage == index)
                         .accessibilityHidden(true)
                 }
 
@@ -960,6 +993,7 @@ struct NewUserOnboardingView: View {
                         .foregroundStyle(Theme.accent)
                     Text(slide.title)
                         .font(.app(.largeTitle, .bold))
+                        .accessibilityFocused($contentFocused)
                         .multilineTextAlignment(.center)
                     Text(slide.message)
                         .font(.app(.body))
@@ -983,6 +1017,7 @@ struct NewUserOnboardingView: View {
                 VStack(spacing: 8) {
                     Text("Ready to dive in?")
                         .font(.app(.title, .bold))
+                        .accessibilityFocused($contentFocused)
                         .multilineTextAlignment(.center)
                     Text("Choose the best way to get started with TripSplit.")
                         .font(.app(.subheadline))
@@ -992,6 +1027,11 @@ struct NewUserOnboardingView: View {
                 .padding(.horizontal, 24)
                 .padding(.top, 10)
 
+                Button("How TripSplit works") {
+                    withAnimation(reduceMotion ? nil : .snappy) { step = .featureTour }
+                }
+                .frame(minHeight: 44)
+                ProfileSyncBanner()
                 VStack(spacing: 14) {
                     quickStartOptionCard(
                         icon: "plus.circle.fill",
@@ -1006,8 +1046,8 @@ struct NewUserOnboardingView: View {
                         icon: "sparkles.rectangle.stack.fill",
                         iconColor: Color(hex: 0xE68A2E),
                         badge: "SAMPLE TRIP",
-                        title: "Try with a sample trip",
-                        subtitle: "Explore a pre-loaded Tokyo trip to test receipt scanning, splits, and balances.",
+                        title: "Try a practice trip",
+                        subtitle: "Practice with a sample receipt, splits, and repayments. Your account stays separate.",
                         action: { onFinish(.sampleTrip) }
                     )
 
@@ -1043,14 +1083,16 @@ struct NewUserOnboardingView: View {
                     .background(iconColor.opacity(0.12), in: .circle)
 
                 VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 8) {
+                    (dynamicTypeSize.isAccessibilitySize
+                     ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+                     : AnyLayout(HStackLayout(spacing: 8))) {
                         Text(title)
                             .font(.app(.headline, .bold))
                             .foregroundStyle(.primary)
 
                         if let badge {
                             Text(badge)
-                                .font(.app(size: 10, weight: .bold))
+                                .font(.app(.caption, .bold))
                                 .foregroundStyle(iconColor)
                                 .padding(.horizontal, 7)
                                 .padding(.vertical, 2)
@@ -1083,40 +1125,43 @@ struct NewUserOnboardingView: View {
 
     // MARK: - Helpers
 
+    private var stepTitle: LocalizedStringKey {
+        switch step {
+        case .identity: "Your profile"
+        case .featureTour: "Quick overview"
+        case .quickStart: "Get started"
+        }
+    }
+
+    private func persistProgress() {
+        coordinator.saveProgress(step: step, name: name, page: featurePage)
+    }
+
     private var trimmedName: String {
         name.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func saveProfileAndAdvance() {
-        guard !trimmedName.isEmpty else { return }
-        isSaving = true
-        Task {
-            var profile = store.userProfile
-            profile.displayName = trimmedName
-            await store.saveProfile(profile, imageData: avatarData ?? store.profileImageData)
-            UserDefaults.standard.removeObject(forKey: "pendingAppleDisplayName")
-            isSaving = false
-            withAnimation(.snappy) {
-                step = .featureTour
-            }
-        }
+        guard !trimmedName.isEmpty, !isPreparingPhoto else { return }
+        var profile = store.userProfile
+        profile.displayName = trimmedName
+        store.queueProfileSave(profile, imageData: avatarData)
+        auth.clearPendingDisplayName()
+        withAnimation(reduceMotion ? nil : .snappy) { step = .quickStart }
     }
 
     private func skipIdentityAndAdvance() {
-        isSaving = true
-        Task {
-            var profile = store.userProfile
-            if profile.displayName.trimmingCharacters(in: .whitespaces).isEmpty {
-                let defaultName = auth.email?.components(separatedBy: "@").first ?? "Traveler"
-                profile.displayName = defaultName.capitalized
-                await store.saveProfile(profile, imageData: avatarData ?? store.profileImageData)
-            }
-            isSaving = false
-            withAnimation(.snappy) {
-                step = .featureTour
-            }
+        avatarPick = nil
+        isPreparingPhoto = false
+        var profile = store.userProfile
+        if profile.displayName.trimmingCharacters(in: .whitespaces).isEmpty {
+            profile.displayName = String(localized: "Traveler")
+            store.queueProfileSave(profile, imageData: avatarData)
         }
+        auth.clearPendingDisplayName()
+        withAnimation(reduceMotion ? nil : .snappy) { step = .quickStart }
     }
+
 }
 
 // MARK: - Profile setup
@@ -1125,27 +1170,34 @@ struct NewUserOnboardingView: View {
 /// name yet: without one, the user appears to trip mates as a bare email handle.
 /// Name is required to save; the avatar is optional. Skipping is always allowed.
 struct ProfileSetupView: View {
+    let coordinator: OnboardingCoordinator
     /// True when this is the first step of a new account's first-run sequence, which
     /// continues into the Explore walkthrough — so the sheet can say there's more.
     var isFirstRun = false
 
     @Environment(TripStore.self) private var store
+    @Environment(AuthStore.self) private var auth
     @Environment(\.dismiss) private var dismiss
 
     @State private var name: String
+    @State private var isPreparingPhoto = false
+    @State private var photoPreparationFailed = false
     @State private var avatarPick: PhotosPickerItem?
     @State private var avatarData: Data?
     @State private var isSaving = false
 
-    init(isFirstRun: Bool = false) {
+    init(coordinator: OnboardingCoordinator, isFirstRun: Bool = false) {
+        self.coordinator = coordinator
         self.isFirstRun = isFirstRun
         // Apple sign-in provides the name exactly once, at first authorization —
         // AuthView stashes it here so it isn't lost if the user skips this sheet.
-        _name = State(initialValue: UserDefaults.standard.string(forKey: "pendingAppleDisplayName") ?? "")
+        _name = State(initialValue: coordinator.savedName)
+        _avatarData = State(initialValue: coordinator.savedAvatar)
     }
 
     var body: some View {
         NavigationStack {
+            ScrollView {
             VStack(spacing: 24) {
                 PhotosPicker(selection: $avatarPick, matching: .images) {
                     ZStack(alignment: .bottomTrailing) {
@@ -1167,6 +1219,12 @@ struct ProfileSetupView: View {
                     }
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Profile photo picker")
+                if isPreparingPhoto { ProgressView("Preparing photo…") }
+                if photoPreparationFailed {
+                    Text("This photo could not be opened. Choose another photo or continue without one.")
+                        .font(.app(.footnote)).foregroundStyle(Theme.negative)
+                }
 
                 VStack(spacing: 6) {
                     Text("What should we call you?")
@@ -1204,26 +1262,33 @@ struct ProfileSetupView: View {
                 }
                 .buttonStyle(.plain)
                 .actionFill(tint: Theme.accent)
-                .disabled(trimmedName.isEmpty || isSaving)
+                .disabled(trimmedName.isEmpty || isSaving || isPreparingPhoto)
                 .opacity(trimmedName.isEmpty || isSaving ? 0.5 : 1)
             }
             .padding(24)
+            }
+            .onAppear { if name.isEmpty { name = auth.pendingDisplayName ?? store.currentUser.name } }
+            .onChange(of: name) { _, name in coordinator.saveProgress(step: .identity, name: name, page: 0) }
+            .onChange(of: avatarData) { _, data in coordinator.saveAvatar(data) }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Skip") { dismiss() }
+                    Button("Skip") { coordinator.skipSetup(); auth.clearPendingDisplayName(); dismiss() }
                         .disabled(isSaving)
                 }
             }
-            .onChange(of: avatarPick) { _, newValue in
-                guard let newValue else { return }
-                Task {
-                    if let data = try? await newValue.loadTransferable(type: Data.self),
-                       let image = UIImage(data: data),
-                       let jpeg = image.jpegData(compressionQuality: 0.8) {
-                        avatarData = jpeg
-                    }
-                }
-            }
+            .task(id: avatarPick) {
+            guard let avatarPick else { return }
+            isPreparingPhoto = true
+            photoPreparationFailed = false
+            let data = try? await avatarPick.loadTransferable(type: Data.self)
+            let jpeg: Data?
+            if let data { jpeg = await UploadImagePreparation.jpegData(from: data, maxPixelSize: 320, compressionQuality: 0.8) }
+            else { jpeg = nil }
+            guard !Task.isCancelled else { return }
+            isPreparingPhoto = false
+            if let jpeg { avatarData = jpeg }
+            else { photoPreparationFailed = true }
+        }
         }
         .interactiveDismissDisabled(isSaving)
     }
@@ -1233,16 +1298,15 @@ struct ProfileSetupView: View {
     }
 
     private func save() {
-        isSaving = true
-        Task {
-            var profile = store.userProfile
-            profile.displayName = trimmedName
-            await store.saveProfile(profile, imageData: avatarData ?? store.profileImageData)
-            UserDefaults.standard.removeObject(forKey: "pendingAppleDisplayName")
-            isSaving = false
-            dismiss()
-        }
+        guard !isPreparingPhoto else { return }
+        var profile = store.userProfile
+        profile.displayName = trimmedName
+        store.queueProfileSave(profile, imageData: avatarData)
+        auth.clearPendingDisplayName()
+        coordinator.newUserOnboardingFinished()
+        dismiss()
     }
+
 }
 
 // MARK: - One-time feature tips
@@ -1257,6 +1321,7 @@ struct OneTimeTipBanner: View {
     let message: LocalizedStringKey
 
     @AppStorage private var dismissed: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(key: String, icon: String, message: LocalizedStringKey) {
         self.key = key
@@ -1277,11 +1342,12 @@ struct OneTimeTipBanner: View {
                     .foregroundStyle(.primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Button {
-                    withAnimation(.snappy) { dismissed = true }
+                    withAnimation(reduceMotion ? nil : .snappy) { dismissed = true }
                 } label: {
                     Image(systemName: "xmark")
                         .font(.app(.caption, .semibold))
                         .foregroundStyle(.secondary)
+                        .frame(width: 44, height: 44)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(Text("Dismiss tip"))

@@ -70,6 +70,10 @@ struct AddExpenseView: View {
                 if let trip {
                     ScrollView {
                         VStack(spacing: Theme.Space.section) {
+                            if !isEditing {
+                                OneTimeTipBanner(key: "tripsplit.expenseTip.\(store.currentUser.id.uuidString.lowercased())",
+                                                 icon: "person.2", message: "To share a cost, enable Pay for others and choose who participates. Review scanned items and totals before saving.")
+                            }
                             amountCard(trip)
                             if draft.items.isEmpty {
                                 splitCard(trip)

@@ -28,8 +28,7 @@ struct AppearanceSettingsView: View {
                     } label: {
                         HStack(spacing: 12) {
                             Circle()
-                                .fill(LinearGradient(colors: [theme.accent, theme.accentSecondary],
-                                                     startPoint: .topLeading, endPoint: .bottomTrailing))
+                                .fill(theme.accent)
                                 .frame(width: 36, height: 36)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(verbatim: theme.label)
