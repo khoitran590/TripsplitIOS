@@ -72,6 +72,7 @@ struct RecScreen: View {
     /// Scroll anchor for the top of the page, so the toolbar's search button can bring
     /// the demoted search field back into view before focusing it.
     private static let topAnchor = "explore-top"
+    private static let discoverAnchor = "explore-discover"
 
     /// An account-gated action parked while the sign-in sheet is up, replayed once
     /// authentication succeeds.
@@ -406,11 +407,19 @@ struct RecScreen: View {
                             if !upcoming.isEmpty {
                                 upcomingTripsSection(upcoming)
                             }
+                        } else if showsFirstItinerary {
+                            // Where the next trip will sit once there is one.
+                            firstItineraryCard {
+                                withAnimation(reduceMotion ? nil : .snappy) {
+                                    proxy.scrollTo(Self.discoverAnchor, anchor: .top)
+                                }
+                            }
                         }
                         if !saved.isEmpty { savedGuidesSection }
 
                         // The discovery half: search, filter chips, then the editorial page.
                         discoveryControls(showsHeading: true)
+                            .id(Self.discoverAnchor)
 
                         if isFiltering {
                             matchingTripsSection(filteredDestinations)
@@ -712,7 +721,9 @@ struct RecScreen: View {
             Spacer(minLength: 12)
 
             // Compact rather than a full-width bar: it keeps the app's primary action
-            // visible without costing a row of its own.
+            // visible without costing a row of its own. Stood down while the first-
+            // itinerary card is up, so that card's button is the one way to create.
+            if !showsFirstItinerary {
             Button { requireAccount(.createItinerary(prefill: nil)) } label: {
                 Label("New trip", systemImage: "plus")
                     .font(.app(.subheadline, .bold))
@@ -726,7 +737,137 @@ struct RecScreen: View {
             .buttonStyle(PressableStyle())
             .accessibilityLabel("Create your own trip")
             .accessibilityHint("Opens the trip builder")
+            }
         }
+    }
+
+    /// Nothing planned yet, and not merely still loading: the top of the page invites
+    /// the first itinerary instead of leaving a gap where the next trip goes.
+    private var showsFirstItinerary: Bool {
+        plannedTrips.isEmpty && !(store.cloudLoadState == .loading && auth.isAuthenticated)
+    }
+
+    /// The Trips tab's first-trip card, told as an itinerary: a day plan in miniature,
+    /// what it's for in one line, the three steps, and one filled action. The curated
+    /// and community guides stay right below, and the quiet second button points at them.
+    private func firstItineraryCard(onBrowseGuides: @escaping () -> Void) -> some View {
+        VStack(spacing: 20) {
+            itineraryPreview
+                .padding(.top, 8)
+                .accessibilityHidden(true)
+
+            VStack(spacing: 8) {
+                Text("Build your first itinerary")
+                    .font(.app(.title2, .bold))
+                    .foregroundStyle(Theme.ink)
+                Text("Plan it day by day, pin every stop, and keep one shared budget for the group.")
+                    .font(Theme.Typography.secondary)
+                    .foregroundStyle(Theme.textSecondary)
+                    .multilineTextAlignment(.center)
+            }
+
+            HStack(alignment: .top, spacing: 8) {
+                firstItineraryStep("mappin.and.ellipse", "Pick a place")
+                firstItineraryStep("calendar", "Plan the days")
+                firstItineraryStep("divide", "Share the budget")
+            }
+
+            VStack(spacing: 4) {
+                Button {
+                    requireAccount(.createItinerary(prefill: nil))
+                } label: {
+                    Label("Start an itinerary", systemImage: "plus")
+                }
+                .buttonStyle(AppActionStyle())
+                .accessibilityHint("Opens the trip builder")
+
+                Button(action: onBrowseGuides) {
+                    Text("Or start from a guide below")
+                        .font(Theme.Typography.rowTitle)
+                        .foregroundStyle(Theme.accent)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(PressableStyle())
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(20)
+        .readableSurface(cornerRadius: 24)
+    }
+
+    /// One day of an itinerary in miniature — a day tag, the day strip, three stops on a
+    /// route line — sitting on a second card.
+    private var itineraryPreview: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(Theme.accentPastel)
+                .frame(width: 210, height: 118)
+                .rotationEffect(.degrees(-7))
+                .offset(x: -10, y: 4)
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Day 1")
+                        .font(.app(.caption2, .bold))
+                        .textCase(.uppercase)
+                        .foregroundStyle(Theme.accent)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Theme.accentPastel, in: .capsule)
+                    Spacer()
+                    HStack(spacing: 4) {
+                        ForEach(0..<3, id: \.self) { day in
+                            Capsule()
+                                .fill(day == 0 ? Theme.accent : Theme.fieldBackground)
+                                .frame(width: 22, height: 6)
+                        }
+                    }
+                }
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(Array([118, 84, 102].enumerated()), id: \.offset) { index, width in
+                        HStack(spacing: 8) {
+                            Circle()
+                                .fill(index == 2 ? Theme.accent : Theme.surface)
+                                .overlay(Circle().strokeBorder(Theme.accent, lineWidth: 2))
+                                .frame(width: 10, height: 10)
+                            Capsule()
+                                .fill(Theme.ink.opacity(index == 0 ? 0.22 : 0.12))
+                                .frame(width: CGFloat(width), height: 7)
+                        }
+                    }
+                }
+                // The route the stops sit on, behind their markers.
+                .background(alignment: .leading) {
+                    Rectangle().fill(Theme.accentPastel).frame(width: 2).padding(.vertical, 5).offset(x: 4)
+                }
+            }
+            .padding(16)
+            .frame(width: 220, height: 128, alignment: .topLeading)
+            .background(Theme.surface, in: .rect(cornerRadius: 22, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .strokeBorder(Theme.separator, lineWidth: 0.5)
+            }
+            .shadow(color: Theme.elevatedShadow, radius: 10, y: 5)
+            .rotationEffect(.degrees(3))
+        }
+        .frame(height: 150)
+    }
+
+    private func firstItineraryStep(_ icon: String, _ label: LocalizedStringKey) -> some View {
+        VStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.app(.footnote, .semibold))
+                .foregroundStyle(Theme.accent)
+                .frame(width: 34, height: 34)
+                .background(Theme.accentPastel, in: .circle)
+                .accessibilityHidden(true)
+            Text(label)
+                .font(.app(.caption, .semibold))
+                .foregroundStyle(Theme.ink)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
     }
 
     /// Time-of-day greeting, with the user's first name when the profile has one.
