@@ -91,4 +91,59 @@ final class PassportStampTests: XCTestCase {
         attachment.lifetime = .keepAlways
         add(attachment)
     }
+
+    func testRenderPassportCardStampsInEveryCover() throws {
+        // Attachments for checking by eye that each illustration and its lettering stay
+        // inside the stamp outline, and that three stamps sit on the card without touching.
+        let dated = Date(timeIntervalSince1970: 1_772_323_200)
+        let generic = ["Ho Chi Minh City, Vietnam", "Banff, Alberta, Canada", "Lake Como, Italy",
+                       "Amalfi Coast, Italy", "Bali, Indonesia", "Joshua Tree Desert, California",
+                       "Redwood National Forest, California", "Zermatt Ski Resort, Switzerland",
+                       "Old Town Tallinn, Estonia"]
+        let all = places + generic
+        let sheet = VStack(spacing: 16) {
+            ForEach(0..<5) { row in
+                HStack(spacing: 16) {
+                    ForEach(0..<6) { column in
+                        let index = row * 6 + column
+                        if index < all.count {
+                            PassportCardStamp(place: VisitedPlace(name: all[index], date: index == 3 ? nil : dated),
+                                              ink: StampInk.allCases[index % 3].color,
+                                              dateText: index == 3 ? nil : "14 APR 2026", size: 200,
+                                              display: { .custom("Baskerville-Bold", fixedSize: $0) })
+                        } else {
+                            Color.clear.frame(width: 200, height: 200)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(24)
+        .background(Color(red: 0.93, green: 0.95, blue: 0.97))
+        .environment(\.colorScheme, .light)
+        .environment(\.locale, Locale(identifier: "en_US"))
+        var images: [(String, UIImage)] = []
+        let renderer = ImageRenderer(content: sheet)
+        renderer.scale = 2
+        images.append(("CardStamps-all", try XCTUnwrap(renderer.uiImage)))
+        let sets = [["Kyoto, Japan", "Paris, France", "Yosemite, California"],
+                    ["San Francisco, CA", "New York, NY", "Rome, Italy"],
+                    ["Redwood National Forest, California", "Ho Chi Minh City, Vietnam", "Tokyo, Japan"]]
+        for (index, cover) in ShareCardCover.allCases.enumerated() {
+            let card = ProfileShareCard(name: "Jennie Tran", photo: nil,
+                                        places: sets[index].map { VisitedPlace(name: $0, date: dated) },
+                                        cover: cover, shareURL: URL(string: "tripsplit://profile/test"))
+                .environment(\.colorScheme, .light)
+                .environment(\.locale, Locale(identifier: "en_US"))
+            let renderer = ImageRenderer(content: card)
+            renderer.scale = 3
+            images.append(("PassportCard-\(cover.rawValue)", try XCTUnwrap(renderer.uiImage)))
+        }
+        for (name, image) in images {
+            let attachment = XCTAttachment(image: image)
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
 }

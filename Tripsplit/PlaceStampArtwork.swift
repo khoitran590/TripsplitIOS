@@ -303,6 +303,8 @@ struct StampArcText: View {
     /// The widest arc the text may occupy before it starts shrinking (~200°).
     var maxAngle: CGFloat = .pi * 1.12
     var letterSpacing: CGFloat = 2.2
+    /// The face at a given point size; the system face in `weight` when nil.
+    var font: ((CGFloat) -> Font)? = nil
 
     var body: some View {
         Canvas { context, size in
@@ -317,7 +319,7 @@ struct StampArcText: View {
             func layout(_ pt: CGFloat) -> (glyphs: [GraphicsContext.ResolvedText], angles: [CGFloat], total: CGFloat) {
                 let glyphs = chars.map {
                     context.resolve(Text(verbatim: String($0))
-                        .font(.system(size: pt, weight: weight))
+                        .font(font?(pt) ?? .system(size: pt, weight: weight))
                         .foregroundStyle(color))
                 }
                 let angles = glyphs.map { ($0.measure(in: CGSize(width: 900, height: 900)).width + letterSpacing) / radius }

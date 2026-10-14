@@ -405,98 +405,23 @@ struct ProfileShareCard: View {
     /// with its middle too. Tilts and offsets alternate because stamps go onto a page one
     /// at a time, by hand, and a level row of them reads as a chart.
     private var visaBand: some View {
-        HStack(spacing: 6) {
-            ForEach(Array(stamped.enumerated()), id: \.offset) { index, place in
-                stamp(place, index: index)
-                    .rotationEffect(.degrees([-6, 4, -3][index % 3]))
-                    .offset(y: [-3, 5, -2][index % 3])
-                    .frame(maxWidth: .infinity)
+        GeometryReader { band in
+            // As large as a third of the band allows, and short enough that a tilted
+            // stamp stays clear of the rules above and below it.
+            let size = max(0, min((band.size.width - 12) / 3, band.size.height - 12, 100))
+            HStack(spacing: 6) {
+                ForEach(Array(stamped.enumerated()), id: \.offset) { index, place in
+                    PassportCardStamp(place: place, ink: cover.stampInks[index % cover.stampInks.count],
+                                      dateText: place.date.map(stampDate), size: size, display: display)
+                        .opacity(0.86)
+                        .rotationEffect(.degrees([-6, 4, -3][index % 3]))
+                        .offset(y: [-2, 3, -1][index % 3])
+                        .frame(maxWidth: .infinity)
+                }
             }
+            .frame(width: band.size.width, height: band.size.height)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    /// One place, stamped the way the theme's document stamps one: a square red seal, a
-    /// dated rectangular entry stamp, or a round dated cancellation.
-    @ViewBuilder
-    private func stamp(_ place: VisitedPlace, index: Int) -> some View {
-        let tone = cover.stampInks[index % cover.stampInks.count]
-        switch cover {
-        case .kiku:
-            VStack(spacing: 3) {
-                Text(verbatim: place.shortName)
-                    .font(display(15))
-                    .lineLimit(2)
-                    .multilineTextAlignment(.center)
-                    .minimumScaleFactor(0.5)
-                if let date = place.date {
-                    Text(verbatim: stampDate(date)).font(document(7, .medium))
-                }
-            }
-            .padding(6)
-            .frame(width: 78, height: 78)
-            .overlay { RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(tone, lineWidth: 2.5) }
-            .foregroundStyle(tone)
-            .opacity(0.88)
-        case .federal:
-            VStack(spacing: 3) {
-                Text("Admitted")
-                    .font(document(6.5, .medium))
-                    .textCase(.uppercase)
-                    .tracking(1.4)
-                Text(verbatim: place.shortName)
-                    .font(display(12))
-                    .minimumScaleFactor(0.5)
-                if let date = place.date {
-                    Text(verbatim: stampDate(date)).font(document(7, .medium))
-                }
-            }
-            .lineLimit(1)
-            .padding(.vertical, 6)
-            .padding(.horizontal, 5)
-            .frame(width: 94)
-            .overlay { RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(tone, lineWidth: 2) }
-            .foregroundStyle(tone)
-            .opacity(0.85)
-        case .trailhead:
-            VStack(spacing: 2) {
-                Text(verbatim: place.shortName)
-                    .font(.system(size: 8, weight: .bold))
-                    .textCase(.uppercase)
-                    .tracking(0.6)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.center)
-                if let date = place.date {
-                    Text(verbatim: stampDate(date))
-                        .font(document(8, .medium))
-                        .lineLimit(1)
-                        .padding(.vertical, 2)
-                        .overlay(alignment: .top) { Rectangle().fill(tone).frame(height: 0.8) }
-                        .overlay(alignment: .bottom) { Rectangle().fill(tone).frame(height: 0.8) }
-                }
-                if let region = region(of: place) {
-                    Text(verbatim: region)
-                        .font(.system(size: 6.5, weight: .semibold))
-                        .textCase(.uppercase)
-                        .tracking(0.8)
-                        .lineLimit(1)
-                }
-            }
-            .minimumScaleFactor(0.6)
-            .padding(.horizontal, 13)
-            .frame(width: 92, height: 92)
-            .overlay { Circle().strokeBorder(tone, lineWidth: 2) }
-            .overlay { Circle().inset(by: 5).strokeBorder(tone, lineWidth: 0.8) }
-            .foregroundStyle(tone)
-            .opacity(0.85)
-        }
-    }
-
-    /// "Japan" from "Kyoto, Japan"; nil for a place saved without a region.
-    private func region(of place: VisitedPlace) -> String? {
-        let parts = place.name.split(separator: ",")
-        guard parts.count > 1 else { return nil }
-        return parts[1].trimmingCharacters(in: .whitespaces)
     }
 
     /// The date in the theme's stamp convention: year-first, day-first, or month-first.
@@ -965,10 +890,14 @@ struct ProfileShareSheet: View {
                 }
                 .clipShape(.rect(cornerRadius: 22))
                 .shadow(color: Theme.elevatedShadow, radius: 16, y: 10)
-                .frame(maxWidth: 306)
+                // As large as the screen allows: the full width, unless the height left
+                // over by the controls below is the tighter limit on a short phone.
+                .layoutPriority(1)
                 .padding(.top, 8)
 
                 // Every theme in one row under the card, so a tap restyles it in place.
+                // Customize shares the row, which is what leaves a short screen the height
+                // for a full-width card.
                 HStack(spacing: 10) {
                     ForEach(ShareCardCover.allCases) { option in
                         Button { cover = option } label: { coverSwatch(option) }
@@ -976,21 +905,24 @@ struct ProfileShareSheet: View {
                             .accessibilityLabel(option.label)
                             .accessibilityAddTraits(cover == option ? [.isButton, .isSelected] : .isButton)
                     }
-                }
 
-                NavigationLink {
-                    PassportCustomizeView(name: card.name, places: card.places,
-                                          statValues: statValues, cover: cover)
-                } label: {
-                    Label("Customize", systemImage: "slider.horizontal.3")
-                        .font(.app(.subheadline, .semibold))
-                        .foregroundStyle(Theme.ink)
-                        .padding(.horizontal, 18)
-                        .frame(minHeight: 44)
-                        .background(Theme.surface, in: .capsule)
-                        .overlay(Capsule().stroke(Theme.separator, lineWidth: 0.5))
+                    Spacer(minLength: 0)
+
+                    NavigationLink {
+                        PassportCustomizeView(name: card.name, places: card.places,
+                                              statValues: statValues, cover: cover)
+                    } label: {
+                        Label("Customize", systemImage: "slider.horizontal.3")
+                            .font(.app(.subheadline, .semibold))
+                            .foregroundStyle(Theme.ink)
+                            .lineLimit(1)
+                            .padding(.horizontal, 18)
+                            .frame(minHeight: 44)
+                            .background(Theme.surface, in: .capsule)
+                            .overlay(Capsule().stroke(Theme.separator, lineWidth: 0.5))
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
 
                 Spacer(minLength: 0)
 
@@ -1028,7 +960,7 @@ struct ProfileShareSheet: View {
                 }
                 .padding(.bottom, 8)
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, 16)
             .background { AppBackground() }
             .navigationTitle("Travel passport")
             .navigationBarTitleDisplayMode(.inline)
